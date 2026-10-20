@@ -23,6 +23,7 @@ pub enum TaskError {
     Archive(crate::archive::ArchiveError),
     Image(crate::imaging::ImageError),
     Media(crate::media::MediaError),
+    Jar(crate::jar::JarError),
     Io(io::Error),
 }
 
@@ -36,6 +37,7 @@ impl TaskError {
             Self::Archive(e) => e.key(),
             Self::Image(e) => e.key(),
             Self::Media(e) => e.key(),
+            Self::Jar(e) => e.key(),
             Self::Io(_) => "msg.ioError",
         }
     }
@@ -49,6 +51,11 @@ impl From<io::Error> for TaskError {
 impl From<crate::archive::ArchiveError> for TaskError {
     fn from(e: crate::archive::ArchiveError) -> Self {
         Self::Archive(e)
+    }
+}
+impl From<crate::jar::JarError> for TaskError {
+    fn from(e: crate::jar::JarError) -> Self {
+        Self::Jar(e)
     }
 }
 impl From<crate::media::MediaError> for TaskError {
@@ -538,6 +545,9 @@ pub struct Ctx<'a> {
     pub progress: &'a dyn crate::folder::Progress,
     /// ffmpeg and friends, when installed.
     pub media: Option<&'a crate::mediatasks::MediaEnv>,
+    /// A real JDK and the pinned CFR jar, for `jar.decompile`.
+    pub java: Option<&'a Path>,
+    pub cfr: Option<&'a Path>,
 }
 
 pub fn is_file_task(name: &str) -> bool {
@@ -562,6 +572,30 @@ pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
         let env = ctx.media.ok_or(crate::media::MediaError::NoTools)?;
         let job = crate::mediatasks::Job::new(env, ctx.settings, ctx.progress);
         Ok(crate::mediatasks::run(&name, &params, input, &job)?)
+    } else if name == "jar.decompile" {
+        let java = ctx.java.ok_or(crate::jar::JarError::NoJava)?;
+        let cfr = ctx.cfr.ok_or(crate::jar::JarError::NoCfr)?;
+        let root = Some(ctx.settings.code.decompile.output_path.trim())
+            .filter(|r| !r.is_empty())
+            .map(Path::new);
+        let sandbox = Some(Path::new("/usr/bin/sandbox-exec")).filter(|p| p.is_file());
+        let out = crate::jar::decompile(input, java, cfr, root, sandbox, &|| {
+            ctx.progress.cancelled()
+        })?;
+        let mut warnings: Vec<_> = out
+            .report
+            .warnings
+            .into_iter()
+            .map(|(k, a)| (k, vec![a]))
+            .collect();
+        if out.unsandboxed {
+            warnings.push(("msg.sandboxUnavailable", vec![]));
+        }
+        Ok(Done {
+            output: out.destination,
+            warnings,
+            infos: vec![],
+        })
     } else {
         Err(TaskError::Unsupported)
     }
@@ -769,6 +803,8 @@ mod tests {
                     seven_zip: None,
                     progress: &crate::folder::NullProgress,
                     media: None,
+                    java: None,
+                    cfr: None,
                 },
             )
         }

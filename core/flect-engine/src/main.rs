@@ -14,7 +14,7 @@ use flect_core::mediatasks::{self, MediaEnv};
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
 use flect_core::settings::HardwareEncoder;
 use flect_core::settings::{Settings, Store};
-use flect_core::{archive, batch, locations, menu, tasks};
+use flect_core::{archive, batch, jar, locations, menu, tasks};
 
 type Out = Arc<Mutex<io::Stdout>>;
 
@@ -180,11 +180,16 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
             })
         })
         .flatten();
+    // A real JDK and the pinned CFR jar are only looked for when decompiling.
+    let java = (name == "jar.decompile").then(jar::find_java).flatten();
+    let cfr = locations::data_dir().map(|d| d.join("deps/cfr.jar"));
     let ctx = tasks::Ctx {
         settings: &settings,
         seven_zip: seven_zip.as_deref(),
         progress: &progress,
         media: media_env.as_ref(),
+        java: java.as_deref(),
+        cfr: cfr.as_deref(),
     };
     let total = paths.len() as u64;
     let mut failures = 0;
