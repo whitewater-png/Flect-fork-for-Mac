@@ -7,5 +7,7 @@
 **/obj/
 *.vcxproj.user
 
-AGENTS.md/core/target/
-/poc/rust-imaging/target/
+AGENTS.md
+
+# Rust build output
+**/target/

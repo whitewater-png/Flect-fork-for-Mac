@@ -48,9 +48,9 @@ Windows ソースは削除せず `legacy/windows/` へ退避してから段階�
 ### 5.3 Finder 連携（未加入ゆえ現実解を優先）
 | 案 | 長所 | 短所 | 判断 |
 | --- | --- | --- | --- |
-| A. Quick Actions（`~/Library/Services/*.workflow`） | 署名・entitlement 不要。対象ファイル型で出し分け可（`NSSendFileTypes`/UTI） | フラット。87 項目は多い | **第一選択** |
+| A. Quick Actions（`~/Library/Services/*.workflow`） | 署名・entitlement 不要。対象ファイル型で出し分け可（`NSSendFileTypes`/UTI） | フラット。87 項目は多い | **確定（実機で成立を確認）** |
 | B. アプリの `NSServices` | Info.plist だけで宣言 | Services サブメニュー内で深い | 補助 |
-| C. Finder Sync 拡張 | 動的・階層メニュー（Windows 版に最も近い） | サンドボックス/署名/ユーザー有効化が必要。ad-hoc や無料 Apple ID で安定動作するか**未検証** | **PoC 結果次第**（P0 で判定、ダメなら採用しない） |
+| C. Finder Sync 拡張 | 動的・階層メニュー（Windows 版に最も近い） | サンドボックス/署名/ユーザー有効化が必要。ad-hoc や無料 Apple ID で安定動作するか**未検証** | **将来の任意拡張**（Quick Actions が実機で成立したため優先度を下げた） |
 
 - A の粒度: 操作単位（例: 「Flect: 画像をリサイズ…」「動画を圧縮…」）で約 20〜25 個に集約し、プリセット選択は起動後の小ウィンドウで行う（Windows 11 版 modern メニューの「操作→ポップアップ」設計と同じ発想）。`.workflow` は `scripts/make-workflows.sh` が `menu.json` から生成。
 - 選択の分類は `menu.json` に「対象拡張子/UTI」を持たせ、Rust エンジンが唯一の正とする（C++ 側の二重管理を解消）。アニメ GIF 判定など動的判定は起動後に行い、不適合は丁寧にエラー。
@@ -68,7 +68,7 @@ Windows ソースは削除せず `legacy/windows/` へ退避してから段階�
 | 品質 | `clippy -D warnings`、`cargo-deny`、`cargo-audit`、`cargo-fuzz`、`insta`（golden） |
 
 ### 5.5 外部ツール（`scripts/fetch.sh`、バージョン固定 + SHA-256）
-**【変更案・要ユーザー確認】** ffmpeg / 7-Zip は**同梱せず Homebrew 検出を既定**にする（実機に `ffmpeg-full` 9.0.2 が導入済みで VideoToolbox 動作確認済み）。個人利用のため GPL ビルドの再配布問題を避けられ、検証は brew の bottle に任せられる。探索は `/opt/homebrew/bin` と `/usr/local/bin` の**固定候補のみ**（PATH は信用しない）、起動時にバージョン下限を確認。`cfr.jar` のみ `fetch.sh`（版固定 + SHA-256）。Java / Python 3 は利用者導入。
+**【確定（ユーザー承認済み。OSS 公開時もライセンス上同梱不要）】** ffmpeg / 7-Zip は**同梱せず Homebrew 検出を既定**にする（実機に `ffmpeg-full` 9.0.2 が導入済みで VideoToolbox 動作確認済み）。個人利用のため GPL ビルドの再配布問題を避けられ、検証は brew の bottle に任せられる。探索は `/opt/homebrew/bin` と `/usr/local/bin` の**固定候補のみ**（PATH は信用しない）、起動時にバージョン下限を確認。`cfr.jar` のみ `fetch.sh`（版固定 + SHA-256）。Java / Python 3 は利用者導入。
 当初案（arm64 静的ビルドの同梱 + SHA-256 固定）は、将来配布する場合の選択肢として残す。同梱バイナリは Hardened Runtime 下で個別に ad-hoc 署名。
 
 ### 5.6 配布（未加入前提）

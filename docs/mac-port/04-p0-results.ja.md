@@ -35,14 +35,18 @@
 | 6 | ffmpeg + VideoToolbox | **○** | ffmpeg 9.0.2（Homebrew `ffmpeg-full`、GPL ビルド）。`h264_videotoolbox` / `hevc_videotoolbox` とも 320x240 の実エンコード成功。`prores_videotoolbox` もあり |
 | 6 | ffmpeg の追加機能 | 発見 | `--enable-whisper`（ffmpeg の whisper フィルタ）、`libwebp`、`libtesseract` 入り。字幕生成を Python なしにできる**可能性**（モデル入手と実速度は未検証） |
 | 2 | Finder Sync | △ | 他社製が 9 件登録され 8 件が有効 → 機構自体は使える。**ad-hoc 署名の自作拡張が読み込まれるかは未検証** |
-| 1 | Quick Action が右クリックに出るか | **×（原因未特定）** | 手作りの `.workflow` では出なかった。保存場所・受け取り設定・システム設定側の有効化・macOS 26 の仕様のどれかが原因候補。`poc/mac/diagnose-quickaction.sh` と `make-quickaction.sh` で切り分ける |
+| 1 | Quick Action が右クリックに出るか | **○** | 手動作成の Quick Action が「クイックアクション」に表示された。1 回目に出なかった原因は、シェルスクリプトの「入力の引き渡し方法 = **引数として**」の設定漏れ（再設定で解消）。画像 1 枚 / 複数選択 / 日本語・空白・先頭 `-` を含む名前 / フォルダのすべてで、パスの欠落・文字化け（NFD）なし。「画像ファイル」に絞った版は、画像以外で項目が消えた |
 | 3, 4 | Vision OCR / HEIC 書込 | 未実行 | 「permission denied」は、スクリプトを直接実行したため（実行権限なし）。権限と shebang を付与済みなので `swift poc/mac/ocr.swift …` または `poc/mac/ocr.swift …` で実行可 |
 | — | 開発ツール | 注意 | `cargo`/`rustc`/`7zz` は未導入（`brew install rustup sevenzip` が必要）。`/usr/bin/java` は macOS のスタブの可能性があり、`java -version` で実体を確認 |
+
+## 確定した設計判断
+- **Finder 連携は Quick Actions を正式採用**（署名不要）。Finder Sync 拡張は将来の任意拡張に格下げ。
+- `core/flect-tools` の `make-workflows` が `menu.json` 相当の定義から 35 個の `.workflow` を生成する（種別ごとに `NSSendFileTypes` で出し分け、`inputMethod=1` を固定）。**生成物そのものの Finder での表示は Mac で未確認**（手動作成版で確認したのは仕組みまで）。
 
 ## 残り（あなたの Mac での実行が必要）
 | § | 項目 | 手順 |
 | --- | --- | --- |
-| 1 | Quick Action の切り分け | `bash poc/mac/diagnose-quickaction.sh` の出力を貼る → `bash poc/mac/make-quickaction.sh` → `killall Finder` → 右クリックで確認 |
+| 1 | 生成した Quick Action の確認 | `cd core && cargo run -p flect-tools -- --out /tmp/qa` → `/tmp/qa` の数個を `~/Library/Services` にコピー → `killall Finder` → 種別ごとに表示/非表示を確認。UTI が合わない形式（mkv/webm/flv 等）は一覧で報告 |
 | 3 | Vision OCR | `swift poc/mac/ocr.swift ~/Desktop/test.png ja-JP,zh-Hans,en-US` |
 | 4 | HEIC 書込 | `swift poc/mac/heic.swift in.png out.heic 0.8` |
 | 8 | Whisper 系の速度比較 | P6 で実施（ffmpeg whisper フィルタも候補に追加） |

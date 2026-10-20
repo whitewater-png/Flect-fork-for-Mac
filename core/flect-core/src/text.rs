@@ -14,6 +14,8 @@ pub enum TextError {
     Unmappable(char),
     Json(String),
     Empty,
+    /// A user-facing failure identified by message key (+ one argument).
+    Msg(&'static str, String),
 }
 
 impl fmt::Display for TextError {
@@ -22,6 +24,7 @@ impl fmt::Display for TextError {
             Self::Unmappable(c) => write!(f, "cannot represent {c:?}"),
             Self::Json(e) => write!(f, "invalid JSON: {e}"),
             Self::Empty => f.write_str("empty"),
+            Self::Msg(k, a) => write!(f, "{k}: {a}"),
         }
     }
 }
@@ -32,6 +35,7 @@ impl TextError {
             Self::Unmappable(_) => "msg.sjisFailed",
             Self::Json(_) => "msg.invalidJson",
             Self::Empty => "msg.emptyFile",
+            Self::Msg(k, _) => k,
         }
     }
 }

@@ -5,6 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::convert;
 use crate::paths;
 use crate::settings::{Settings, TextEncodingChoice};
 use crate::text::{self, LineEnding, TextError};
@@ -66,6 +67,8 @@ pub struct Done {
     pub output: PathBuf,
     /// (message key, args) for the UI to localize.
     pub warnings: Vec<(&'static str, Vec<String>)>,
+    /// Informational messages (key, args).
+    pub infos: Vec<(&'static str, Vec<String>)>,
 }
 
 pub fn is_text_task(name: &str) -> bool {
@@ -139,6 +142,7 @@ pub fn run_text(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut warnings = Vec::new();
+    let mut infos = Vec::new();
 
     let output = match name {
         "text.encode" => {
@@ -188,9 +192,88 @@ pub fn run_text(
                 text::pretty_json(&value).as_bytes(),
             )?
         }
+        "text.convert" => {
+            let target = to.as_deref().unwrap_or("JSON");
+            let decoded = text::decode(&bytes);
+            let converted = if target == "TXT" {
+                decoded.text
+            } else {
+                let source = input
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_uppercase())
+                    .unwrap_or_default();
+                let parsed = convert::parse(&source, &decoded.text)?;
+                if let Some(d) = parsed.delimiter {
+                    let shown = if d == '\t' {
+                        "msg.separator.tab".to_owned()
+                    } else {
+                        d.to_string()
+                    };
+                    infos.push(("msg.readAsSeparated", vec![file_name, shown]));
+                }
+                convert::render(&parsed.tree, target)?
+            };
+            // CSV gets a BOM so spreadsheets read UTF-8 correctly; everything else is plain UTF-8.
+            let bytes = if target == "CSV" {
+                [&[0xEF, 0xBB, 0xBF][..], converted.as_bytes()].concat()
+            } else {
+                converted.into_bytes()
+            };
+            write_result(input, "", Some(&target.to_lowercase()), &bytes)?
+        }
         _ => return Err(TaskError::Unsupported),
     };
-    Ok(Done { output, warnings })
+    Ok(Done {
+        output,
+        warnings,
+        infos,
+    })
+}
+
+// ---------------------------------------------------------------- archives
+
+pub fn is_archive_task(name: &str) -> bool {
+    matches!(name, "archive.extract" | "folder.compress")
+}
+
+fn archive_done(output: PathBuf, report: crate::archive::Report) -> Done {
+    Done {
+        output,
+        warnings: report
+            .warnings
+            .into_iter()
+            .map(|(k, a)| (k, vec![a]))
+            .collect(),
+        infos: vec![],
+    }
+}
+
+/// Extract an archive or compress a folder. `seven_zip` is the located 7zz, if any.
+pub fn run_archive(
+    name: &str,
+    input: &Path,
+    settings: &Settings,
+    seven_zip: Option<&Path>,
+) -> Result<Done, crate::archive::ArchiveError> {
+    use crate::archive::{self, Format};
+    use crate::settings::ArchiveCompressFormat as F;
+    match name {
+        "archive.extract" => {
+            let x = archive::extract(input, archive::Limits::default(), seven_zip)?;
+            Ok(archive_done(x.destination, x.report))
+        }
+        "folder.compress" => {
+            let format = match settings.folder.archive.compress_format {
+                F::Zip => Format::Zip,
+                F::SevenZip => Format::SevenZip,
+                F::Tar => Format::Tar,
+                F::TarGz => Format::TarGz,
+            };
+            let (out, report) = archive::compress_folder(input, format, seven_zip)?;
+            Ok(archive_done(out, report))
+        }
+        _ => Err(archive::ArchiveError::Unsupported(name.to_owned())),
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +358,64 @@ mod tests {
                 .unwrap_err()
                 .key(),
             "msg.invalidJson"
+        );
+    }
+
+    #[test]
+    fn convert_csv_to_json_and_back_to_csv_with_bom() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("data.csv");
+        fs::write(&src, "名前;数\n花;1\n").unwrap();
+        let s = Settings::default();
+        let j = run_text(
+            "text.convert",
+            &parse_task("text.convert?to=JSON").1,
+            &src,
+            &s,
+        )
+        .unwrap();
+        assert_eq!(j.output, d.path().join("data.json"));
+        assert_eq!(j.infos[0].0, "msg.readAsSeparated");
+        assert!(fs::read_to_string(&j.output)
+            .unwrap()
+            .contains("\"名前\": \"花\""));
+        let c = run_text(
+            "text.convert",
+            &parse_task("text.convert?to=CSV").1,
+            &j.output,
+            &s,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(&c.output).unwrap(),
+            "\u{feff}名前,数\n花,1\n".as_bytes()
+        );
+        assert_eq!(c.output, d.path().join("data (2).csv"));
+        // same-format conversion never overwrites the source
+        assert_eq!(fs::read_to_string(&src).unwrap(), "名前;数\n花;1\n");
+    }
+
+    #[test]
+    fn convert_failures_leave_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("a.json");
+        fs::write(&src, "{\"x\":1}").unwrap();
+        let err = run_text(
+            "text.convert",
+            &parse_task("text.convert?to=CSV").1,
+            &src,
+            &Settings::default(),
+        )
+        .unwrap_err();
+        assert_eq!(err.key(), "msg.notATable");
+        assert_eq!(fs::read_dir(d.path()).unwrap().count(), 1);
+        let bin = d.path().join("a.exe");
+        fs::write(&bin, "x").unwrap();
+        assert_eq!(
+            run_text("text.convert", &HashMap::new(), &bin, &Settings::default())
+                .unwrap_err()
+                .key(),
+            "msg.cannotConvertFrom"
         );
     }
 

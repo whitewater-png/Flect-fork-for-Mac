@@ -1,3 +1,7 @@
+> **Flect-for-Mac (work in progress).** This fork is being rebuilt for macOS (Rust core + Swift/Finder Quick Actions).
+> The original Windows sources are kept under `legacy/windows/` for reference. See `docs/mac-port/` for the plan and status.
+> The text below still describes the upstream Windows version.
+
 <div align="center">
 
 # Flect
@@ -9,7 +13,7 @@
 You don't have to search for converter on the browser or compress using Video Editor.
 
 <p align="center">
-  <img src="src/App/Assets/Introduction/Hero-En.png" alt="Flect - Right-click to do it all." width="860">
+  <img src="legacy/windows/src/App/Assets/Introduction/Hero-En.png" alt="Flect - Right-click to do it all." width="860">
 </p>
 
 </div>

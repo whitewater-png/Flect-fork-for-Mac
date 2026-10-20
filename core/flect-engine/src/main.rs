@@ -2,6 +2,7 @@
 //! P1 provides the protocol, `export-menu` and task routing; task bodies land in P2+.
 use std::io::{self, BufRead, Write};
 
+use flect_core::archive;
 use flect_core::locations;
 use flect_core::menu;
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
@@ -102,12 +103,82 @@ fn run_text_batch(
         )?;
         match tasks::run_text(name, params, file, &settings) {
             Ok(done) => {
+                for (key, args) in done.infos {
+                    emit(
+                        out,
+                        &Event::Info {
+                            key: key.into(),
+                            args,
+                        },
+                    )?;
+                }
                 for (key, args) in done.warnings {
                     emit(
                         out,
                         &Event::Warn {
                             key: key.into(),
                             args,
+                        },
+                    )?;
+                }
+            }
+            Err(e) => {
+                failures += 1;
+                emit(out, &error(e.key(), vec![shown]))?;
+            }
+        }
+        emit(
+            out,
+            &Event::Step {
+                done: i as u64 + 1,
+                total,
+            },
+        )?;
+    }
+    let outcome = if failures == 0 {
+        Outcome::Succeeded
+    } else {
+        Outcome::Failed
+    };
+    emit(
+        out,
+        &Event::Done {
+            outcome,
+            summary_key: None,
+        },
+    )
+}
+
+fn run_archive_batch(out: &mut impl Write, name: &str, paths: &[String]) -> io::Result<()> {
+    let settings = locations::data_dir()
+        .map(|d| Store::new(d).load())
+        .unwrap_or_default();
+    let seven_zip = archive::find_tool("7zz");
+    let total = paths.len() as u64;
+    let mut failures = 0;
+    for (i, p) in paths.iter().enumerate() {
+        let file = std::path::Path::new(p);
+        let shown = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        emit(
+            out,
+            &Event::Status {
+                key: "msg.processing".into(),
+                args: vec![shown.clone()],
+            },
+        )?;
+        match tasks::run_archive(name, file, &settings, seven_zip.as_deref()) {
+            Ok(done) => {
+                for (key, args) in done.warnings {
+                    let mut a = vec![shown.clone()];
+                    a.extend(args);
+                    emit(
+                        out,
+                        &Event::Warn {
+                            key: key.into(),
+                            args: a,
                         },
                     )?;
                 }
@@ -171,7 +242,9 @@ fn main() -> io::Result<()> {
             )?,
             Ok(Request::Run { task, paths, .. }) => {
                 let (name, params) = tasks::parse_task(&task);
-                if tasks::is_text_task(&name) {
+                if tasks::is_archive_task(&name) {
+                    run_archive_batch(&mut out, &name, &paths)?;
+                } else if tasks::is_text_task(&name) {
                     run_text_batch(&mut out, &name, &params, &paths)?;
                 } else if known_task(&task) {
                     failed(&mut out, "task.unimplemented", vec![task])?;

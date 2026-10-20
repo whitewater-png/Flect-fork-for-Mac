@@ -21,8 +21,17 @@
 - エンジンの実走: `json.sort`（BOM・末尾カンマ付き JSON）、`text.encode?to=SJIS`（絵文字を含み警告、存在しないファイルは `msg.ioError` で継続）、`text.lineEndings?to=CRLF` を実ファイルで確認。
 - 簡易ベンチ（`cargo run --release --example bench_dup`、4 コアの Linux、合成データ）: **1 万ファイル / 約 1.4 GiB で 走査 19 ms + 重複検出 179 ms**（2,000 グループ、ページキャッシュ上）。ディスクが冷えた状態や Mac での値ではないため、**絶対値目標の根拠にはまだ使えない**（Mac 実機で再測定する）。
 
+## 第2弾の追加（同日）
+| モジュール | 内容 | 安全面 |
+| --- | --- | --- |
+| `convert` | CSV/JSON/XML/INI → JSON/XML/CSV/HTML/MD（区切り文字の自動判定、引用符、表出力。旧 `TextConvert.cs`） | XML は DTD・外部実体・実体展開を**行わない**（未知の実体は構文エラー）、ネスト 128 超は拒否。XML 出力は使えない制御文字を除去 |
+| `archive` | ZIP/TAR/tar.gz の展開・作成、7z/RAR は `7zz` 経由（旧 Archive.cs/Folder.cs） | 名前の検査（`..`、絶対パス、`\`、ドライブ文字、NUL を拒否）、**リンク/デバイスは作らない**（警告）、サイズは**実際に書いた量**で計上（ヘッダを信用しない）、総量・件数・圧縮率の上限、権限の正規化（setuid 除去）、重複名は上書きせず警告、隠しスクラッチで展開→成功時のみ可視化。`7zz` は固定ディレクトリのみ探索・他者書込可なら拒否・**展開前に一覧でサイズ/件数を検査**・展開後に木を監査（リンク削除） |
+| `tasks` | `text.convert`、`archive.extract`、`folder.compress` を追加。エンジンから実行可能 | — |
+| `flect-tools` | `make-workflows`: Quick Action（35 個）生成器。種別ごとの UTI、`inputMethod=1`、シェル注入を防ぐトークン検査 | 生成物の plist をテストで構文検証 |
+
+テスト合計: **81 件成功**（core 74 + engine 2 + tools 5）。`7zz` はこの環境に無いため、偽の `7zz` スクリプトで流れ（一覧→展開→監査）を検証しており、**実物の 7zz での確認は Mac で必要**。
+
 ## 未実装（次弾以降）
-- `text.convert`（CSV/JSON/XML/INI/HTML/MD 変換、旧 `TextConvert.cs` 425 行）
 - フォルダのリネーム・解析レポート・圧縮、重複/空フォルダの**削除実行**（ごみ箱は Swift 側の依頼イベント `needs{trash}` 経由）
-- アーカイブ展開（zip-slip / zip bomb 対策付き）、PDF 結合
+- PDF 結合・変換、画像、動画・音声
 - キャンセル（エンジン側は `Progress::cancelled` の受け口あり。stdin 読み取りと並行に処理するスレッド分離は未実装）

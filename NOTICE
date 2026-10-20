@@ -1,0 +1,14 @@
+Flect-for-Mac
+Copyright 2026 whitewater-png
+
+This product is a macOS port and modification of Flect
+(https://github.com/Konayukiw/Flect), Copyright 2026 Konayukiw, which is
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Modifications: the Windows shell extension and WPF application were moved to
+legacy/windows/ for reference; the processing core was reimplemented in Rust
+(core/) and a macOS front end is being added. Original copyright, license and
+attribution notices are preserved. See NOTICES.md for third-party components.
+
+[DRAFT - the copyright line for the new code and the project name are pending
+the maintainer's decision.]
