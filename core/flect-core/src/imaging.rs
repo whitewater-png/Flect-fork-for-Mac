@@ -341,18 +341,72 @@ pub fn rotate(
             i64::from((nw - img.width()) / 2),
             i64::from((nh - img.height()) / 2),
         );
-        imageproc::geometric_transformations::rotate_about_center(
-            &canvas,
-            deg.to_radians() as f32,
-            imageproc::geometric_transformations::Interpolation::Bilinear,
-            Rgba([0, 0, 0, 0]),
-        )
+        rotate_bilinear(&canvas, deg.to_radians())
     };
     Ok(if opaque_background {
         flatten_on_white(&out)
     } else {
         out
     })
+}
+
+/// Rotate about the centre keeping the canvas size; pixels that come from outside are transparent.
+/// Bilinear sampling on premultiplied colour, so edges do not pick up dark fringes.
+fn rotate_bilinear(src: &RgbaImage, radians: f64) -> RgbaImage {
+    let (w, h) = (src.width(), src.height());
+    let (cx, cy) = (f64::from(w) / 2.0, f64::from(h) / 2.0);
+    let (sin, cos) = radians.sin_cos();
+    let at = |x: i64, y: i64| -> [f64; 4] {
+        if x < 0 || y < 0 || x >= i64::from(w) || y >= i64::from(h) {
+            return [0.0; 4];
+        }
+        let p = src.get_pixel(x as u32, y as u32).0;
+        let a = f64::from(p[3]) / 255.0;
+        [
+            f64::from(p[0]) * a,
+            f64::from(p[1]) * a,
+            f64::from(p[2]) * a,
+            f64::from(p[3]),
+        ]
+    };
+    let mut out = RgbaImage::new(w, h);
+    for (x, y, px) in out.enumerate_pixels_mut() {
+        // inverse mapping: where in the source does this output pixel come from?
+        let (dx, dy) = (f64::from(x) + 0.5 - cx, f64::from(y) + 0.5 - cy);
+        let (sx, sy) = (
+            cos * dx + sin * dy + cx - 0.5,
+            -sin * dx + cos * dy + cy - 0.5,
+        );
+        let (x0, y0) = (sx.floor(), sy.floor());
+        let (fx, fy) = (sx - x0, sy - y0);
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let (p00, p10, p01, p11) = (
+            at(x0, y0),
+            at(x0 + 1, y0),
+            at(x0, y0 + 1),
+            at(x0 + 1, y0 + 1),
+        );
+        let mut acc = [0.0f64; 4];
+        for c in 0..4 {
+            acc[c] = p00[c] * (1.0 - fx) * (1.0 - fy)
+                + p10[c] * fx * (1.0 - fy)
+                + p01[c] * (1.0 - fx) * fy
+                + p11[c] * fx * fy;
+        }
+        let alpha = acc[3];
+        *px = if alpha <= 0.5 {
+            Rgba([0, 0, 0, 0])
+        } else {
+            let k = 255.0 / alpha;
+            Rgba([
+                (acc[0] * k).round().clamp(0.0, 255.0) as u8,
+                (acc[1] * k).round().clamp(0.0, 255.0) as u8,
+                (acc[2] * k).round().clamp(0.0, 255.0) as u8,
+                alpha.round().clamp(0.0, 255.0) as u8,
+            ])
+        };
+    }
+    out
 }
 
 pub fn flatten_on_white(img: &RgbaImage) -> RgbaImage {

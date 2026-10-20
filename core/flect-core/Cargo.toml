@@ -11,7 +11,7 @@ serde_json.workspace = true
 encoding_rs = "0.8"
 chardetng = "0.1"
 rayon = "1"
-quick-xml = "0.38"
+quick-xml = "0.42"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate", "time"] }
 tar = { version = "0.4.46", default-features = false }
@@ -19,9 +19,8 @@ flate2 = "1.1.10"
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "ico", "webp", "bmp"] }
 webp = "0.3"
-resvg = "0.45"
+resvg = { version = "0.45", default-features = false, features = ["raster-images"] }
 fast_image_resize = "5"
-imageproc = { version = "0.25", default-features = false }
 png = "0.17"
 color_quant = "1"
 base64 = "0.22"

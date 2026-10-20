@@ -225,9 +225,8 @@ struct Node {
     text: String,
 }
 
-fn local(name: &[u8]) -> String {
-    let s = String::from_utf8_lossy(name);
-    s.rsplit(':').next().unwrap_or("").to_owned()
+fn local(name: &str) -> String {
+    name.rsplit(':').next().unwrap_or("").to_owned()
 }
 
 fn open_node(e: &BytesStart<'_>) -> Result<Node, TextError> {
@@ -235,7 +234,7 @@ fn open_node(e: &BytesStart<'_>) -> Result<Node, TextError> {
     for a in e.attributes() {
         let a = a.map_err(|e| TextError::Json(e.to_string()))?;
         let value = a
-            .unescape_value()
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map_err(|e| TextError::Json(e.to_string()))?
             .into_owned();
         attrs.push((local(a.key.as_ref()), value));
@@ -323,10 +322,7 @@ fn from_xml(text: &str) -> Result<Value, TextError> {
             }
             Event::Text(t) => {
                 if let Some(n) = stack.last_mut() {
-                    n.text.push_str(
-                        &t.xml_content()
-                            .map_err(|e| TextError::Json(e.to_string()))?,
-                    );
+                    n.text.push_str(&t.xml10_content());
                 }
             }
             Event::GeneralRef(r) => {
@@ -335,11 +331,7 @@ fn from_xml(text: &str) -> Result<Value, TextError> {
                     .map_err(|e| TextError::Json(e.to_string()))?
                 {
                     Some(c) => c.to_string(),
-                    None => match r
-                        .decode()
-                        .map_err(|e| TextError::Json(e.to_string()))?
-                        .as_ref()
-                    {
+                    None => match &*r {
                         "amp" => "&".into(),
                         "lt" => "<".into(),
                         "gt" => ">".into(),
@@ -354,7 +346,7 @@ fn from_xml(text: &str) -> Result<Value, TextError> {
             }
             Event::CData(c) => {
                 if let Some(n) = stack.last_mut() {
-                    n.text.push_str(&String::from_utf8_lossy(&c));
+                    n.text.push_str(&c.xml10_content());
                 }
             }
             Event::Eof => break,

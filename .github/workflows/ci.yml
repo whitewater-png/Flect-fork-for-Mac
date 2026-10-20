@@ -45,3 +45,26 @@ jobs:
         with:
           manifest-path: core/Cargo.toml
           arguments: --all-features
+
+  swift:
+    name: Swift app (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the Rust engine and tools
+        working-directory: core
+        run: cargo build --release --locked
+      - name: Swift version
+        run: swift --version
+      - name: Build the app
+        working-directory: app
+        run: swift build 2>&1 | tail -150
+      - name: Test the app core
+        working-directory: app
+        run: swift test 2>&1 | tail -150
+      - name: Generate the Quick Actions and validate them
+        run: |
+          core/target/release/flect-tools --out "$RUNNER_TEMP/qa"
+          ls "$RUNNER_TEMP/qa" | wc -l
+          for f in "$RUNNER_TEMP"/qa/*.workflow/Contents/*; do plutil -lint "$f"; done
