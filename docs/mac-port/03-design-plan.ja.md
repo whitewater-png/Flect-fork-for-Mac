@@ -48,7 +48,7 @@ Windows ソースは削除せず `legacy/windows/` へ退避してから段階�
 ### 5.3 Finder 連携（未加入ゆえ現実解を優先）
 | 案 | 長所 | 短所 | 判断 |
 | --- | --- | --- | --- |
-| A. Quick Actions（`~/Library/Services/*.workflow`） | 署名・entitlement 不要。対象ファイル型で出し分け可（`NSSendFileTypes`/UTI） | フラット。67 項目は多い | **第一選択** |
+| A. Quick Actions（`~/Library/Services/*.workflow`） | 署名・entitlement 不要。対象ファイル型で出し分け可（`NSSendFileTypes`/UTI） | フラット。87 項目は多い | **第一選択** |
 | B. アプリの `NSServices` | Info.plist だけで宣言 | Services サブメニュー内で深い | 補助 |
 | C. Finder Sync 拡張 | 動的・階層メニュー（Windows 版に最も近い） | サンドボックス/署名/ユーザー有効化が必要。ad-hoc や無料 Apple ID で安定動作するか**未検証** | **PoC 結果次第**（P0 で判定、ダメなら採用しない） |
 
