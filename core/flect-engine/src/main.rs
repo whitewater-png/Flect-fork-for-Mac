@@ -2,8 +2,11 @@
 //! P1 provides the protocol, `export-menu` and task routing; task bodies land in P2+.
 use std::io::{self, BufRead, Write};
 
+use flect_core::locations;
 use flect_core::menu;
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
+use flect_core::settings::Store;
+use flect_core::tasks;
 
 fn emit(out: &mut impl Write, event: &Event) -> io::Result<()> {
     serde_json::to_writer(&mut *out, event)?;
@@ -72,6 +75,70 @@ fn read_bounded(input: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Optio
     }
 }
 
+/// One file at a time; a failure on one file does not stop the rest.
+fn run_text_batch(
+    out: &mut impl Write,
+    name: &str,
+    params: &std::collections::HashMap<String, String>,
+    paths: &[String],
+) -> io::Result<()> {
+    let settings = locations::data_dir()
+        .map(|d| Store::new(d).load())
+        .unwrap_or_default();
+    let total = paths.len() as u64;
+    let mut failures = 0;
+    for (i, p) in paths.iter().enumerate() {
+        let file = std::path::Path::new(p);
+        let shown = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        emit(
+            out,
+            &Event::Status {
+                key: "msg.processing".into(),
+                args: vec![shown.clone()],
+            },
+        )?;
+        match tasks::run_text(name, params, file, &settings) {
+            Ok(done) => {
+                for (key, args) in done.warnings {
+                    emit(
+                        out,
+                        &Event::Warn {
+                            key: key.into(),
+                            args,
+                        },
+                    )?;
+                }
+            }
+            Err(e) => {
+                failures += 1;
+                emit(out, &error(e.key(), vec![shown]))?;
+            }
+        }
+        emit(
+            out,
+            &Event::Step {
+                done: i as u64 + 1,
+                total,
+            },
+        )?;
+    }
+    let outcome = if failures == 0 {
+        Outcome::Succeeded
+    } else {
+        Outcome::Failed
+    };
+    emit(
+        out,
+        &Event::Done {
+            outcome,
+            summary_key: None,
+        },
+    )
+}
+
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
     let mut input = stdin.lock();
@@ -102,8 +169,11 @@ fn main() -> io::Result<()> {
                     summary_key: None,
                 },
             )?,
-            Ok(Request::Run { task, .. }) => {
-                if known_task(&task) {
+            Ok(Request::Run { task, paths, .. }) => {
+                let (name, params) = tasks::parse_task(&task);
+                if tasks::is_text_task(&name) {
+                    run_text_batch(&mut out, &name, &params, &paths)?;
+                } else if known_task(&task) {
                     failed(&mut out, "task.unimplemented", vec![task])?;
                 } else {
                     failed(&mut out, "task.unknown", vec![task])?;

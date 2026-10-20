@@ -1,3 +1,4 @@
+#!/usr/bin/env swift
 // P0 item 3: Apple Vision OCR. Usage: swift ocr.swift <image> [lang,lang]   (e.g. ja-JP,zh-Hans,en-US)
 // UNTESTED on this Linux environment - run on your Mac.
 import Foundation

@@ -68,7 +68,8 @@ Windows ソースは削除せず `legacy/windows/` へ退避してから段階�
 | 品質 | `clippy -D warnings`、`cargo-deny`、`cargo-audit`、`cargo-fuzz`、`insta`（golden） |
 
 ### 5.5 外部ツール（`scripts/fetch.sh`、バージョン固定 + SHA-256）
-ffmpeg/ffprobe（arm64 静的ビルド。入手元と GPL/LGPL を P0 で確定）／ 7-Zip 公式 `7zz`（macOS）／ `cfr.jar` ／ Java は利用者導入 ／ Python 3 は利用者導入（システム or Homebrew）。同梱バイナリは Hardened Runtime 下で個別に ad-hoc 署名。
+**【変更案・要ユーザー確認】** ffmpeg / 7-Zip は**同梱せず Homebrew 検出を既定**にする（実機に `ffmpeg-full` 9.0.2 が導入済みで VideoToolbox 動作確認済み）。個人利用のため GPL ビルドの再配布問題を避けられ、検証は brew の bottle に任せられる。探索は `/opt/homebrew/bin` と `/usr/local/bin` の**固定候補のみ**（PATH は信用しない）、起動時にバージョン下限を確認。`cfr.jar` のみ `fetch.sh`（版固定 + SHA-256）。Java / Python 3 は利用者導入。
+当初案（arm64 静的ビルドの同梱 + SHA-256 固定）は、将来配布する場合の選択肢として残す。同梱バイナリは Hardened Runtime 下で個別に ad-hoc 署名。
 
 ### 5.6 配布（未加入前提）
 - **ローカルビルド運用が正**: `scripts/build.sh` が Cargo ビルド → `xcodebuild` → `Flect.app` を `~/Applications` へ配置 → ad-hoc 署名 → Quick Action を `~/Library/Services` に生成。自分でビルドしたアプリは quarantine が付かず Gatekeeper に止められない。
@@ -138,5 +139,5 @@ Developer ID 署名 + Hardened Runtime + `notarytool` による notarize、`.dmg
 5. Rust での WebP(lossy)、SVG→ラスタ、ICO 複数サイズ、任意角回転の品質/性能
 6. ffmpeg arm64 静的ビルドの入手元・ライセンス・VideoToolbox 有効性
 7. C# 版 vs Rust 版のベンチ（重複検出、走査、リサイズ）— 速度目標の根拠
-8. `faster-whisper` の Mac 速度 vs `whisper.cpp`/`mlx-whisper`
+8. `faster-whisper` の Mac 速度 vs `whisper.cpp`/`mlx-whisper`/**ffmpeg 9 の whisper フィルタ**（Homebrew ffmpeg に `--enable-whisper` あり）
 9. ~~アプリのバンドルID/名称・最低 macOS・Intel 要否~~ → **確定（2026-10-20）**: アプリ名 `Flect-for-Mac`、最低 macOS 14、Apple Silicon (arm64) 専用。バンドルID は未指定のため仮に `com.whitewater.flect-for-mac` とし、変更可（要確認）

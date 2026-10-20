@@ -1,3 +1,4 @@
+#!/usr/bin/env swift
 // P0 item 4: ImageIO HEIC write. Usage: swift heic.swift <in.png> <out.heic> [quality 0-1]
 // UNTESTED on this Linux environment - run on your Mac.
 import Foundation
