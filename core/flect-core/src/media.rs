@@ -29,6 +29,14 @@ pub enum MediaError {
     NoAudio,
     NoDuration,
     Cancelled,
+    /// ffmpeg was built without the whisper filter.
+    NoWhisper,
+    /// The pinned whisper model is not installed (the argument is the model file name).
+    NoModel(String),
+    /// The installed model does not match the pinned hash.
+    ModelMismatch(String),
+    /// Transcription produced no text.
+    NoSpeech,
     Io(std::io::Error),
 }
 
@@ -44,6 +52,10 @@ impl MediaError {
             Self::NoAudio => "msg.noAudioTrack",
             Self::NoDuration => "msg.noDuration",
             Self::Cancelled => "msg.cancelled",
+            Self::NoWhisper => "msg.whisperMissing",
+            Self::NoModel(_) => "msg.whisperModelMissing",
+            Self::ModelMismatch(_) => "msg.whisperModelMismatch",
+            Self::NoSpeech => "msg.noSpeech",
             Self::Io(_) => "msg.ioError",
         }
     }
@@ -418,7 +430,23 @@ pub fn run_ffmpeg(
     duration: f64,
     progress: &dyn Progress,
 ) -> Result<(), MediaError> {
-    let mut child = with_nice(&tools.ffmpeg)
+    run_ffmpeg_in(tools, args, duration, progress, None)
+}
+
+/// Like `run_ffmpeg`, with an optional working directory (for filters that take plain relative
+/// names, which avoids escaping paths inside a filter graph).
+pub fn run_ffmpeg_in(
+    tools: &Tools,
+    args: &[String],
+    duration: f64,
+    progress: &dyn Progress,
+    cwd: Option<&Path>,
+) -> Result<(), MediaError> {
+    let mut command = with_nice(&tools.ffmpeg);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -482,6 +510,21 @@ pub fn run_ffmpeg(
 }
 
 // ------------------------------------------------------------------ encoders
+
+/// Does this ffmpeg build have the named filter? (`whisper` exists only in builds such as Homebrew's `ffmpeg-full`.)
+pub fn has_filter(tools: &Tools, name: &str) -> bool {
+    let Ok(out) = Command::new(&tools.ffmpeg)
+        .args(["-hide_banner", "-filters"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|l| l.split_whitespace().nth(1) == Some(name))
+}
 
 pub fn list_encoders(tools: &Tools) -> HashSet<String> {
     let mut names = HashSet::new();

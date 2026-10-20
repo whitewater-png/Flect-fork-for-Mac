@@ -19,13 +19,13 @@ English: [README.md](README.md)
 | フォルダ | 重複ファイル検出（バイト比較で確認）、空フォルダ削除、ツリー、分析、一括リネーム、圧縮 |
 | アーカイブ・コード | 安全な展開（ZIP/7z/tar など）、JAR のデコンパイル（CFR） |
 
-未実装: 音声からの字幕生成、AI による背景除去。
+字幕（音声から SRT/VTT/TXT）は、whisper フィルタ入りの ffmpeg（Homebrew の `ffmpeg-full` など）と、`scripts/fetch-whisper-model.sh` で入れるモデルを使います。未実装: AI による背景除去。
 
 ## 必要なもの
 
 - macOS 14 以降・Apple Silicon
 - Xcode Command Line Tools（Swift 5.9 以上）、[Rust](https://rustup.rs)
-- `brew install ffmpeg sevenzip`（動画・音声と 7z 用。JAR を使うなら `openjdk` も）
+- `brew install ffmpeg-full sevenzip`（動画・音声と 7z 用。JAR を使うなら `openjdk` も）
 
 ## ビルドとインストール
 

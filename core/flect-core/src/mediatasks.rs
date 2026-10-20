@@ -26,6 +26,8 @@ pub fn is_media_task(name: &str) -> bool {
             | "video.compress"
             | "video.extractAudio"
             | "audio.convert"
+            | "video.subtitles"
+            | "audio.subtitles"
     )
 }
 
@@ -459,6 +461,73 @@ fn thumbnail(
     a.push(media::file_arg(&staged)?);
     job.ffmpeg(&a, 0.0)?;
     publish(&staged, input, "_thumbnail", Some(ext))
+}
+
+/// Transcribe the audio with ffmpeg's whisper filter and write `name.srt` / `.vtt` / `.txt` next to the source.
+fn subtitles(job: &Job<'_>, input: &Path) -> Result<PathBuf, MediaError> {
+    use crate::settings::SubtitleDevice;
+    use crate::settings::SubtitleOutput;
+    let info = job.probe(input)?;
+    if !info.has_audio() {
+        return Err(MediaError::NoAudio);
+    }
+    if !media::has_filter(&job.env.tools, "whisper") {
+        return Err(MediaError::NoWhisper);
+    }
+    let sub = &job.settings.video.subtitles;
+    let model = crate::subtitles::model_for(sub.model);
+    let model_path = crate::subtitles::model_dir()
+        .map(|d| d.join(model.file))
+        .filter(|p| p.is_file())
+        .ok_or_else(|| MediaError::NoModel(model.file.to_owned()))?;
+    let language = crate::subtitles::language_arg(&sub.language)
+        .ok_or_else(|| MediaError::Unsupported("subtitle language".into()))?;
+    job.progress
+        .status("msg.verifying", &[model.file.to_owned()]);
+    if crate::jar::sha256_of(&model_path)? != model.sha256 {
+        return Err(MediaError::ModelMismatch(model.file.to_owned()));
+    }
+    job.check()?;
+    job.progress
+        .status("msg.subtitlesTranscribing", &[file_name(input)]);
+    let scratch = ScratchDirectory::new(input)?;
+    std::os::unix::fs::symlink(&model_path, scratch.path_for("model.bin"))?;
+    let text_only = sub.output == SubtitleOutput::Txt;
+    let filter = crate::subtitles::filter_arg(
+        &language,
+        sub.device != SubtitleDevice::Cpu,
+        if text_only { "text" } else { "srt" },
+    );
+    let mut a = s(&media::PREAMBLE);
+    a.push("-i".into());
+    a.push(media::file_arg(input)?);
+    a.extend(s(&["-vn", "-af", &filter, "-f", "null", "-"]));
+    media::run_ffmpeg_in(
+        &job.env.tools,
+        &a,
+        info.duration_seconds,
+        job.progress,
+        Some(scratch.root()),
+    )?;
+    let produced = scratch.path_for(if text_only { "out.txt" } else { "out.srt" });
+    let raw = fs::read_to_string(&produced).unwrap_or_default();
+    if raw.trim().is_empty() {
+        return Err(MediaError::NoSpeech);
+    }
+    let (ext, body) = match sub.output {
+        SubtitleOutput::Srt => ("srt", raw),
+        SubtitleOutput::Vtt => ("vtt", crate::subtitles::srt_to_vtt(&raw)),
+        SubtitleOutput::Txt => ("txt", raw),
+    };
+    let staged = scratch.path_for(&format!("final.{ext}"));
+    fs::write(&staged, body)?;
+    publish(&staged, input, "", Some(ext))
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 pub fn audio_encoder(target: &str) -> Vec<String> {
@@ -1128,6 +1197,7 @@ pub fn run(
                 .unwrap_or_else(|| "MP3".into()),
             false,
         )?,
+        "video.subtitles" | "audio.subtitles" => subtitles(job, input)?,
         "video.compress" => return compress(job, input, params),
         _ => return Err(MediaError::Unsupported(name.to_owned())),
     };
@@ -1757,5 +1827,27 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(left, ["long.mp4"], "cancelled run cleaned up: {left:?}");
+    }
+
+    #[test]
+    fn e2e_subtitles_need_whisper_and_a_pinned_model() {
+        let env = need_env!();
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("clip.mp4");
+        make_video(&env, &src, 2, "160x120");
+        let s = Settings::default();
+        match run("video.subtitles", &params(""), &src, &job(&env, &s)) {
+            // Only a machine with a whisper-enabled ffmpeg and an installed model gets this far.
+            Ok(_) | Err(MediaError::NoSpeech) => {}
+            Err(MediaError::NoWhisper) | Err(MediaError::NoModel(_)) => {}
+            Err(e) => panic!("unexpected: {e:?}"),
+        }
+        let left: Vec<_> = fs::read_dir(d.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "clip.mp4" && !n.ends_with(".srt"))
+            .collect();
+        assert!(left.is_empty(), "scratch left behind: {left:?}");
     }
 }

@@ -14,6 +14,8 @@ These are installed by the user and run as separate processes from fixed directo
 | FFmpeg / FFprobe | `brew install ffmpeg` | LGPL-2.1+ or GPL-2.0+/3.0+ depending on the build |
 | 7-Zip (`7zz`) | `brew install sevenzip` | LGPL-2.1+ with unRAR restriction |
 | CFR (Java decompiler) | `scripts/fetch-cfr.sh`; SHA-256 pinned in `core/flect-core/src/jar.rs` | MIT |
+| whisper.cpp (inside ffmpeg's `whisper` filter) | Part of a whisper-enabled ffmpeg build such as `ffmpeg-full` | MIT |
+| Whisper model weights (ggml) | `scripts/fetch-whisper-model.sh` from huggingface.co/ggerganov/whisper.cpp; SHA-256 pinned in `core/flect-core/src/subtitles.rs` | MIT (OpenAI Whisper) |
 | Java runtime | `brew install openjdk` (optional, only for JAR decompilation) | GPL-2.0 with Classpath Exception |
 
 ## Rust dependencies (`core/`, compiled into `flect-engine` and `flect-tools`)

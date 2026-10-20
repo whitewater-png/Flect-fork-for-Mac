@@ -88,7 +88,8 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Planner.resolve("pdf.convert.TXT", settings: s), .native(.pdfText))
         XCTAssertEqual(Planner.resolve("image.resize.custom", settings: s), .dialog(.pixels(base: "image.resize")))
         XCTAssertEqual(Planner.resolve("folder.rename", settings: s), .dialog(.rename))
-        XCTAssertEqual(Planner.resolve("video.subtitles", settings: s), .unavailable(key: "task.unimplemented"))
+        XCTAssertEqual(Planner.resolve("video.subtitles", settings: s), .engine("video.subtitles"))
+        XCTAssertEqual(Planner.resolve("audio.subtitles", settings: s), .engine("audio.subtitles"))
         XCTAssertEqual(Planner.resolve("json.sort", settings: s), .engine("json.sort"))
         XCTAssertEqual(Planner.resolve("nope.nothing", settings: s), .unknown)
         XCTAssertEqual(Planner.resolve("image.resize?scale=10", settings: s), .engine("image.resize?scale=10"))
@@ -120,7 +121,7 @@ final class CoreTests: XCTestCase {
     func testEveryEngineKeyHasATranslation() throws {
         for (code, lang) in [("ja", AppLanguage.japanese), ("zh", .chinese)] {
             let loc = Loc(language: lang)
-            for key in ["msg.processing", "msg.archiveBomb", "msg.ffmpegMissing", "msg.pdfNeedTwo", "app.keepWhich", "task.unimplemented"] {
+            for key in ["msg.processing", "msg.archiveBomb", "msg.ffmpegMissing", "msg.pdfNeedTwo", "app.keepWhich", "task.unimplemented", "msg.whisperMissing", "msg.noSpeech"] {
                 XCTAssertNotEqual(loc.t(key), Loc(language: .english).t(key), "\(code) lacks \(key)")
             }
         }

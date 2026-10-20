@@ -79,9 +79,9 @@ public enum Planner {
         case "folder.rename": return .dialog(.rename)
         case "video.trim": return .dialog(.trim)
         case "video.thumbnail": return .dialog(.thumbnail)
-        case "video.subtitles", "audio.subtitles": return .unavailable(key: "task.unimplemented")
         case "image.chromakey", "image.strip", "json.pretty", "json.sort", "folder.removeDuplicate", "folder.removeEmpty",
-             "folder.tree", "folder.analyze", "folder.compress", "archive.extract", "jar.decompile":
+             "folder.tree", "folder.analyze", "folder.compress", "archive.extract", "jar.decompile",
+             "video.subtitles", "audio.subtitles":
             return .engine(base)
         default: break
         }

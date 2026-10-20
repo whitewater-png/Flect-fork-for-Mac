@@ -101,6 +101,10 @@ enum SettingsSchema {
             Field(["Video", "Thumbnail", "Quality"], "settings.video.thumbnail.quality", "Thumbnail quality", .int(1...100), 90),
             Field(["Video", "GifFps"], "settings.video.gif.fps", "GIF frames per second", .int(1...60), 15),
             Field(["Video", "GifMaxWidth"], "settings.video.gif.width", "GIF max width", .int(16...4096), 640),
+            Field(["Video", "Subtitles", "Model"], "settings.video.subtitles.model", "Subtitle model", .choice([("Tiny", "settings.video.subtitles.model.tiny"), ("Base", "settings.video.subtitles.model.base"), ("Small", "settings.video.subtitles.model.small"), ("Medium", "settings.video.subtitles.model.medium"), ("LargeV3", "settings.video.subtitles.model.large"), ("Turbo", "settings.video.subtitles.model.turbo")].map { (value: $0.0, key: $0.1, fallback: $0.0) }), "Small"),
+            Field(["Video", "Subtitles", "Language"], "settings.video.subtitles.language", "Subtitle language (ja, en... empty = automatic)", .text, ""),
+            Field(["Video", "Subtitles", "Device"], "settings.video.subtitles.device", "Subtitle device", choice("settings.video.subtitles.device", [("Auto", "auto"), ("Cpu", "cpu")]), "Auto"),
+            Field(["Video", "Subtitles", "Output"], "settings.video.subtitles.output", "Subtitle format", choice("settings.video.subtitles.output", [("Srt", "srt"), ("Vtt", "vtt"), ("Txt", "txt")]), "Srt"),
             Field(["Video", "RotateFillColor"], "settings.video.rotate.fill", "Rotate fill color (#RRGGBB)", .text, "#000000"),
         ]),
         SettingsSection(id: "text", key: "settings.nav.text", fallback: "Text", fields: [

@@ -19,13 +19,13 @@ Your originals are never touched: every task writes a new file next to the sourc
 | Folders | find duplicates (byte-verified), remove empty folders, tree, analyze, bulk rename, compress |
 | Archives / code | safe extraction (ZIP, 7z, tar...), JAR decompile (CFR) |
 
-Not implemented yet: subtitles from speech, AI background removal.
+Subtitles (speech to SRT/VTT/TXT) use the `whisper` filter of a whisper-enabled ffmpeg (e.g. Homebrew `ffmpeg-full`) plus a model installed with `scripts/fetch-whisper-model.sh`. Not implemented yet: AI background removal.
 
 ## Requirements
 
 - macOS 14 or later, Apple Silicon
 - Xcode Command Line Tools (Swift 5.9+), [Rust](https://rustup.rs)
-- `brew install ffmpeg sevenzip` (video/audio and 7z; optional `openjdk` for JAR decompilation)
+- `brew install ffmpeg-full sevenzip` (video/audio and 7z; optional `openjdk` for JAR decompilation)
 
 ## Build and install
 

@@ -17,6 +17,7 @@ pub mod paths;
 pub mod pdf;
 pub mod protocol;
 pub mod settings;
+pub mod subtitles;
 pub mod tasks;
 pub mod text;
 pub mod workspace;

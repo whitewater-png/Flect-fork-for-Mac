@@ -4,9 +4,9 @@
 
 | 結果 | 項目数 |
 | --- | --- |
-| Rust エンジンで実装済み | **79** |
+| Rust エンジンで実装済み | **81** |
 | Swift アプリ側で実装予定（OS 機能） | **6** |
-| 未実装（AI 機能） | **2** |
+| 未実装（AI 機能） | **0** |
 | 合計 | 87 |
 
 | 系統 | 担当 | 件数 | ID |
@@ -18,9 +18,9 @@
 | `image` | Rust エンジン（Linux でテスト済み） | 19 | `image.resize.p1`, `image.resize.p2`, `image.resize.custom`, `image.compress.p1`, `image.compress.p2`, `image.compress.p3`, `image.compress.p4`, `image.compress.custom`, `image.rotate.p1`, `image.rotate.p2`, `image.rotate.p3`, `image.convert.PNG`, `image.convert.JPG`, `image.convert.WEBP`, `image.convert.ICO`, `image.convert.GIF`, `image.convert.SVG`, `image.strip`, `image.chromakey` |
 | `image` | Swift アプリ（OS 機能。Mac 実機で要検証） | 2 | `image.convert.HEIC`, `image.ocr` |
 | `video` | Rust エンジン（Linux でテスト済み） | 29 | `video.resize.p1`, `video.resize.p2`, `video.resize.custom`, `video.trim`, `video.thumbnail`, `video.compress.discord`, `video.compress.p1`, `video.compress.p2`, `video.compress.p3`, `video.compress.custom`, `video.rotate.p1`, `video.rotate.p2`, `video.rotate.p3`, `video.convert.MP4`, `video.convert.MOV`, `video.convert.MKV`, `video.convert.M4A`, `video.convert.AVI`, `video.convert.WEBM`, `video.convert.FLV`, `video.convert.GIF`, `video.extractAudio.MP3`, `video.extractAudio.M4A`, `video.extractAudio.WAV`, `video.extractAudio.AIF`, `video.extractAudio.AIFF`, `video.extractAudio.AAC`, `video.extractAudio.OGG`, `video.extractAudio.WMA` |
-| `video` | 未実装 | 1 | `video.subtitles` |
+| `video` | Rust エンジン（ffmpeg の whisper フィルタ。実機で要検証） | 1 | `video.subtitles` |
 | `audio` | Rust エンジン（Linux でテスト済み） | 8 | `audio.convert.MP3`, `audio.convert.M4A`, `audio.convert.WAV`, `audio.convert.AIF`, `audio.convert.AIFF`, `audio.convert.AAC`, `audio.convert.OGG`, `audio.convert.WMA` |
-| `audio` | 未実装 | 1 | `audio.subtitles` |
+| `audio` | Rust エンジン（同上） | 1 | `audio.subtitles` |
 | `text` | Rust エンジン（Linux でテスト済み） | 12 | `text.convert.TXT`, `text.convert.JSON`, `text.convert.XML`, `text.convert.CSV`, `text.convert.HTML`, `text.convert.MD`, `text.encode.UTF8`, `text.encode.UTF8BOM`, `text.encode.UTF16`, `text.encode.SJIS`, `text.lineEndings.CRLF`, `text.lineEndings.LF` |
 | `json` | Rust エンジン（Linux でテスト済み） | 2 | `json.pretty`, `json.sort` |
 | `jar` | Rust エンジン（Linux でテスト済み） | 1 | `jar.decompile` |
@@ -32,3 +32,5 @@
 - 画像のリサイズ・変換などでは**元ファイルのメタデータ（EXIF/ICC）は出力に引き継がれない**（再エンコードのため）。EXIF の向きは画素に反映する。旧版（ImageMagick）はプロファイルを保持していた。意図的な差分。
 - 旧版との挙動差は他に: 動画の `-threads` 段階的縮退は「既定→4→1」に簡略化、プロセス優先度は `nice -n 5`。
 - `pdf.merge` は実機確認の結果、アプリ側（PDFKit）の実装に切り替えた。Rust エンジンの `pdf.merge` は残っているが、アプリからは呼ばれない。
+- 字幕は ffmpeg の `whisper` フィルタ（whisper.cpp）で生成する。Python 不要。この Mac の `ffmpeg`（Homebrew の `ffmpeg-full` 9.0.2）では `ffmpeg -filters` に `whisper` がある。標準の `ffmpeg` に入っているかは未確認。モデルは `scripts/fetch-whisper-model.sh` で入れる（SHA-256 固定、エンジンは固定ハッシュ以外を使わない）。Linux の CI には whisper 付き ffmpeg がないため、実際の文字起こしは Mac でのみ確認できる。
+- AI 背景除去（rembg）は引き続き未実装（設定が AI モードでも色キーで動く）。
