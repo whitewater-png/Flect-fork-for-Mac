@@ -68,6 +68,9 @@ public final class SettingsStore {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: final.path)
     }
 
+    /// Back to defaults (the file is rewritten on the next `save()`).
+    public func reset() { root = [:] }
+
     // MARK: values the app needs (defaults match the engine / the Windows version)
 
     public var language: AppLanguage { AppLanguage.from(setting: string("General", "Language", default: "System")) }

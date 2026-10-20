@@ -56,13 +56,13 @@ final class AppModel: ObservableObject {
     func start(arguments: [String]) {
         settings = SettingsStore()
         Loc.shared.use(settings.language)
+        engine = EngineClient.locate().map { EngineClient(executable: $0) }
         guard arguments.contains("--task") else { screen = .settings; return }
         switch LaunchRequest.parse(arguments: arguments) {
         case .failure:
             screen = .message(loc.t("app.noTask"))
         case .success(let req):
             paths = req.paths
-            engine = EngineClient.locate().map { EngineClient(executable: $0) }
             handle(task: req.task)
         }
     }
@@ -83,8 +83,17 @@ final class AppModel: ObservableObject {
         Task {
             if catalog == nil, let m = await engine.fetchMenu() { catalog = MenuCatalog(menu: m) }
             guard let entry = catalog?.find(group) else { screen = .message(loc.f("msg.unknownCommand", [group])); return }
-            screen = .choose(title: loc.has(entry.labelKey) ? loc.t(entry.labelKey) : entry.label, entries: entry.children)
+            let hidden = settings.hiddenMenuItems
+            screen = .choose(title: loc.has(entry.labelKey) ? loc.t(entry.labelKey) : entry.label, entries: entry.children.filter { !hidden.contains($0.id) })
         }
+    }
+
+    /// Every menu entry that does something (for the "which items to show" list in settings).
+    func menuLeaves() async -> [MenuEntry] {
+        guard let engine = engine else { return [] }
+        if catalog == nil, let m = await engine.fetchMenu() { catalog = MenuCatalog(menu: m) }
+        func walk(_ es: [MenuEntry]) -> [MenuEntry] { es.flatMap { $0.children.isEmpty ? [$0] : walk($0.children) } }
+        return walk(catalog?.entries ?? [])
     }
 
     func label(for entry: MenuEntry) -> String { Planner.label(for: entry, settings: settings, loc: loc) }
