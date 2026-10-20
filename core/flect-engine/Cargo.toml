@@ -10,5 +10,8 @@ flect-core = { path = "../flect-core" }
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

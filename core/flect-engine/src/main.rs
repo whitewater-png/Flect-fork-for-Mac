@@ -1,18 +1,26 @@
 //! flect-engine: reads JSON Lines requests on stdin, writes events on stdout.
-//! P1 provides the protocol, `export-menu` and task routing; task bodies land in P2+.
+//!
+//! A reader thread parses stdin; `cancel` takes effect immediately (it only flips a flag the
+//! running task polls), everything else is queued for the worker, which runs one request at a time.
 use std::io::{self, BufRead, Write};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
-use flect_core::archive;
-use flect_core::locations;
-use flect_core::menu;
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
-use flect_core::settings::Store;
-use flect_core::tasks;
+use flect_core::settings::{Settings, Store};
+use flect_core::{archive, locations, menu, tasks};
 
-fn emit(out: &mut impl Write, event: &Event) -> io::Result<()> {
-    serde_json::to_writer(&mut *out, event)?;
-    out.write_all(b"\n")?;
-    out.flush()
+type Out = Arc<Mutex<io::Stdout>>;
+
+fn emit(out: &Out, event: &Event) -> io::Result<()> {
+    let mut line = serde_json::to_vec(event)?;
+    line.push(b'\n');
+    // One lock per event so lines from the reader and worker threads never interleave.
+    let mut guard = out.lock().unwrap_or_else(|e| e.into_inner());
+    guard.write_all(&line)?;
+    guard.flush()
 }
 
 fn error(key: &str, args: Vec<String>) -> Event {
@@ -22,7 +30,7 @@ fn error(key: &str, args: Vec<String>) -> Event {
     }
 }
 
-fn failed(out: &mut impl Write, key: &str, args: Vec<String>) -> io::Result<()> {
+fn failed(out: &Out, key: &str, args: Vec<String>) -> io::Result<()> {
     emit(out, &error(key, args))?;
     emit(
         out,
@@ -46,6 +54,7 @@ fn known_task(task: &str) -> bool {
 }
 
 /// Read one line, never buffering more than the protocol limit.
+/// `Some(true)` means the line was too long and has been discarded.
 fn read_bounded(input: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Option<bool>> {
     buf.clear();
     let mut too_long = false;
@@ -76,24 +85,73 @@ fn read_bounded(input: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Optio
     }
 }
 
-/// One file at a time; a failure on one file does not stop the rest.
-fn run_text_batch(
-    out: &mut impl Write,
-    name: &str,
-    params: &std::collections::HashMap<String, String>,
-    paths: &[String],
-) -> io::Result<()> {
-    let settings = locations::data_dir()
+enum Msg {
+    Run { task: String, paths: Vec<String> },
+}
+
+/// stdin -> queue. Handles everything that must not wait behind a running task.
+fn reader(out: Out, cancel: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let mut buf = Vec::new();
+    while let Some(too_long) = read_bounded(&mut input, &mut buf)? {
+        if too_long {
+            failed(&out, "protocol.lineTooLong", vec![])?;
+            continue;
+        }
+        if buf.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        match parse_line(&buf) {
+            Err(e) => failed(&out, e.key(), vec![])?,
+            Ok(Request::ExportMenu) => emit(
+                &out,
+                &Event::Menu {
+                    menu: menu::export(),
+                },
+            )?,
+            Ok(Request::Cancel) => cancel.store(true, Ordering::SeqCst),
+            Ok(Request::Run { task, paths, .. }) => {
+                if tx.send(Msg::Run { task, paths }).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn display_name(p: &str) -> String {
+    Path::new(p)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io::Result<()> {
+    let settings: Settings = locations::data_dir()
         .map(|d| Store::new(d).load())
         .unwrap_or_default();
+    let seven_zip = archive::find_tool("7zz");
+    let is_cancelled = || cancel.load(Ordering::SeqCst);
+    let ctx = tasks::Ctx {
+        settings: &settings,
+        seven_zip: seven_zip.as_deref(),
+        cancelled: &is_cancelled,
+    };
     let total = paths.len() as u64;
     let mut failures = 0;
     for (i, p) in paths.iter().enumerate() {
-        let file = std::path::Path::new(p);
-        let shown = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        if is_cancelled() {
+            return emit(
+                out,
+                &Event::Done {
+                    outcome: Outcome::Cancelled,
+                    summary_key: None,
+                },
+            );
+        }
+        let shown = display_name(p);
         emit(
             out,
             &Event::Status {
@@ -101,7 +159,7 @@ fn run_text_batch(
                 args: vec![shown.clone()],
             },
         )?;
-        match tasks::run_text(name, params, file, &settings) {
+        match tasks::run(task, Path::new(p), &ctx) {
             Ok(done) => {
                 for (key, args) in done.infos {
                     emit(
@@ -122,66 +180,14 @@ fn run_text_batch(
                     )?;
                 }
             }
-            Err(e) => {
-                failures += 1;
-                emit(out, &error(e.key(), vec![shown]))?;
-            }
-        }
-        emit(
-            out,
-            &Event::Step {
-                done: i as u64 + 1,
-                total,
-            },
-        )?;
-    }
-    let outcome = if failures == 0 {
-        Outcome::Succeeded
-    } else {
-        Outcome::Failed
-    };
-    emit(
-        out,
-        &Event::Done {
-            outcome,
-            summary_key: None,
-        },
-    )
-}
-
-fn run_archive_batch(out: &mut impl Write, name: &str, paths: &[String]) -> io::Result<()> {
-    let settings = locations::data_dir()
-        .map(|d| Store::new(d).load())
-        .unwrap_or_default();
-    let seven_zip = archive::find_tool("7zz");
-    let total = paths.len() as u64;
-    let mut failures = 0;
-    for (i, p) in paths.iter().enumerate() {
-        let file = std::path::Path::new(p);
-        let shown = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        emit(
-            out,
-            &Event::Status {
-                key: "msg.processing".into(),
-                args: vec![shown.clone()],
-            },
-        )?;
-        match tasks::run_archive(name, file, &settings, seven_zip.as_deref()) {
-            Ok(done) => {
-                for (key, args) in done.warnings {
-                    let mut a = vec![shown.clone()];
-                    a.extend(args);
-                    emit(
-                        out,
-                        &Event::Warn {
-                            key: key.into(),
-                            args: a,
-                        },
-                    )?;
-                }
+            Err(_) if is_cancelled() => {
+                return emit(
+                    out,
+                    &Event::Done {
+                        outcome: Outcome::Cancelled,
+                        summary_key: None,
+                    },
+                )
             }
             Err(e) => {
                 failures += 1;
@@ -211,50 +217,28 @@ fn run_archive_batch(out: &mut impl Write, name: &str, paths: &[String]) -> io::
 }
 
 fn main() -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut input = stdin.lock();
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    let mut buf = Vec::new();
-
-    while let Some(too_long) = read_bounded(&mut input, &mut buf)? {
-        if too_long {
-            failed(&mut out, "protocol.lineTooLong", vec![])?;
-            continue;
-        }
-        if buf.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        match parse_line(&buf) {
-            Err(e) => failed(&mut out, e.key(), vec![])?,
-            Ok(Request::ExportMenu) => emit(
-                &mut out,
-                &Event::Menu {
-                    menu: menu::export(),
-                },
-            )?,
-            Ok(Request::Cancel) => emit(
-                &mut out,
-                &Event::Done {
-                    outcome: Outcome::Cancelled,
-                    summary_key: None,
-                },
-            )?,
-            Ok(Request::Run { task, paths, .. }) => {
-                let (name, params) = tasks::parse_task(&task);
-                if tasks::is_archive_task(&name) {
-                    run_archive_batch(&mut out, &name, &paths)?;
-                } else if tasks::is_text_task(&name) {
-                    run_text_batch(&mut out, &name, &params, &paths)?;
-                } else if known_task(&task) {
-                    failed(&mut out, "task.unimplemented", vec![task])?;
-                } else {
-                    failed(&mut out, "task.unknown", vec![task])?;
-                }
-            }
+    let out: Out = Arc::new(Mutex::new(io::stdout()));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let handle = {
+        let (out, cancel) = (out.clone(), cancel.clone());
+        std::thread::spawn(move || reader(out, cancel, tx))
+    };
+    for msg in rx {
+        let Msg::Run { task, paths } = msg;
+        cancel.store(false, Ordering::SeqCst); // a stale cancel must not kill the next run
+        let name = task.split('?').next().unwrap_or("");
+        if tasks::is_file_task(name) {
+            run_files(&out, &cancel, &task, &paths)?;
+        } else if known_task(&task) {
+            failed(&out, "task.unimplemented", vec![task])?;
+        } else {
+            failed(&out, "task.unknown", vec![task])?;
         }
     }
-    Ok(())
+    handle
+        .join()
+        .map_err(|_| io::Error::other("reader thread panicked"))?
 }
 
 #[cfg(test)]

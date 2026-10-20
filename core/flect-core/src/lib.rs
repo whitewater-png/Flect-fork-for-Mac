@@ -4,8 +4,10 @@
 pub mod archive;
 pub mod convert;
 pub mod folder;
+pub mod imaging;
 pub mod locations;
 pub mod menu;
+pub mod metadata;
 pub mod paths;
 pub mod protocol;
 pub mod settings;
