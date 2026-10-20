@@ -6,6 +6,7 @@ public enum NativeTask: Equatable {
     case pdfPreview
     case pdfRender(format: String)   // PNG or JPG
     case pdfText
+    case pdfMerge
     case ocr
 }
 

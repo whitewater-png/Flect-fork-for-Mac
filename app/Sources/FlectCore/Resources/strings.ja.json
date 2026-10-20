@@ -162,6 +162,7 @@
  "menu.text.convert": "変換",
  "menu.text.encode": "文字コード",
  "menu.text.lineEndings": "改行コード",
+ "menu.to": "{0} に変換",
  "menu.video": "動画",
  "menu.video.compress": "圧縮",
  "menu.video.compress.discord": "Discord",

@@ -206,7 +206,11 @@ final class AppModel: ObservableObject {
         runEngine(Planner.rename(prefix: f.0, name: f.1, suffix: f.2, numbered: f.3, dryRun: false), paths: paths)
     }
 
-    func submitMerge(ordered: [String]) { runEngine("pdf.merge", paths: ordered) }
+    /// Merging is PDFKit work (the engine has no PDF code), in the order chosen in the dialog.
+    func submitMerge(ordered: [String]) {
+        paths = ordered
+        runNative(.pdfMerge)
+    }
 
     func close() { NSApp.terminate(nil) }
 

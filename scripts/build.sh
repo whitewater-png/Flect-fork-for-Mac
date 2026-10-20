@@ -12,6 +12,23 @@ VERSION="${FLECT_VERSION:-0.1.0}"
 command -v cargo >/dev/null || { echo "cargo not found: brew install rustup && rustup-init" >&2; exit 1; }
 command -v swift >/dev/null || { echo "swift not found: install Xcode or the Command Line Tools" >&2; exit 1; }
 
+# The macOS 27 SDK declares @State etc. as macros whose plugin (SwiftUIMacros) ships only with full Xcode.
+# With just the Command Line Tools, fall back to the newest SDK that still compiles SwiftUI.
+if [ -z "${SDKROOT:-}" ]; then
+  probe() {
+    local dir; dir="$(mktemp -d)"
+    printf 'import SwiftUI\nstruct P: View { @State private var x = false; var body: some View { Toggle("", isOn: $x) } }\n' > "$dir/p.swift"
+    swiftc -typecheck -sdk "$1" "$dir/p.swift" >/dev/null 2>&1; local rc=$?
+    rm -rf "$dir"; return $rc
+  }
+  default_sdk="$(xcrun --show-sdk-path 2>/dev/null || true)"
+  if [ -n "$default_sdk" ] && ! probe "$default_sdk"; then
+    for sdk in $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX[0-9]*.[0-9]*.sdk 2>/dev/null | sort -rV); do
+      if probe "$sdk"; then export SDKROOT="$sdk"; echo "== Using $(basename "$sdk") (the default SDK cannot compile SwiftUI without full Xcode)"; break; fi
+    done
+  fi
+fi
+
 echo "== Rust engine"
 (cd core && cargo build --release --locked)
 echo "== Swift app"

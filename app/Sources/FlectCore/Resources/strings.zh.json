@@ -162,6 +162,7 @@
  "menu.text.convert": "转换",
  "menu.text.encode": "字符编码",
  "menu.text.lineEndings": "换行符",
+ "menu.to": "转换为 {0}",
  "menu.video": "视频",
  "menu.video.compress": "压缩",
  "menu.video.compress.discord": "Discord",

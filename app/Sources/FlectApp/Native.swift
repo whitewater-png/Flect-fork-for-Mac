@@ -114,6 +114,26 @@ enum NativeWorker {
         return r
     }
 
+    /// Merge in the given order; the result goes next to the first file.
+    static func pdfMerge(urls: [URL], loc: Loc) -> NativeReport {
+        var r = NativeReport()
+        guard urls.count >= 2 else { r.add(.error, loc.t("msg.pdfNeedTwo")); return r }
+        let merged = PDFDocument()
+        for url in urls {
+            guard let doc = openPdf(url, loc: loc, report: &r) else { return r }
+            guard merged.pageCount + doc.pageCount <= NativeLimits.maxPdfPages else {
+                r.add(.error, loc.f("msg.fileTooLarge", [url.lastPathComponent])); return r
+            }
+            for i in 0..<doc.pageCount {
+                if let page = doc.page(at: i) { merged.insert(page, at: merged.pageCount) }
+            }
+        }
+        guard let data = merged.dataRepresentation() else { r.add(.error, loc.t("msg.ioError")); return r }
+        do { let o = try OutputPath.writeNew(data, source: urls[0], suffix: "_merged", ext: "pdf"); r.add(.info, o.lastPathComponent) }
+        catch { r.add(.error, loc.t("msg.ioError")) }
+        return r
+    }
+
     // MARK: OCR
 
     static func languages(setting: String) -> [String] {
@@ -153,6 +173,16 @@ extension AppModel {
         screen = .running
         let urls = paths.map { URL(fileURLWithPath: $0) }
         let loc = self.loc
+        if case .pdfMerge = task {
+            status = loc.t("app.running"); total = 1
+            Task {
+                let report = await Task.detached(priority: .userInitiated) { NativeWorker.pdfMerge(urls: urls, loc: loc) }.value
+                for (k, t) in report.lines { log.append(LogLine(kind: k, text: t)) }
+                done = 1
+                finishRun(outcome: report.problems ? .failed : .succeeded, summary: nil, sawProblem: report.problems)
+            }
+            return
+        }
         let ocrLang = settings.string("Ocr", "Language")
         let ocrOutput = settings.string("Ocr", "Output", default: "TextFile")
         Task {
@@ -167,7 +197,7 @@ extension AppModel {
                     case .pdfRender(let f): return NativeWorker.pdfRender(url: url, jpg: f == "JPG", loc: loc)
                     case .pdfText: return NativeWorker.pdfText(url: url, loc: loc)
                     case .ocr: return NativeWorker.ocr(url: url, languageSetting: ocrLang, loc: loc)
-                    case .pdfPreview: return NativeReport()
+                    case .pdfPreview, .pdfMerge: return NativeReport()
                     }
                 }.value
                 for (k, t) in report.lines { log.append(LogLine(kind: k, text: t)) }

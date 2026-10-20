@@ -170,6 +170,7 @@
  "menu.text.convert": "Convert",
  "menu.text.encode": "Format",
  "menu.text.lineEndings": "Line Endings",
+ "menu.to": "to {0}",
  "menu.video": "Video",
  "menu.video.compress": "Compress",
  "menu.video.compress.discord": "Discord",

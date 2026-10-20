@@ -52,6 +52,9 @@ fn scope(category: &str) -> Option<Scope> {
                 "com.apple.quicktime-movie",
                 "public.avi",
                 "org.matroska.mkv",
+                // macOS does not declare .mkv itself; without a third-party handler Finder reports this
+                // extension-derived dynamic type (deterministic for "public.filename-extension" = "mkv").
+                "dyn.ah62d4rv4ge804450",
                 "org.webmproject.webm",
                 "com.adobe.flash.video",
             ],
@@ -316,6 +319,16 @@ mod tests {
         assert!(acts
             .iter()
             .all(|a| valid_token(&a.task) && !a.utis.is_empty()));
+    }
+
+    #[test]
+    fn video_actions_also_match_mkv_where_macos_gives_it_a_dynamic_type() {
+        let a = actions()
+            .into_iter()
+            .find(|a| a.task == "video.trim")
+            .unwrap();
+        assert!(a.utis.iter().any(|u| u == "org.matroska.mkv"));
+        assert!(a.utis.iter().any(|u| u == "dyn.ah62d4rv4ge804450"));
     }
 
     #[test]

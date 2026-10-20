@@ -126,6 +126,28 @@ final class CoreTests: XCTestCase {
         }
     }
 
+    func testFormatChooserLabelsAreTranslated() {
+        for lang in [AppLanguage.english, .japanese, .chinese] {
+            let loc = Loc(language: lang)
+            XCTAssertTrue(loc.has("menu.to"))
+            XCTAssertTrue(loc.f("menu.to", ["PNG"]).contains("PNG"), "\(lang) menu.to lacks {0}")
+        }
+    }
+
+    /// Every language must carry every key the English table has (a missing key shows up as raw text in the UI).
+    func testAllLanguagesHaveAllKeys() throws {
+        func keys(_ code: String) throws -> Set<String> {
+            let url = try XCTUnwrap(Bundle.module.url(forResource: "strings.\(code)", withExtension: "json", subdirectory: "Resources"))
+            let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: String])
+            return Set(obj.keys)
+        }
+        let en = try keys("en").filter { !$0.hasSuffix(".one") } // singular forms exist only in English
+        for code in ["ja", "zh"] {
+            let missing = en.subtracting(try keys(code)).sorted()
+            XCTAssertTrue(missing.isEmpty, "\(code) is missing: \(missing.prefix(10))")
+        }
+    }
+
     /// Drives the real client against a stand-in engine script.
     func testEngineClientRoundTrip() async throws {
         let dir = tmp()
@@ -154,5 +176,18 @@ final class CoreTests: XCTestCase {
         var events: [EngineEvent] = []
         for await e in EngineClient(executable: script).run(task: "x", paths: ["/a"]) { events.append(e) }
         XCTAssertEqual(events, [.crashed])
+    }
+
+    /// Closing the window after the engine has gone used to raise an Objective-C exception (EPIPE) and kill the app.
+    func testCancelAfterTheEngineExitedDoesNotCrash() async throws {
+        let dir = tmp()
+        let script = dir.appendingPathComponent("flect-engine")
+        try "#!/bin/sh\nexit 0\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let client = EngineClient(executable: script)
+        for await _ in client.run(task: "x", paths: ["/a"]) {}
+        try await Task.sleep(nanoseconds: 500_000_000)
+        for _ in 0..<3 { client.cancel() }
+        try await Task.sleep(nanoseconds: 300_000_000)
     }
 }

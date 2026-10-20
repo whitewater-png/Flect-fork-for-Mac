@@ -15,6 +15,8 @@ public final class EngineClient {
 
     public init(executable: URL) {
         self.executable = executable
+        // Writing to an engine that already exited must fail with an error, not kill the app.
+        signal(SIGPIPE, SIG_IGN)
     }
 
     /// Where the bundled engine lives: next to the app's executable or in its Resources folder.
@@ -40,7 +42,8 @@ public final class EngineClient {
     public func cancel() {
         queue.async { [weak self] in
             guard let h = self?.stdin else { return }
-            h.write(Data("{\"op\":\"cancel\"}\n".utf8))
+            // The throwing API: the legacy write(_:) raises an Objective-C exception on a closed pipe.
+            try? h.write(contentsOf: Data("{\"op\":\"cancel\"}\n".utf8))
         }
     }
 
@@ -63,6 +66,7 @@ public final class EngineClient {
                 finished = true
                 if let e = event { continuation.yield(e) }
                 outPipe.fileHandleForReading.readabilityHandler = nil
+                self.queue.async { self.stdin = nil } // a late cancel() must not touch a closed pipe
                 continuation.finish()
             }
             outPipe.fileHandleForReading.readabilityHandler = { handle in
@@ -97,7 +101,7 @@ public final class EngineClient {
                 self.process = p
                 self.stdin = inPipe.fileHandleForWriting
                 if let data = try? JSONSerialization.data(withJSONObject: request) {
-                    inPipe.fileHandleForWriting.write(data + Data("\n".utf8))
+                    try? inPipe.fileHandleForWriting.write(contentsOf: data + Data("\n".utf8))
                 }
             }
         }

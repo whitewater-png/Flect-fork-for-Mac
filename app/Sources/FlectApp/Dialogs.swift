@@ -1,6 +1,13 @@
 import SwiftUI
-import AVKit
+import AVFoundation
 import FlectCore
+
+/// Video surface (AppKit's AVPlayerView, see PlayerHost).
+struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+    func makeNSView(context: Context) -> NSView { PlayerHost.makeView(player: player) }
+    func updateNSView(_ view: NSView, context: Context) {}
+}
 
 @MainActor struct DialogHost: View {
     let dialog: Dialog
@@ -143,7 +150,7 @@ enum SizeParser {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(model.loc.t(thumbnail ? "dialog.thumbnail.hint" : "dialog.trim.hint")).font(.caption)
-            VideoPlayer(player: player).frame(minHeight: 200)
+            PlayerView(player: player).frame(minHeight: 200)
             if thumbnail {
                 HStack {
                     TextField("0:00", text: $time).frame(width: 110)
