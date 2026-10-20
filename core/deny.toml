@@ -1,0 +1,14 @@
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "Unicode-DFS-2016", "BSD-3-Clause", "ISC", "Zlib", "Apache-2.0 WITH LLVM-exception"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

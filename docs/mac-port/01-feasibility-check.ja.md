@@ -29,7 +29,7 @@
 
 **根拠となる資産（ここが移植を現実的にしている）**
 - ワーカーとシェルの契約が OS 非依存: `Flect --task <id> --input <選択リスト>`（`Request.cs` / `Launcher.cpp`）。
-- メニュー定義が `MenuCatalog.cs`（リーフ 67・カテゴリ 8）に集約。
+- メニュー定義が `MenuCatalog.cs`（リーフ 87・カテゴリ 8）に集約。
 - 既存の `evals/Evals`（xunit: Folder/Image/Video/Document/Update）が**振る舞いの仕様書**として使える。
 - 重い処理の大半は外部ネイティブ（ffmpeg / PDFium / 7-Zip）で、言語非依存。
 
