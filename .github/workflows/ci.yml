@@ -72,3 +72,19 @@ jobs:
           core/target/release/flect-tools --out "$RUNNER_TEMP/qa"
           ls "$RUNNER_TEMP/qa" | wc -l
           for f in "$RUNNER_TEMP"/qa/*.workflow/Contents/*; do plutil -lint "$f"; done
+      - name: Build the .app bundle (ad-hoc signed) and smoke-test it
+        run: |
+          set -o pipefail
+          scripts/build.sh 2>&1 | tail -40
+          APP=dist/Flect-for-Mac.app
+          test -x "$APP/Contents/MacOS/Flect-for-Mac"
+          test -x "$APP/Contents/Resources/flect-engine"
+          ls "$APP/Contents/Resources"
+          plutil -lint "$APP/Contents/Info.plist"
+          echo '{"op":"export-menu"}' | "$APP/Contents/Resources/flect-engine" | head -c 300; echo
+          codesign -dv "$APP" 2>&1 | head -5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Flect-for-Mac-adhoc-build
+          path: dist/Flect-for-Mac.app
+          retention-days: 7

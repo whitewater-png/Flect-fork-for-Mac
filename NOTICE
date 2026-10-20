@@ -10,5 +10,5 @@ legacy/windows/ for reference; the processing core was reimplemented in Rust
 (core/) and a macOS front end is being added. Original copyright, license and
 attribution notices are preserved. See NOTICES.md for third-party components.
 
-[DRAFT - the copyright line for the new code and the project name are pending
-the maintainer's decision.]
+New code in this repository (core/, app/, scripts/, docs/mac-port/) is also licensed under the
+Apache License, Version 2.0. The project name and bundle identifier are still to be decided.
