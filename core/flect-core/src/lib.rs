@@ -8,6 +8,8 @@ pub mod folder;
 pub mod foldertasks;
 pub mod imaging;
 pub mod locations;
+pub mod media;
+pub mod mediatasks;
 pub mod menu;
 pub mod metadata;
 pub mod paths;

@@ -22,6 +22,7 @@ pub enum TaskError {
     Text(TextError),
     Archive(crate::archive::ArchiveError),
     Image(crate::imaging::ImageError),
+    Media(crate::media::MediaError),
     Io(io::Error),
 }
 
@@ -34,6 +35,7 @@ impl TaskError {
             Self::Text(e) => e.key(),
             Self::Archive(e) => e.key(),
             Self::Image(e) => e.key(),
+            Self::Media(e) => e.key(),
             Self::Io(_) => "msg.ioError",
         }
     }
@@ -47,6 +49,11 @@ impl From<io::Error> for TaskError {
 impl From<crate::archive::ArchiveError> for TaskError {
     fn from(e: crate::archive::ArchiveError) -> Self {
         Self::Archive(e)
+    }
+}
+impl From<crate::media::MediaError> for TaskError {
+    fn from(e: crate::media::MediaError) -> Self {
+        Self::Media(e)
     }
 }
 impl From<crate::imaging::ImageError> for TaskError {
@@ -528,11 +535,16 @@ fn read_limited_image(path: &Path) -> Result<Vec<u8>, TaskError> {
 pub struct Ctx<'a> {
     pub settings: &'a Settings,
     pub seven_zip: Option<&'a Path>,
-    pub cancelled: &'a (dyn Fn() -> bool + Sync),
+    pub progress: &'a dyn crate::folder::Progress,
+    /// ffmpeg and friends, when installed.
+    pub media: Option<&'a crate::mediatasks::MediaEnv>,
 }
 
 pub fn is_file_task(name: &str) -> bool {
-    is_text_task(name) || is_archive_task(name) || is_image_task(name)
+    is_text_task(name)
+        || is_archive_task(name)
+        || is_image_task(name)
+        || crate::mediatasks::is_media_task(name)
 }
 
 /// Run one single-file task.
@@ -543,7 +555,13 @@ pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
     } else if is_archive_task(&name) {
         Ok(run_archive(&name, input, ctx.settings, ctx.seven_zip)?)
     } else if is_image_task(&name) {
-        run_image(&name, &params, input, ctx.settings, ctx.cancelled)
+        run_image(&name, &params, input, ctx.settings, &|| {
+            ctx.progress.cancelled()
+        })
+    } else if crate::mediatasks::is_media_task(&name) {
+        let env = ctx.media.ok_or(crate::media::MediaError::NoTools)?;
+        let job = crate::mediatasks::Job::new(env, ctx.settings, ctx.progress);
+        Ok(crate::mediatasks::run(&name, &params, input, &job)?)
     } else {
         Err(TaskError::Unsupported)
     }
@@ -743,14 +761,14 @@ mod tests {
         }
 
         fn run1(task: &str, input: &Path, settings: &Settings) -> Result<Done, TaskError> {
-            let never = || false;
             run(
                 task,
                 input,
                 &Ctx {
                     settings,
                     seven_zip: None,
-                    cancelled: &never,
+                    progress: &crate::folder::NullProgress,
+                    media: None,
                 },
             )
         }

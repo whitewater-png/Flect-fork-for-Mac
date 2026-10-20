@@ -23,6 +23,8 @@ pub trait Progress: Sync {
     }
     fn status(&self, _key: &str, _args: &[String]) {}
     fn step(&self, _done: u64, _total: u64) {}
+    /// Progress within the current file, 0..=1000.
+    fn file_step(&self, _permille: u32) {}
 }
 
 pub struct NullProgress;

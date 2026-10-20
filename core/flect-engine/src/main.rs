@@ -8,7 +8,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+use flect_core::folder::Progress;
+use flect_core::media::{Capabilities, Tools};
+use flect_core::mediatasks::{self, MediaEnv};
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
+use flect_core::settings::HardwareEncoder;
 use flect_core::settings::{Settings, Store};
 use flect_core::{archive, batch, locations, menu, tasks};
 
@@ -122,6 +126,33 @@ fn reader(out: Out, cancel: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) -> io::Resul
     Ok(())
 }
 
+/// Turns task progress into protocol events and exposes the cancel flag.
+struct EngineProgress<'a> {
+    out: &'a Out,
+    cancel: &'a AtomicBool,
+}
+
+impl Progress for EngineProgress<'_> {
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+    fn status(&self, key: &str, args: &[String]) {
+        let _ = emit(
+            self.out,
+            &Event::Status {
+                key: key.into(),
+                args: args.to_vec(),
+            },
+        );
+    }
+    fn step(&self, done: u64, total: u64) {
+        let _ = emit(self.out, &Event::Step { done, total });
+    }
+    fn file_step(&self, permille: u32) {
+        let _ = emit(self.out, &Event::FileStep { permille });
+    }
+}
+
 fn display_name(p: &str) -> String {
     Path::new(p)
         .file_name()
@@ -135,10 +166,25 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
         .unwrap_or_default();
     let seven_zip = archive::find_tool("7zz");
     let is_cancelled = || cancel.load(Ordering::SeqCst);
+    let progress = EngineProgress { out, cancel };
+    // ffmpeg is looked for (and probed) only when a media task actually runs.
+    let name = task.split('?').next().unwrap_or("");
+    let media_env = mediatasks::is_media_task(name)
+        .then(|| {
+            Tools::discover().map(|tools| MediaEnv {
+                caps: Capabilities::detect(
+                    &tools,
+                    settings.video.hardware == HardwareEncoder::VideoToolbox,
+                ),
+                tools,
+            })
+        })
+        .flatten();
     let ctx = tasks::Ctx {
         settings: &settings,
         seven_zip: seven_zip.as_deref(),
-        cancelled: &is_cancelled,
+        progress: &progress,
+        media: media_env.as_ref(),
     };
     let total = paths.len() as u64;
     let mut failures = 0;

@@ -32,6 +32,10 @@ pub enum Event {
         done: u64,
         total: u64,
     },
+    /// Progress inside the file currently being processed (0..=1000).
+    FileStep {
+        permille: u32,
+    },
     Info {
         key: String,
         args: Vec<String>,
