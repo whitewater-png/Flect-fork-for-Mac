@@ -2,7 +2,7 @@ import SwiftUI
 import PDFKit
 import FlectCore
 
-struct RootView: View {
+@MainActor struct RootView: View {
     @ObservedObject var model: AppModel
     private var loc: Loc { model.loc }
 
@@ -27,7 +27,7 @@ struct RootView: View {
     }
 }
 
-struct MessageView: View {
+@MainActor struct MessageView: View {
     let text: String
     let model: AppModel
     var body: some View {
@@ -38,7 +38,7 @@ struct MessageView: View {
     }
 }
 
-struct RunView: View {
+@MainActor struct RunView: View {
     @ObservedObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -73,7 +73,7 @@ struct RunView: View {
     }
 }
 
-struct ChooseView: View {
+@MainActor struct ChooseView: View {
     let title: String
     let entries: [MenuEntry]
     let model: AppModel
@@ -88,7 +88,7 @@ struct ChooseView: View {
     }
 }
 
-struct TextResultView: View {
+@MainActor struct TextResultView: View {
     let text: String
     let model: AppModel
     var body: some View {
@@ -140,7 +140,7 @@ enum AnalyzeFormatter {
     }
 }
 
-struct DuplicatesView: View {
+@MainActor struct DuplicatesView: View {
     let groups: [[DuplicateFile]]
     let model: AppModel
     var body: some View {
@@ -164,7 +164,7 @@ struct DuplicatesView: View {
     }
 }
 
-struct EmptyFoldersView: View {
+@MainActor struct EmptyFoldersView: View {
     let targets: [String]
     let permanent: Bool
     let model: AppModel
@@ -182,7 +182,7 @@ struct EmptyFoldersView: View {
     }
 }
 
-struct RenamePreviewView: View {
+@MainActor struct RenamePreviewView: View {
     let lines: [String]
     let model: AppModel
     var body: some View {

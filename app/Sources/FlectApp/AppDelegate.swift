@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import FlectCore
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var model: AppModel?

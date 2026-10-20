@@ -2,7 +2,7 @@ import SwiftUI
 import FlectCore
 
 /// The settings that matter most; everything else keeps its default (or whatever the file already holds).
-struct SettingsView: View {
+@MainActor struct SettingsView: View {
     let model: AppModel
     @State private var language: String
     @State private var delete: String

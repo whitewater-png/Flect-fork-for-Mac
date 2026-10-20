@@ -2,7 +2,7 @@ import SwiftUI
 import AVKit
 import FlectCore
 
-struct DialogHost: View {
+@MainActor struct DialogHost: View {
     let dialog: Dialog
     let model: AppModel
     var body: some View {
@@ -17,7 +17,7 @@ struct DialogHost: View {
     }
 }
 
-private struct Buttons: View {
+@MainActor private struct Buttons: View {
     let model: AppModel
     let actionTitle: String
     let enabled: Bool
@@ -31,7 +31,7 @@ private struct Buttons: View {
     }
 }
 
-struct PixelsDialog: View {
+@MainActor struct PixelsDialog: View {
     let base: String
     let model: AppModel
     @State private var width = ""
@@ -58,7 +58,7 @@ enum SizeParser {
     /// `8MB`, `900KB`, `1500000` (binary units like the Windows version).
     static func parse(_ text: String) -> Int64? {
         let t = text.trimmingCharacters(in: .whitespaces).lowercased()
-        let units: [(String, Double)] = [("gb", 1 << 30), ("mb", 1 << 20), ("kb", 1 << 10), ("b", 1)]
+        let units: [(String, Double)] = [("gb", 1_073_741_824), ("mb", 1_048_576), ("kb", 1024), ("b", 1)]
         for (suffix, mult) in units where t.hasSuffix(suffix) {
             guard let v = Double(t.dropLast(suffix.count).trimmingCharacters(in: .whitespaces)), v > 0, v < 1e6 else { return nil }
             return Int64(v * mult)
@@ -68,7 +68,7 @@ enum SizeParser {
     }
 }
 
-struct TargetDialog: View {
+@MainActor struct TargetDialog: View {
     let base: String
     let model: AppModel
     @State private var text = ""
@@ -85,7 +85,7 @@ struct TargetDialog: View {
     }
 }
 
-struct RenameDialog: View {
+@MainActor struct RenameDialog: View {
     let model: AppModel
     @State private var prefix = ""
     @State private var name = ""
@@ -109,7 +109,7 @@ struct RenameDialog: View {
     }
 }
 
-struct PdfOrderDialog: View {
+@MainActor struct PdfOrderDialog: View {
     let model: AppModel
     @State private var items: [String] = []
     @State private var selection: String?
@@ -133,7 +133,7 @@ struct PdfOrderDialog: View {
 }
 
 /// Video position picker shared by trim (range) and thumbnail (single time).
-struct TrimDialog: View {
+@MainActor struct TrimDialog: View {
     let model: AppModel
     let thumbnail: Bool
     @State private var player = AVPlayer()
