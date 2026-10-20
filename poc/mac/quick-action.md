@@ -1,0 +1,15 @@
+# P0 item 1: Quick Action → アプリ起動の手動確認（約 5 分）
+
+1. Automator を開く → 新規 → **クイックアクション**
+2. 「ワークフローが受け取る現在の項目」= **ファイルまたはフォルダ** / 「検索対象」= **Finder.app**
+3. 「シェルスクリプトを実行」を追加、シェル `/bin/bash`、入力の引き渡し方法 = **引数として**
+4. 本文: 
+   ```
+   f="$(mktemp -t flect-sel)"; chmod 600 "$f"
+   for p in "$@"; do printf '%s\n' "$p" >> "$f"; done
+   open -n -a TextEdit "$f"      # 本番では: open -n -a Flect-for-Mac --args --task image.resize.p1 --input "$f"
+   ```
+5. `~/Library/Services/` に「Flect PoC」で保存
+6. 確認: 画像1枚 / 複数選択 / 日本語・空白・先頭 `-` を含む名前 / フォルダ で右クリック → クイックアクション に出るか、TextEdit にパスが全部入るか
+7. 対象を「画像ファイル」に絞った版も作り、画像以外で項目が消えるか確認
+8. 結果を記録: 出た/出ない、パスの欠落・文字化け（NFD）の有無

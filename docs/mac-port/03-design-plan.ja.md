@@ -139,4 +139,4 @@ Developer ID 署名 + Hardened Runtime + `notarytool` による notarize、`.dmg
 6. ffmpeg arm64 静的ビルドの入手元・ライセンス・VideoToolbox 有効性
 7. C# 版 vs Rust 版のベンチ（重複検出、走査、リサイズ）— 速度目標の根拠
 8. `faster-whisper` の Mac 速度 vs `whisper.cpp`/`mlx-whisper`
-9. アプリのバンドルID/名称（例 `com.whitewater.flect`）、最低 macOS（14 案）、Intel 要否 ← **ユーザー確認事項**
+9. ~~アプリのバンドルID/名称・最低 macOS・Intel 要否~~ → **確定（2026-10-20）**: アプリ名 `Flect-for-Mac`、最低 macOS 14、Apple Silicon (arm64) 専用。バンドルID は未指定のため仮に `com.whitewater.flect-for-mac` とし、変更可（要確認）
