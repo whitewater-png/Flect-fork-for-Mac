@@ -31,7 +31,7 @@ public struct LaunchRequest: Equatable {
         defer { if deleteInput { try? FileManager.default.removeItem(atPath: input) } }
         guard let data = FileManager.default.contents(atPath: input), data.count < 64 << 20, var text = String(data: data, encoding: .utf8) else { return .failure(.unreadable) }
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
-        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         if lines.isEmpty { return .failure(.empty) }
         if lines.count > maxPaths { return .failure(.tooMany) }
         for l in lines where !l.hasPrefix("/") || l.utf8.count > maxPathBytes || l.contains("\0") { return .failure(.badPath(String(l.prefix(80)))) }
