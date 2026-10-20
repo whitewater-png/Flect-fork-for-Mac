@@ -3,6 +3,7 @@ import ImageIO
 import PDFKit
 import UniformTypeIdentifiers
 import Vision
+import CoreImage
 import FlectCore
 
 /// Results of work that only macOS frameworks can do (HEIC, PDFKit, Vision).
@@ -62,6 +63,37 @@ enum NativeWorker {
         guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r }
         do { let o = try OutputPath.writeNew(out as Data, source: url, ext: "heic"); r.add(.info, o.lastPathComponent) }
         catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
+        return r
+    }
+
+    // MARK: background removal (Vision)
+
+    static func removeBackground(url: URL, loc: Loc) -> NativeReport {
+        var r = NativeReport()
+        guard let src = source(url, loc: loc, report: &r), let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return r }
+        let request = VNGenerateForegroundInstanceMaskRequest()
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        do {
+            try handler.perform([request])
+            guard let observation = request.results?.first, !observation.allInstances.isEmpty else {
+                r.add(.error, loc.f("msg.noSubject", [url.lastPathComponent])); return r
+            }
+            let buffer = try observation.generateMaskedImage(ofInstances: observation.allInstances, from: handler, croppedToInstancesExtent: false)
+            let ci = CIImage(cvPixelBuffer: buffer)
+            guard let cg = CIContext().createCGImage(ci, from: ci.extent) else {
+                r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r
+            }
+            let data = NSMutableData()
+            guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+                r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r
+            }
+            CGImageDestinationAddImage(dest, cg, nil)
+            guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r }
+            let o = try OutputPath.writeNew(data as Data, source: url, suffix: "_nobg", ext: "png")
+            r.add(.info, o.lastPathComponent)
+        } catch {
+            r.add(.error, loc.f("msg.imageDecodeFailed", [url.lastPathComponent]))
+        }
         return r
     }
 
@@ -188,6 +220,7 @@ extension AppModel {
         Task {
             var problems = false
             var combined: [String] = []
+            var fallbackPaths: [String] = []
             for (i, url) in urls.enumerated() {
                 status = loc.f("msg.processing", [url.lastPathComponent])
                 total = urls.count; done = i
@@ -197,9 +230,15 @@ extension AppModel {
                     case .pdfRender(let f): return NativeWorker.pdfRender(url: url, jpg: f == "JPG", loc: loc)
                     case .pdfText: return NativeWorker.pdfText(url: url, loc: loc)
                     case .ocr: return NativeWorker.ocr(url: url, languageSetting: ocrLang, loc: loc)
+                    case .removeBackground: return NativeWorker.removeBackground(url: url, loc: loc)
                     case .pdfPreview, .pdfMerge: return NativeReport()
                     }
                 }.value
+                if case .removeBackground(let fallback) = task, fallback, report.problems {
+                    // The AI step failed for this file: the engine's colour key takes over for it.
+                    fallbackPaths.append(url.path)
+                    continue
+                }
                 for (k, t) in report.lines { log.append(LogLine(kind: k, text: t)) }
                 problems = problems || report.problems
                 if let text = report.ocrText {
@@ -215,6 +254,10 @@ extension AppModel {
                 }
             }
             done = urls.count
+            if !fallbackPaths.isEmpty && !problems {
+                runEngine("image.chromakey", paths: fallbackPaths)
+                return
+            }
             if !combined.isEmpty { screen = .tree(combined.joined(separator: "\n\n")); return }
             finishRun(outcome: problems ? .failed : .succeeded, summary: nil, sawProblem: problems)
         }

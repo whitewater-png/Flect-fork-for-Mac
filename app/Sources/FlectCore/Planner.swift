@@ -8,6 +8,8 @@ public enum NativeTask: Equatable {
     case pdfText
     case pdfMerge
     case ocr
+    /// Vision foreground mask; `fallback` = use the engine's colour key when it fails.
+    case removeBackground(fallback: Bool)
 }
 
 public enum Dialog: Equatable {
@@ -79,7 +81,13 @@ public enum Planner {
         case "folder.rename": return .dialog(.rename)
         case "video.trim": return .dialog(.trim)
         case "video.thumbnail": return .dialog(.thumbnail)
-        case "image.chromakey", "image.strip", "json.pretty", "json.sort", "folder.removeDuplicate", "folder.removeEmpty",
+        case "image.chromakey":
+            switch s.string("Image", "BackgroundMode", default: "AiWithFallback") {
+            case "ChromaKeyOnly": return .engine(base)
+            case "AiOnly": return .native(.removeBackground(fallback: false))
+            default: return .native(.removeBackground(fallback: true))
+            }
+        case "image.strip", "json.pretty", "json.sort", "folder.removeDuplicate", "folder.removeEmpty",
              "folder.tree", "folder.analyze", "folder.compress", "archive.extract", "jar.decompile",
              "video.subtitles", "audio.subtitles":
             return .engine(base)

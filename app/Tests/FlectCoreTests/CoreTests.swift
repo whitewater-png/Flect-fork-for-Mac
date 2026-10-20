@@ -97,6 +97,16 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Planner.resolve("image.resize.p1", settings: s), .engine("image.resize?scale=12.5"))
     }
 
+    func testBackgroundRemovalFollowsTheMode() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flect-bg-\(UUID().uuidString)")
+        let s = SettingsStore(directory: dir)
+        XCTAssertEqual(Planner.resolve("image.chromakey", settings: s), .native(.removeBackground(fallback: true)))
+        s.set(["Image", "BackgroundMode"], "AiOnly")
+        XCTAssertEqual(Planner.resolve("image.chromakey", settings: s), .native(.removeBackground(fallback: false)))
+        s.set(["Image", "BackgroundMode"], "ChromaKeyOnly")
+        XCTAssertEqual(Planner.resolve("image.chromakey", settings: s), .engine("image.chromakey"))
+    }
+
     func testPlannerParameterEncoding() {
         XCTAssertEqual(Planner.resizeCustom(base: "image.resize", width: 800, height: 0, keepAspect: true), "image.resize?scale=custom&w=800&h=0&keep=1")
         XCTAssertEqual(Planner.rename(prefix: "旅行 ", name: "", suffix: "&", numbered: true, dryRun: true),

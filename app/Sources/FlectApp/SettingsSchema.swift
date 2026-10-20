@@ -75,6 +75,7 @@ enum SettingsSchema {
             Field(["Image", "Presets", "RotateC"], "settings.presets.rotate", "Rotate preset C (deg)", .double(-360...360), 180.0),
             Field(["Image", "AllowWebpFallback"], "settings.image.webpFallback", "Allow WebP when a target size cannot be met", .toggle, true),
             Field(["Image", "WebpQuality"], "settings.image.webpQuality", "WebP quality", .int(1...100), 80),
+            Field(["Image", "BackgroundMode"], "settings.image.background.mode", "Background removal method", .choice([("AiWithFallback", "settings.image.background.mode.aiFallback"), ("AiOnly", "settings.image.background.mode.aiOnly"), ("ChromaKeyOnly", "settings.image.background.mode.chromaOnly")].map { (value: $0.0, key: $0.1, fallback: $0.0) }), "AiWithFallback"),
             Field(["Image", "BackgroundKeyColor"], "settings.image.background.color", "Background key color (#RRGGBB)", .text, "#00FF00"),
             Field(["Image", "BackgroundTolerance"], "settings.image.background.tolerance", "Background tolerance", .double(0...100), 25.0),
             Field(["Image", "Metadata", "RemoveExif"], "settings.image.metadata.exif", "Remove EXIF", .toggle, true),

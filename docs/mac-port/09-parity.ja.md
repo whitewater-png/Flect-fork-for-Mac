@@ -6,7 +6,7 @@
 | --- | --- |
 | Rust エンジンで実装済み | **81** |
 | Swift アプリ側で実装予定（OS 機能） | **6** |
-| 未実装（AI 機能） | **0** |
+| 未実装（AI 機能） | **0**（背景除去は Vision。実機で要検証） |
 | 合計 | 87 |
 
 | 系統 | 担当 | 件数 | ID |
@@ -34,3 +34,5 @@
 - `pdf.merge` は実機確認の結果、アプリ側（PDFKit）の実装に切り替えた。Rust エンジンの `pdf.merge` は残っているが、アプリからは呼ばれない。
 - 字幕は ffmpeg の `whisper` フィルタ（whisper.cpp）で生成する。Python 不要。この Mac の `ffmpeg`（Homebrew の `ffmpeg-full` 9.0.2）では `ffmpeg -filters` に `whisper` がある。標準の `ffmpeg` に入っているかは未確認。モデルは `scripts/fetch-whisper-model.sh` で入れる（SHA-256 固定、エンジンは固定ハッシュ以外を使わない）。Linux の CI には whisper 付き ffmpeg がないため、実際の文字起こしは Mac でのみ確認できる。
 - AI 背景除去（rembg）は引き続き未実装（設定が AI モードでも色キーで動く）。
+- `image.chromakey`（背景を削除）は、設定が AI のとき Swift アプリが Vision（`VNGenerateForegroundInstanceMaskRequest`、macOS 14+）で前景を切り出し、`名前_nobg.png` を出力する。AI が失敗した画像は、設定が「AI + 失敗時は色キー」ならエンジンの色キーに切り替わる。「色キーのみ」はエンジンが処理する。Mac でのみ確認できる。
+- 実機確認の手順（第 2 回）: [13](13-mac-verification-round2.ja.md)。
