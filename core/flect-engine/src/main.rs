@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
 use flect_core::settings::{Settings, Store};
-use flect_core::{archive, locations, menu, tasks};
+use flect_core::{archive, batch, locations, menu, tasks};
 
 type Out = Arc<Mutex<io::Stdout>>;
 
@@ -37,6 +37,7 @@ fn failed(out: &Out, key: &str, args: Vec<String>) -> io::Result<()> {
         &Event::Done {
             outcome: Outcome::Failed,
             summary_key: None,
+            summary_args: vec![],
         },
     )
 }
@@ -148,6 +149,7 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
                 &Event::Done {
                     outcome: Outcome::Cancelled,
                     summary_key: None,
+                    summary_args: vec![],
                 },
             );
         }
@@ -186,6 +188,7 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
                     &Event::Done {
                         outcome: Outcome::Cancelled,
                         summary_key: None,
+                        summary_args: vec![],
                     },
                 )
             }
@@ -212,8 +215,35 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
         &Event::Done {
             outcome,
             summary_key: None,
+            summary_args: vec![],
         },
     )
+}
+
+fn run_batch(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io::Result<()> {
+    let settings: Settings = locations::data_dir()
+        .map(|d| Store::new(d).load())
+        .unwrap_or_default();
+    let is_cancelled = || cancel.load(Ordering::SeqCst);
+    let failure = Mutex::new(None::<io::Error>);
+    let emit = |e: Event| {
+        if let Err(err) = emit(out, &e) {
+            *failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(err);
+        }
+    };
+    batch::run_batch(
+        task,
+        paths,
+        &batch::Ctx {
+            settings: &settings,
+            cancelled: &is_cancelled,
+            emit: &emit,
+        },
+    );
+    failure
+        .into_inner()
+        .unwrap_or_else(|p| p.into_inner())
+        .map_or(Ok(()), Err)
 }
 
 fn main() -> io::Result<()> {
@@ -228,7 +258,9 @@ fn main() -> io::Result<()> {
         let Msg::Run { task, paths } = msg;
         cancel.store(false, Ordering::SeqCst); // a stale cancel must not kill the next run
         let name = task.split('?').next().unwrap_or("");
-        if tasks::is_file_task(name) {
+        if batch::is_batch_task(name) {
+            run_batch(&out, &cancel, &task, &paths)?;
+        } else if tasks::is_file_task(name) {
             run_files(&out, &cancel, &task, &paths)?;
         } else if known_task(&task) {
             failed(&out, "task.unimplemented", vec![task])?;

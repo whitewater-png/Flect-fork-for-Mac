@@ -2,8 +2,10 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod batch;
 pub mod convert;
 pub mod folder;
+pub mod foldertasks;
 pub mod imaging;
 pub mod locations;
 pub mod menu;

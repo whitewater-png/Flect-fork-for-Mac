@@ -52,9 +52,15 @@ pub enum Event {
     Menu {
         menu: Value,
     },
+    /// A result for the UI to present (tree text, analysis, duplicate groups, rename preview...).
+    Data {
+        name: String,
+        data: Value,
+    },
     Done {
         outcome: Outcome,
         summary_key: Option<String>,
+        summary_args: Vec<String>,
     },
 }
 
@@ -171,11 +177,12 @@ mod tests {
         let s = serde_json::to_string(&Event::Done {
             outcome: Outcome::Cancelled,
             summary_key: None,
+            summary_args: vec![],
         })
         .unwrap();
         assert_eq!(
             s,
-            r#"{"event":"done","outcome":"cancelled","summary_key":null}"#
+            r#"{"event":"done","outcome":"cancelled","summary_key":null,"summary_args":[]}"#
         );
     }
 }

@@ -68,12 +68,34 @@ pub fn parse_task(task: &str) -> (String, HashMap<String, String>) {
         .filter(|p| !p.is_empty())
         .map(|p| {
             p.split_once('=')
-                .map_or((p.to_owned(), String::new()), |(k, v)| {
-                    (k.to_owned(), v.to_owned())
+                .map_or((percent_decode(p), String::new()), |(k, v)| {
+                    (percent_decode(k), percent_decode(v))
                 })
         })
         .collect();
     (name.to_owned(), params)
+}
+
+/// `%E6%97%A5` -> `日`. Invalid escapes are kept literally; invalid UTF-8 is replaced.
+pub fn percent_decode(s: &str) -> String {
+    fn hex(b: u8) -> Option<u8> {
+        (b as char).to_digit(16).map(|d| d as u8)
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[derive(Debug)]
@@ -530,6 +552,20 @@ pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percent_decoding() {
+        assert_eq!(percent_decode("%E6%97%A5%E6%9C%AC"), "日本");
+        assert_eq!(percent_decode("a%2Fb%20c"), "a/b c");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
+        assert_eq!(percent_decode("%é"), "%é");
+        assert_eq!(percent_decode("%FF"), "\u{fffd}");
+        assert_eq!(
+            parse_task("folder.rename?prefix=%E6%97%85_&name=a%26b").1["name"],
+            "a&b"
+        );
+    }
 
     #[test]
     fn parses_task_ids() {
