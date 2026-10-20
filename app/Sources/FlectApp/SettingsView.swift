@@ -108,9 +108,16 @@ struct FieldRow: View {
     let field: Field
     @ObservedObject var editor: SettingsEditor
 
+    /// Preset slots share one caption ("Resize"), so the slot letter is appended to tell them apart.
+    static func label(for f: Field, loc: Loc) -> String {
+        let base = text(loc, f.key, f.fallback)
+        guard f.path.contains("Presets"), let last = f.path.last, let letter = last.last, "ABCD".contains(letter) else { return base }
+        return "\(base) \(letter)"
+    }
+
     var body: some View {
         let loc = Loc.shared
-        let label = text(loc, field.key, field.fallback)
+        let label = FieldRow.label(for: field, loc: loc)
         switch field.kind {
         case .toggle:
             Toggle(label, isOn: Binding(get: { editor.bool(field) }, set: { editor.set(field, $0) }))

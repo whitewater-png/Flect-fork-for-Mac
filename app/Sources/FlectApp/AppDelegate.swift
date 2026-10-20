@@ -14,8 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let w = NSWindow(contentViewController: host)
         w.title = "Flect"
         w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        w.setContentSize(NSSize(width: 560, height: 420))
-        w.minSize = NSSize(width: 480, height: 320)
+        let settingsMode = !CommandLine.arguments.contains("--task")
+        w.setContentSize(settingsMode ? NSSize(width: 760, height: 580) : NSSize(width: 560, height: 420))
+        w.minSize = settingsMode ? NSSize(width: 640, height: 480) : NSSize(width: 480, height: 320)
         w.center()
         w.isReleasedWhenClosed = false
         w.makeKeyAndOrderFront(nil)

@@ -15,7 +15,8 @@ swift --version        # 5.9 以上
 
 # 2. Homebrew 経由のツール（ffmpeg / 7-Zip / Rust）
 brew install rustup sevenzip ffmpeg
-rustup-init -y && source "$HOME/.cargo/env"
+rustup default stable        # 最近の Homebrew では rustup-init ではなくこちら
+source "$HOME/.cargo/env" 2>/dev/null || true
 
 # 3. （JAR のデコンパイルを試す場合のみ）Java
 brew install openjdk
@@ -73,7 +74,8 @@ ls
 2. `photo.png` で同じことをする。**確認 4-B**: 画像向けの項目が出る。
 3. 複数ファイル（`sample.txt` と `sample.json` を選択）。**確認 4-C**: テキスト系の項目が出る。
 4. 拡張子の違い: `ffmpeg -y -i sample.mp4 -c copy sample.mkv` などで `.mkv` `.webm` `.flv` を作り、右クリックで動画項目が出るか。**確認 4-D**: ○ / × を種類ごとに報告（出ない種類があれば教えてほしい。UTI の調整が必要）。
-5. 項目が出ないときの再読み込み: `killall Finder` と、システム設定 → キーボード → キーボードショートカット → サービス で Flect 項目にチェックが入っているか確認。
+5. 新しい Quick Action は Finder 拡張の設定で**既定オフ**のことがある。右クリックに出ないときは、システム設定 → ログイン項目と機能拡張 → Finder で Flect の項目を 1 個ずつオンにする（「キーボード → サービス」では既にオン）。
+6. 項目が出ないときの再読み込み: `killall Finder` と、システム設定 → キーボード → キーボードショートカット → サービス で Flect 項目にチェックが入っているか確認。
 
 ## 5. 画像・テキスト・フォルダ
 | # | 操作 | 期待する結果 |
@@ -109,7 +111,7 @@ ls
 | 7-1 | PDF → プレビュー | PDF が表示される |
 | 7-2 | PDF → 画像（PNG / JPG） | ページごとの画像ができる |
 | 7-3 | PDF → テキスト | `.txt` ができる（文字が無い PDF では警告） |
-| 7-4 | 2 つの PDF を選択 → 結合 | 順序ダイアログ → 結合された PDF ができる |
+| 7-4 | 2 つの PDF を選択 → 結合 | 順序ダイアログ → 結合された PDF ができる（結合はアプリ側の PDFKit が行う） |
 
 ## 8. アーカイブ・JAR（必要な人のみ）
 - ZIP / 7z を右クリック → 展開。展開先は同じフォルダ内の新しい名前のフォルダ。上書きされないこと。
@@ -139,3 +141,5 @@ ls
 - 
 ```
 エラーは、画面の文言をそのまま貼るか、スクリーンショットを渡してほしい。
+
+> 第 1 回の実施結果は [12](12-mac-verification-results.ja.md)。
