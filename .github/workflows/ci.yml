@@ -59,10 +59,14 @@ jobs:
         run: swift --version
       - name: Build the app
         working-directory: app
-        run: swift build 2>&1 | tail -150
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tail -150
       - name: Test the app core
         working-directory: app
-        run: swift test 2>&1 | tail -150
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tail -150
       - name: Generate the Quick Actions and validate them
         run: |
           core/target/release/flect-tools --out "$RUNNER_TEMP/qa"
