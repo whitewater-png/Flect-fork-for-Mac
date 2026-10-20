@@ -63,7 +63,7 @@ public final class SettingsStore {
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         let tmp = directory.appendingPathComponent(".settings.\(UUID().uuidString).tmp")
         guard FileManager.default.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
-        _ = try FileManager.default.replaceItemAt(directory.appendingPathComponent("settings.json"), withItemAtURL: tmp)
+        _ = try FileManager.default.replaceItemAt(directory.appendingPathComponent("settings.json"), withItemAt: tmp)
     }
 
     // MARK: values the app needs (defaults match the engine / the Windows version)
