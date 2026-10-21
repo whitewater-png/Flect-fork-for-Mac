@@ -365,7 +365,8 @@ fn trash_one(ctx: &Ctx<'_>, path: &Path, fingerprint: String) {
 /// (Trash) or removed (permanent): one that is not empty any more is left alone and reported with
 /// `msg.emptySkipped` ([path]); one whose removal failed is reported with `msg.emptyRemoveFailed`
 /// ([path, reason]). Nothing is ever deleted recursively.
-fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
+fn remove_empty(ctx: &Ctx<'_>, plan: &ft::DeletePlan, roots: &[PathBuf]) {
+    let planned = &plan.paths;
     let f = &ctx.settings.folder;
     let skipped_event = |p: &Path, why: Option<&str>| {
         let path = p.to_string_lossy().into_owned();
@@ -379,7 +380,7 @@ fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
         });
     };
     if f.delete_method == DeleteMethod::Permanent {
-        match ft::delete_empty_permanently(planned, roots, f) {
+        match ft::delete_empty_permanently(plan, roots, f) {
             Err(e) => fail(ctx, "msg.ioError", e.to_string()),
             Ok(out) => {
                 for (p, why) in &out.skipped {
@@ -601,7 +602,7 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                     vec![total.to_string()],
                 );
             }
-            remove_empty(ctx, &plan.paths, &roots);
+            remove_empty(ctx, &plan, &roots);
         }
         "folder.rename" => {
             let plan = RenamePlan {

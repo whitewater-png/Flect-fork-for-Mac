@@ -194,6 +194,10 @@ impl ScannedFile {
 pub struct TreeScan {
     pub files: Vec<ScannedFile>,
     pub empty_directories: Vec<PathBuf>,
+    /// (device, inode) of each folder in `empty_directories`, as scanned.
+    pub dir_ids: HashMap<PathBuf, (u64, u64)>,
+    /// Each selected folder scanned, with its (device, inode) then.
+    pub root_ids: Vec<(PathBuf, (u64, u64))>,
     pub directory_count: usize,
     /// Files already listed, so a hard link (a second name for the same file) is listed once.
     seen: HashSet<SameFileKey>,
@@ -341,6 +345,7 @@ pub fn scan(
             return Err(Cancelled);
         }
         if let Some(id) = dir_id(root) {
+            out.root_ids.push((root.clone(), id));
             let origin = std::sync::Arc::new(ScanRoot {
                 path: root.clone(),
                 id,
@@ -431,6 +436,7 @@ fn walk(
     }
     if !has_content && !is_root {
         out.empty_directories.push(dir.to_path_buf());
+        out.dir_ids.insert(dir.to_path_buf(), parent_id);
     }
     Ok(has_content)
 }

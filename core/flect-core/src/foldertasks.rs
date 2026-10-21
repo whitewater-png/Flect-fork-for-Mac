@@ -465,10 +465,14 @@ fn merge_rules(
 
 // ------------------------------------------------------------------ delete plans
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct DeletePlan {
     pub paths: Vec<PathBuf>,
     pub reclaim_bytes: u64,
+    /// Remove Empty: (device, inode) of each planned folder and of each selected folder, as
+    /// scanned. A folder is only removed while both still match.
+    pub folder_ids: HashMap<PathBuf, (u64, u64)>,
+    pub root_ids: Vec<(PathBuf, (u64, u64))>,
 }
 
 pub fn plan_remove_duplicates(
@@ -488,6 +492,7 @@ pub fn plan_remove_duplicates(
     let plan = DeletePlan {
         reclaim_bytes: doomed.iter().map(|d| d.size).sum(),
         paths: doomed.into_iter().map(|d| d.path).collect(),
+        ..Default::default()
     };
     Ok((groups, plan))
 }
@@ -515,13 +520,21 @@ pub fn plan_remove_empty_protecting(
         &f.empty,
         progress,
     )?;
+    let ids = std::mem::take(&mut scan.dir_ids);
     scan.empty_directories
-        .retain(|d| folder::dir_id(d).is_some_and(|id| !protected.contains(&id)));
+        .retain(|d| ids.get(d).is_some_and(|id| !protected.contains(id)));
     let total = scan.empty_directories.len();
+    let paths = folder::outermost(&scan.empty_directories);
+    let folder_ids = paths
+        .iter()
+        .filter_map(|p| ids.get(p).map(|id| (p.clone(), *id)))
+        .collect();
     Ok((
         DeletePlan {
-            paths: folder::outermost(&scan.empty_directories),
+            paths,
             reclaim_bytes: 0,
+            folder_ids,
+            root_ids: scan.root_ids,
         },
         total,
     ))
@@ -587,18 +600,26 @@ pub fn still_empty(
 fn remove_empty_tree_at(
     parent: &std::os::fd::OwnedFd,
     name: &std::ffi::OsStr,
+    expected: (u64, u64),
     excl: &ExclusionFilter,
     empty: &EmptyFolderSettings,
 ) -> io::Result<usize> {
     let not_empty = || io::Error::other(format!("{} is not empty", name.to_string_lossy()));
     let dir = fsat::open_dir_at(parent, name)?;
     let dir_id = fsat::Fingerprint::of_stat(&fsat::stat_fd(&dir)?).id();
+    if dir_id != expected {
+        return Err(fsat::changed(&format!(
+            "{} is not the folder that was checked",
+            name.to_string_lossy()
+        )));
+    }
     let mut removed = 0;
     for entry in fsat::names_in(&dir)? {
         let st = fsat::stat_at(&dir, &entry)?;
         let ename = entry.to_string_lossy().into_owned();
         if fsat::is_dir(&st) && !excl.excludes_folder(&ename) {
-            removed += remove_empty_tree_at(&dir, &entry, excl, empty)?;
+            let sub = fsat::Fingerprint::of_stat(&st).id();
+            removed += remove_empty_tree_at(&dir, &entry, sub, excl, empty)?;
         } else if fsat::is_file(&st) && folder::ignorable(&ename, st.st_size as u64, empty) {
             fsat::seam("E3", Path::new(&entry));
             let was = fsat::Fingerprint::of_stat(&st);
@@ -640,8 +661,11 @@ fn not_removed(name: &std::ffi::OsStr, why: fsat::NotRemoved) -> io::Error {
 }
 
 /// [`remove_empty_tree_at`] for `path`, reached through handles from the selected folder it lies in.
+/// The selected folder must still be the one scanned (its (device, inode) as planned), and so
+/// must the planned folder, or nothing is removed.
 fn remove_empty_tree(
     path: &Path,
+    plan: &DeletePlan,
     roots: &[PathBuf],
     excl: &ExclusionFilter,
     empty: &EmptyFolderSettings,
@@ -655,9 +679,19 @@ fn remove_empty_tree(
         .strip_prefix(root)
         .map_err(|_| fsat::changed("not below the root"))?;
     let name = rel.file_name().ok_or_else(|| fsat::changed("no name"))?;
+    let root_id = plan
+        .root_ids
+        .iter()
+        .find(|(r, _)| r == root)
+        .map(|(_, id)| *id)
+        .ok_or_else(|| fsat::changed("the selected folder was not scanned"))?;
+    let id = *plan
+        .folder_ids
+        .get(path)
+        .ok_or_else(|| fsat::changed("not a planned folder"))?;
     fsat::seam("E1", path);
-    let parent = fsat::open_below(root, None, rel.parent().unwrap_or(Path::new("")))?;
-    remove_empty_tree_at(&parent, name, excl, empty)
+    let parent = fsat::open_below(root, Some(root_id), rel.parent().unwrap_or(Path::new("")))?;
+    remove_empty_tree_at(&parent, name, id, excl, empty)
 }
 
 #[derive(Debug, Default)]
@@ -672,14 +706,14 @@ pub struct EmptyRemoval {
 /// and only removed if it is still empty (OS litter aside); failures are reported, never retried
 /// with a recursive delete.
 pub fn delete_empty_permanently(
-    paths: &[PathBuf],
+    plan: &DeletePlan,
     roots: &[PathBuf],
     f: &FolderSettings,
 ) -> io::Result<EmptyRemoval> {
     let canon_roots = canonical_roots(roots);
     let excl = ExclusionFilter::from_rules(&f.scan_exclusions);
     let mut out = EmptyRemoval::default();
-    for path in paths {
+    for path in &plan.paths {
         if let Err(e) = check_inside(path, &canon_roots) {
             if !roots
                 .iter()
@@ -696,7 +730,7 @@ pub fn delete_empty_permanently(
             out.skipped.push((path.clone(), None));
             continue;
         }
-        match remove_empty_tree(path, roots, &excl, &f.empty) {
+        match remove_empty_tree(path, plan, roots, &excl, &f.empty) {
             Ok(n) => out.removed += n,
             Err(e) => out.skipped.push((path.clone(), Some(e.to_string()))),
         }
@@ -1018,7 +1052,7 @@ mod tests {
         let (keep, n, skipped) = recheck_empty(&plan.paths, &f);
         assert_eq!((keep, n), (vec![d.path().join("f")], 1));
         assert_eq!(skipped, ["e", "g"].map(|p| d.path().join(p)).to_vec());
-        let out = delete_empty_permanently(&plan.paths, &root, &f).unwrap();
+        let out = delete_empty_permanently(&plan, &root, &f).unwrap();
         assert_eq!(out.removed, 1);
         assert_eq!(out.skipped.len(), 2);
         assert!(d.path().join("e/inner/new.txt").exists() && d.path().join("g/link").exists());
@@ -1081,7 +1115,7 @@ mod tests {
                         }
                     }
                 },
-                || delete_empty_permanently(&plan.paths, std::slice::from_ref(&r), &f).unwrap(),
+                || delete_empty_permanently(&plan, std::slice::from_ref(&r), &f).unwrap(),
             );
             assert!(once.get(), "{phase} {attack}: the seam ran");
             assert_eq!(out.removed, 0, "{phase} {attack}: {out:?}");
@@ -1103,6 +1137,78 @@ mod tests {
                 .filter(|n| n.contains(".flect-rm-"))
                 .collect();
             assert!(temp.is_empty(), "{phase} {attack}: {temp:?}");
+        }
+    }
+
+    /// rev021e E1: the selected folder (or the planned folder) swapped for another one between the
+    /// plan and the permanent removal. Both are checked by the (device, inode) recorded at scan:
+    /// nothing is removed.
+    #[test]
+    fn swapped_selected_or_planned_folders_are_never_removed() {
+        for attack in ["root_swap", "root_link", "planned_swap"] {
+            let d = tempfile::tempdir().unwrap();
+            let (sel, other) = (d.path().join("sel"), d.path().join("other"));
+            fs::create_dir_all(sel.join("e/sub")).unwrap();
+            fs::write(sel.join("e/.DS_Store"), "litter").unwrap();
+            fs::create_dir_all(other.join("e/sub")).unwrap();
+            fs::write(other.join("e/.DS_Store"), "OTHERLITTER").unwrap();
+            let f = Settings::default().folder;
+            let (plan, _) =
+                plan_remove_empty(std::slice::from_ref(&sel), &f, &NullProgress).unwrap();
+            assert_eq!(plan.paths, [sel.join("e")]);
+            assert!(plan.folder_ids.contains_key(&sel.join("e")) && plan.root_ids.len() == 1);
+            let (s2, o2, once) = (
+                sel.clone(),
+                other.clone(),
+                std::rc::Rc::new(std::cell::Cell::new(false)),
+            );
+            let flag = once.clone();
+            let out = crate::fsat::with_seam(
+                move |p, _| {
+                    if p != "E1" || flag.replace(true) {
+                        return;
+                    }
+                    match attack {
+                        "root_swap" => {
+                            fs::rename(&s2, s2.with_extension("old")).unwrap();
+                            fs::rename(&o2, &s2).unwrap();
+                        }
+                        "root_link" => {
+                            fs::rename(&s2, s2.with_extension("old")).unwrap();
+                            std::os::unix::fs::symlink(&o2, &s2).unwrap();
+                        }
+                        _ => {
+                            fs::rename(s2.join("e"), s2.join("e.old")).unwrap();
+                            fs::rename(o2.join("e"), s2.join("e")).unwrap();
+                        }
+                    }
+                },
+                || delete_empty_permanently(&plan, std::slice::from_ref(&sel), &f).unwrap(),
+            );
+            assert!(once.get(), "{attack}");
+            assert_eq!(
+                (out.removed, out.skipped.len()),
+                (0, 1),
+                "{attack}: {out:?}"
+            );
+            let litter_of = |p: &Path| fs::read_to_string(p.join("e/.DS_Store")).unwrap();
+            match attack {
+                "root_swap" => {
+                    assert_eq!(litter_of(&sel), "OTHERLITTER");
+                    assert_eq!(litter_of(&sel.with_extension("old")), "litter");
+                }
+                "root_link" => {
+                    assert_eq!(litter_of(&other), "OTHERLITTER");
+                    assert_eq!(litter_of(&sel.with_extension("old")), "litter");
+                }
+                _ => {
+                    assert_eq!(litter_of(&sel), "OTHERLITTER");
+                    assert_eq!(
+                        fs::read_to_string(sel.join("e.old/.DS_Store")).unwrap(),
+                        "litter"
+                    );
+                }
+            }
         }
     }
 
@@ -1138,7 +1244,7 @@ mod tests {
 
         // nothing is removed by planning
         assert!(d.path().join("a/one.bin").exists() && d.path().join("x/y/z").exists());
-        let gone = delete_empty_permanently(&ep.paths, &[d.path().to_path_buf()], &f).unwrap();
+        let gone = delete_empty_permanently(&ep, &[d.path().to_path_buf()], &f).unwrap();
         assert_eq!((gone.removed, gone.skipped.len()), (3, 0));
         assert!(!d.path().join("x").exists());
         // a folder on the way swapped for a link after planning: the removal is refused, never
@@ -1153,7 +1259,11 @@ mod tests {
         let planned = [d.path().join("s/t")];
         fs::rename(d.path().join("s"), d.path().join("s.old")).unwrap();
         std::os::unix::fs::symlink(away.path(), d.path().join("s")).unwrap();
-        let out = delete_empty_permanently(&planned, &[d.path().to_path_buf()], &f).unwrap();
+        let stale = DeletePlan {
+            paths: planned.to_vec(),
+            ..p2
+        };
+        let out = delete_empty_permanently(&stale, &[d.path().to_path_buf()], &f).unwrap();
         assert_eq!((out.removed, out.skipped.len()), (0, 1), "{out:?}");
         assert!(away.path().join("t/u").is_dir(), "followed the link");
         assert!(d.path().join("s.old/t/u").is_dir());
@@ -1161,7 +1271,10 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         fs::create_dir_all(other.path().join("victim")).unwrap();
         let err = delete_empty_permanently(
-            &[other.path().join("victim")],
+            &DeletePlan {
+                paths: vec![other.path().join("victim")],
+                ..Default::default()
+            },
             &[d.path().to_path_buf()],
             &f,
         )
