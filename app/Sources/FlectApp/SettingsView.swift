@@ -11,6 +11,8 @@ final class SettingsEditor: ObservableObject {
     @Published var deps: [DependencyStatus] = []
     var requiredMissing: Bool { deps.contains { $0.required && !$0.ok } }
     @Published var quickActions = 0
+    /// Installed Flect Quick Actions made by an older version (they must be installed again).
+    @Published var outdatedQuickActions = 0
     @Published var updateChecking = false
     @Published var updateResult: UpdateResult?
     @Published var autoCheckUpdates = UserDefaults.standard.bool(forKey: UpdateChecker.autoCheckKey)
@@ -49,7 +51,10 @@ final class SettingsEditor: ObservableObject {
     @Published var installing = false
     @Published var setupMessage: String?
 
-    func refreshQuickActions() { quickActions = QuickActionInstaller.installedCount() }
+    func refreshQuickActions() {
+        quickActions = QuickActionInstaller.installedCount()
+        outdatedQuickActions = QuickActionInstaller.outdatedCount()
+    }
 
     /// Generates the Quick Actions with the bundled flect-tools, then restarts Finder so they appear.
     func installQuickActions() async {
@@ -60,6 +65,7 @@ final class SettingsEditor: ObservableObject {
             let n = try await Task.detached(priority: .userInitiated) { try QuickActionInstaller.install() }.value
             await Task.detached(priority: .userInitiated) { QuickActionInstaller.refreshFinder() }.value
             quickActions = n
+            outdatedQuickActions = QuickActionInstaller.outdatedCount()
             setupMessage = loc.f("setup.step1.done", [String(n)])
         } catch {
             refreshQuickActions()
@@ -150,6 +156,8 @@ struct SettingsView: View {
             }
             if editor.quickActions == 0 {
                 Text(loc.t("setup.banner")).font(.callout).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8)
+            } else if editor.outdatedQuickActions > 0 {
+                Text(loc.t("ux.setup.outdatedBanner")).font(.callout).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8)
             }
             if editor.requiredMissing {
                 Text(loc.t("deps.banner")).font(.callout).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8)
@@ -197,7 +205,7 @@ struct SettingsView: View {
         .task {
             editor.refreshQuickActions()
             editor.loadKnownUpdate()
-            if editor.quickActions == 0 { tab = "setup" }   // first run: start with the setup steps
+            if editor.quickActions == 0 || editor.outdatedQuickActions > 0 { tab = "setup" }   // first run, or Quick Actions to reinstall: start with the setup steps
             await editor.refreshDependencies()
             let last = UserDefaults.standard.object(forKey: UpdateChecker.lastCheckKey) as? Date
             if UpdateChecker.shouldAutoCheck(enabled: editor.autoCheckUpdates, last: last) { await editor.checkForUpdates(automatic: true) }
@@ -328,6 +336,9 @@ struct SetupView: View {
                         if editor.installing { ProgressView().controlSize(.small) }
                         Text(editor.quickActions == 0 ? loc.t("setup.step1.none") : loc.f("setup.step1.ok", [String(editor.quickActions)]))
                             .font(.caption).foregroundStyle(editor.quickActions == 0 ? Color.orange : Color.green)
+                    }
+                    if editor.outdatedQuickActions > 0 {
+                        Text(loc.n("ux.setup.outdated", editor.outdatedQuickActions)).font(.caption).foregroundStyle(Color.orange)
                     }
                     if let m = editor.setupMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
                 }

@@ -109,6 +109,10 @@ final class AppModel: ObservableObject {
         switch LaunchRequest.parse(arguments: arguments) {
         case .failure(.untrustedInput):
             screen = .message(loc.t("ux.launch.untrustedInput"))
+        case .failure(.outdatedQuickAction):
+            screen = .message(loc.t("ux.launch.reinstall"))
+        case .failure(.missing(let path)):
+            screen = .message(loc.f("ux.launch.missing", [path]))
         case .failure:
             screen = .message(loc.t("app.noTask"))
         case .success(let req):

@@ -21,10 +21,20 @@ public struct LaunchRequest: Equatable {
         /// `--input` is not a selection file a Flect Quick Action made (wrong place, name, owner, type or size):
         /// it is neither read nor deleted.
         case untrustedInput
+        /// NUL-separated, but with an empty entry that is not the single trailing one (`/a\0\0/b\0`).
+        case malformed
+        /// One line per path, as Quick Actions installed by Flect 0.2.0 and earlier write it. A file name with a line
+        /// break in it would add a path the user never selected, so it is not used (except for one path without any
+        /// line break inside): the Quick Actions have to be installed again.
+        case outdatedQuickAction
+        /// A listed path does not exist (lstat fails).
+        case missing(String)
     }
 
     /// Arguments without the program name. The selection file is read and then deleted, but only when it is one a
     /// Quick Action made (`isSelectionFile`); anything else is left alone and the request is refused.
+    /// The file holds the selected paths, each followed by a NUL byte (`printf '%s\0'`), exactly as given: nothing is
+    /// trimmed and nothing but NUL separates paths (`selectionPaths`).
     public static func parse(arguments: [String], deleteInput: Bool = true, tempDirectories: [String]? = nil) -> Result<LaunchRequest, Failure> {
         var task: String?, input: String?
         var i = 0
@@ -41,11 +51,45 @@ public struct LaunchRequest: Equatable {
         case .failure(let f): return .failure(f)
         case .success(let d): data = d
         }
+        let paths: [String]
+        switch selectionPaths(data) {
+        case .failure(let f): return .failure(f)
+        case .success(let p): paths = p
+        }
+        if let failure = validate(paths: paths) { return .failure(failure) }
+        for p in paths {
+            var st = stat()
+            guard lstat(p, &st) == 0 else { return .failure(.missing(String(p.prefix(80)))) }
+        }
+        return .success(LaunchRequest(task: task, paths: paths))
+    }
+
+    /// The paths in a selection file's bytes.
+    /// - Contains a NUL: split on NUL only; one trailing empty entry (the last terminator) is dropped, any other empty
+    ///   entry is `.malformed`. Entries are kept byte for byte (no trimming; a line break is part of the name).
+    /// - No NUL (written by an outdated Quick Action, one path per line): accepted only when it is a single path with
+    ///   no line break inside (an optional final `\n` is the old terminator); otherwise `.outdatedQuickAction`.
+    /// - Empty: `.empty`.
+    public static func selectionPaths(_ data: Data) -> Result<[String], Failure> {
+        if data.isEmpty { return .failure(.empty) }
+        if data.contains(0) {
+            var parts = data.split(separator: 0, omittingEmptySubsequences: false)
+            if parts.last?.isEmpty == true { parts.removeLast() }
+            if parts.isEmpty || parts.contains(where: { $0.isEmpty }) { return .failure(.malformed) }
+            var out: [String] = []
+            out.reserveCapacity(parts.count)
+            for p in parts {
+                guard let s = String(data: Data(p), encoding: .utf8) else { return .failure(.unreadable) }
+                out.append(s)
+            }
+            return .success(out)
+        }
         guard var text = String(data: data, encoding: .utf8) else { return .failure(.unreadable) }
-        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
-        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if let failure = validate(paths: lines) { return .failure(failure) }
-        return .success(LaunchRequest(task: task, paths: lines))
+        if text.unicodeScalars.last == "\n" { text.unicodeScalars.removeLast() }
+        // Every line separator `components(separatedBy: .newlines)` used to split on: LF, VT, FF, CR, NEL, LS, PS.
+        let breaks = CharacterSet.newlines
+        guard !text.isEmpty, !text.unicodeScalars.contains(where: { breaks.contains($0) }) else { return .failure(.outdatedQuickAction) }
+        return .success([text])
     }
 
     // MARK: the task

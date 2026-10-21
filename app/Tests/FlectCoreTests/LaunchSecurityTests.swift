@@ -129,20 +129,119 @@ final class LaunchSecurityTests: XCTestCase {
     }
 
     func testRealSelectionFileIsReadThenUnlinked() throws {
-        let file = try makeSelectionFile("/Users/a/x.png\n")
+        let x = scratch().appendingPathComponent("x.png").path
+        FileManager.default.createFile(atPath: x, contents: Data())
+        let file = try makeSelectionFile("\(x)\0")
         XCTAssertTrue(LaunchRequest.isSelectionFile(file.path))
         // the temp folder may be given as /var/... or /private/var/...: both resolve to the same folder
         let resolved = LaunchRequest.realPath(FileManager.default.temporaryDirectory.path)!
         XCTAssertTrue(LaunchRequest.isSelectionFile(file.path, tempDirectories: [resolved]))
-        XCTAssertEqual(try LaunchRequest.parse(arguments: ["--task", "image.strip", "--input", file.path], deleteInput: false).get().paths, ["/Users/a/x.png"])
+        XCTAssertEqual(try LaunchRequest.parse(arguments: ["--task", "image.strip", "--input", file.path], deleteInput: false).get().paths, [x])
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "deleteInput: false keeps it")
-        XCTAssertEqual(try parse(file.path).get().paths, ["/Users/a/x.png"])
+        XCTAssertEqual(try parse(file.path).get().paths, [x])
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
         // not in any of the given temp folders
         let again = try makeSelectionFile("/a\n")
         defer { unlink(again.path) }
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", again.path], tempDirectories: ["/nonexistent"]), .failure(.untrustedInput))
         XCTAssertTrue(FileManager.default.fileExists(atPath: again.path))
+    }
+
+    // MARK: the selection format (NUL-separated)
+
+    func testLineBreakInAFileNameDoesNotAddAPath() throws {
+        // A file named "x\n<folder>" used to add <folder> to the selection.
+        let dir = scratch()
+        let target = dir.appendingPathComponent("target").path
+        FileManager.default.createFile(atPath: target, contents: Data())
+        let evil = dir.path + "/x\n" + target   // <dir>/x⏎<dir>/target: folders "x⏎", ..., then a file
+        try FileManager.default.createDirectory(atPath: (evil as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: evil, contents: Data()))
+        let file = try makeSelectionFile("\(evil)\0")
+        XCTAssertEqual(try parse(file.path).get().paths, [evil], "one item, with the line break kept in its name")
+
+        // Every separator `.newlines` knew, and spaces, stay part of the name.
+        let names = ["cr\rname", "crlf\r\nname", "ls\u{2028}name", "ps\u{2029}name", "nel\u{85}name", "vt\u{0B}ff\u{0C}", " spaced ", "\u{FEFF}bom"]
+        let paths = names.map { dir.appendingPathComponent($0).path }
+        for p in paths { XCTAssertTrue(FileManager.default.createFile(atPath: p, contents: Data()), p) }
+        let many = try makeSelectionFile(paths.map { $0 + "\0" }.joined())
+        XCTAssertEqual(try parse(many.path).get().paths, paths)
+    }
+
+    func testSelectionPathsSplitOnNulOnly() {
+        func paths(_ s: String) -> Result<[String], LaunchRequest.Failure> { LaunchRequest.selectionPaths(Data(s.utf8)) }
+        XCTAssertEqual(paths("/a\0/b\0"), .success(["/a", "/b"]))
+        XCTAssertEqual(paths("/a\0/b"), .success(["/a", "/b"]), "the last terminator may be missing")
+        XCTAssertEqual(paths("/a\n/b\0"), .success(["/a\n/b"]))
+        XCTAssertEqual(paths(" /a \0"), .success([" /a "]), "nothing is trimmed")
+        XCTAssertEqual(paths("/a\0\0"), .failure(.malformed), "only one trailing empty entry")
+        XCTAssertEqual(paths("/a\0\0/b\0"), .failure(.malformed))
+        XCTAssertEqual(paths("\0/a\0"), .failure(.malformed))
+        XCTAssertEqual(paths("\0"), .failure(.malformed))
+        XCTAssertEqual(paths(""), .failure(.empty))
+        XCTAssertEqual(LaunchRequest.selectionPaths(Data([0x2F, 0xFF, 0])), .failure(.unreadable))
+    }
+
+    func testOldNewlineSelectionFilesAreRefusedUnlessUnambiguous() throws {
+        func paths(_ s: String) -> Result<[String], LaunchRequest.Failure> { LaunchRequest.selectionPaths(Data(s.utf8)) }
+        // what Quick Actions installed by 0.2.0 and earlier write: printf '%s\n'
+        XCTAssertEqual(paths("/a\n/b\n"), .failure(.outdatedQuickAction))
+        XCTAssertEqual(paths("/x\n/Users/me\n"), .failure(.outdatedQuickAction))
+        XCTAssertEqual(paths("/a\r\n"), .failure(.outdatedQuickAction))
+        XCTAssertEqual(paths("/a\u{2028}/b\n"), .failure(.outdatedQuickAction))
+        XCTAssertEqual(paths("/a\n\n"), .failure(.outdatedQuickAction))
+        XCTAssertEqual(paths("\n"), .failure(.outdatedQuickAction))
+        // exactly one path and no line break inside it: unambiguous, accepted as it is
+        XCTAssertEqual(paths("/Users/a/one file.png\n"), .success(["/Users/a/one file.png"]))
+        XCTAssertEqual(paths("/Users/a/one file.png"), .success(["/Users/a/one file.png"]))
+
+        // end to end: an old multi-line file is refused (and, being our own file, removed); nothing runs
+        let dir = scratch()
+        let a = dir.appendingPathComponent("a").path, b = dir.appendingPathComponent("b").path
+        for p in [a, b] { FileManager.default.createFile(atPath: p, contents: Data()) }
+        let old = try makeSelectionFile("\(a)\n\(b)\n")
+        XCTAssertEqual(parse(old.path), .failure(.outdatedQuickAction))
+        let single = try makeSelectionFile("\(a)\n")
+        XCTAssertEqual(try parse(single.path).get().paths, [a])
+    }
+
+    func testEveryListedPathMustExist() throws {
+        let dir = scratch()
+        let real = dir.appendingPathComponent("real").path
+        FileManager.default.createFile(atPath: real, contents: Data())
+        let gone = dir.appendingPathComponent("gone").path
+        let file = try makeSelectionFile("\(real)\0\(gone)\0")
+        XCTAssertEqual(parse(file.path), .failure(.missing(String(gone.prefix(80)))))
+        // a dangling link still lstats: it is the item the user selected
+        let link = dir.appendingPathComponent("dangling").path
+        XCTAssertEqual(symlink(gone, link), 0)
+        XCTAssertEqual(try parse(try makeSelectionFile("\(link)\0").path).get().paths, [link])
+    }
+
+    func testOutdatedQuickActionsAreCounted() throws {
+        let dir = scratch()
+        func workflow(_ name: String, _ script: String?) throws {
+            let c = dir.appendingPathComponent(name).appendingPathComponent("Contents")
+            try FileManager.default.createDirectory(at: c, withIntermediateDirectories: true)
+            if let s = script { try s.write(to: c.appendingPathComponent("document.wflow"), atomically: true, encoding: .utf8) }
+        }
+        try workflow("Flect Image Resize.workflow", "<string># \(QuickActionInstaller.workflowFormatMarker) ...</string>")
+        try workflow("Flect Image OCR.workflow", "<string>for p in \"$@\"; do printf '%s\\n' \"$p\" >> \"$f\"; done</string>")
+        try workflow("Flect Folder Tree.workflow", nil)
+        try workflow("Other.workflow", "nothing")
+        XCTAssertEqual(QuickActionInstaller.installedCount(in: dir), 3)
+        XCTAssertEqual(QuickActionInstaller.outdatedCount(in: dir), 2, "the old script and the unreadable one")
+        XCTAssertEqual(QuickActionInstaller.outdatedCount(in: dir.appendingPathComponent("missing")), 0)
+    }
+
+    func testLaunchMessagesExistInEveryLanguage() throws {
+        let keys = ["ux.launch.untrustedInput", "ux.launch.rejectedTask", "ux.launch.reinstall", "ux.launch.missing",
+                    "ux.setup.outdated", "ux.setup.outdated.one", "ux.setup.outdatedBanner"]
+        for code in ["en", "ja", "zh"] {
+            let url = try XCTUnwrap(Bundle.module.url(forResource: "strings.ux.\(code)", withExtension: "json", subdirectory: "Resources"))
+            let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: String])
+            for k in keys { XCTAssertNotNil(obj[k], "\(code): \(k)") }
+        }
     }
 
     // MARK: --task
