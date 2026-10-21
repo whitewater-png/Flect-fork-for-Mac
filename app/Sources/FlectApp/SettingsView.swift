@@ -11,6 +11,41 @@ final class SettingsEditor: ObservableObject {
     @Published var deps: [DependencyStatus] = []
     var requiredMissing: Bool { deps.contains { $0.required && !$0.ok } }
     @Published var quickActions = 0
+    @Published var updateChecking = false
+    @Published var updateResult: UpdateResult?
+    @Published var autoCheckUpdates = UserDefaults.standard.bool(forKey: UpdateChecker.autoCheckKey)
+
+    static var appVersion: String { (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0.0-dev" }
+
+    func setAutoCheck(_ on: Bool) {
+        autoCheckUpdates = on
+        UserDefaults.standard.set(on, forKey: UpdateChecker.autoCheckKey)
+    }
+
+    /// `automatic` runs stay silent when nothing is new or the network is unavailable.
+    func checkForUpdates(automatic: Bool = false) async {
+        updateChecking = true
+        if !automatic { updateResult = nil }
+        let result = await UpdateChecker.check(current: SettingsEditor.appVersion)
+        UserDefaults.standard.set(Date(), forKey: UpdateChecker.lastCheckKey)
+        switch result {
+        case .available(let i): UserDefaults.standard.set(i.tag, forKey: UpdateChecker.knownLatestKey)
+        case .upToDate: UserDefaults.standard.removeObject(forKey: UpdateChecker.knownLatestKey)
+        case .failed: break
+        }
+        if !(automatic && result == .failed) { updateResult = result }
+        updateChecking = false
+    }
+
+    /// A newer release found by an earlier check, still newer than the running version.
+    func loadKnownUpdate() {
+        guard updateResult == nil, let tag = UserDefaults.standard.string(forKey: UpdateChecker.knownLatestKey),
+              let info = UpdateChecker.releaseInfo(forKnownTag: tag) else { return }
+        if case .available = UpdateChecker.decide(current: SettingsEditor.appVersion, latest: info) { updateResult = .available(info) }
+        else { UserDefaults.standard.removeObject(forKey: UpdateChecker.knownLatestKey) }
+    }
+
+    var availableUpdate: ReleaseInfo? { if case .available(let i)? = updateResult { return i } else { return nil } }
     @Published var installing = false
     @Published var setupMessage: String?
 
@@ -110,6 +145,9 @@ struct SettingsView: View {
     var body: some View {
         let loc = Loc.shared
         VStack(spacing: 0) {
+            if let u = editor.availableUpdate {
+                Text(Loc.shared.f("update.banner", [u.version.description, SettingsEditor.appVersion])).font(.callout).foregroundStyle(.blue).padding(.horizontal, 12).padding(.top, 8)
+            }
             if editor.quickActions == 0 {
                 Text(loc.t("setup.banner")).font(.callout).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8)
             }
@@ -152,8 +190,11 @@ struct SettingsView: View {
         .frame(minWidth: 620, minHeight: 460)
         .task {
             editor.refreshQuickActions()
+            editor.loadKnownUpdate()
             if editor.quickActions == 0 { tab = "setup" }   // first run: start with the setup steps
             await editor.refreshDependencies()
+            let last = UserDefaults.standard.object(forKey: UpdateChecker.lastCheckKey) as? Date
+            if UpdateChecker.shouldAutoCheck(enabled: editor.autoCheckUpdates, last: last) { await editor.checkForUpdates(automatic: true) }
         }
     }
 }
@@ -287,10 +328,41 @@ struct SetupView: View {
                     Text(loc.t("setup.step3.title")).font(.headline)
                     Text(loc.t("setup.step3.body")).font(.callout)
                 }
+
+                Divider()
+                UpdateSection(editor: editor)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task { editor.refreshQuickActions() }
+    }
+}
+
+/// "Is there a newer version?" Manual by default; the check at launch is opt-in. Nothing is installed automatically.
+@MainActor
+struct UpdateSection: View {
+    @ObservedObject var editor: SettingsEditor
+
+    var body: some View {
+        let loc = Loc.shared
+        VStack(alignment: .leading, spacing: 6) {
+            Text(loc.t("update.title")).font(.headline)
+            Text(loc.f("update.current", [SettingsEditor.appVersion])).font(.callout)
+            HStack(spacing: 10) {
+                Button(loc.t("update.button")) { Task { await editor.checkForUpdates() } }.disabled(editor.updateChecking)
+                if editor.updateChecking { ProgressView().controlSize(.small); Text(loc.t("update.checking")).font(.caption).foregroundStyle(.secondary) }
+                switch editor.updateResult {
+                case .upToDate?: Text(loc.t("update.upToDate")).font(.caption).foregroundStyle(.green)
+                case .failed?: Text(loc.t("update.failed")).font(.caption).foregroundStyle(.orange)
+                case .available(let i)?:
+                    Text(loc.f("update.available", [i.version.description])).font(.caption).foregroundStyle(.blue)
+                    Button(loc.t("update.open")) { NSWorkspace.shared.open(i.url) }
+                case nil: EmptyView()
+                }
+            }
+            Toggle(loc.t("update.auto"), isOn: Binding(get: { editor.autoCheckUpdates }, set: { editor.setAutoCheck($0) }))
+            Text(loc.t("update.privacy")).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

@@ -187,6 +187,51 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try QuickActionInstaller.install(tools: nil, into: out)) { XCTAssertEqual($0 as? QuickActionInstaller.InstallError, .toolsNotFound) }
     }
 
+    func testReleaseVersionParsingAndOrder() {
+        XCTAssertEqual(ReleaseVersion("v0.1.1")?.description, "0.1.1")
+        XCTAssertEqual(ReleaseVersion("1.2.3")?.description, "1.2.3")
+        XCTAssertNil(ReleaseVersion("0.1"))
+        XCTAssertNil(ReleaseVersion("v1.2.x"))
+        XCTAssertNil(ReleaseVersion("1.2.3.4"))
+        XCTAssertNil(ReleaseVersion("1.2.3-"))
+        XCTAssertNil(ReleaseVersion("1.2.3-a b"))
+        XCTAssertTrue(ReleaseVersion("0.1.0")! < ReleaseVersion("0.1.1")!)
+        XCTAssertTrue(ReleaseVersion("0.9.9")! < ReleaseVersion("0.10.0")!)
+        XCTAssertTrue(ReleaseVersion("0.1.1-dev")! < ReleaseVersion("0.1.1")!)
+        XCTAssertTrue(ReleaseVersion("0.0.0-dev")! < ReleaseVersion("0.1.0")!)
+    }
+
+    func testUpdateCheckerAcceptsOnlyThisRepositorysRelease() {
+        func json(tag: String = "v0.1.1", url: String = "https://github.com/whitewater-png/Flect-fork-for-Mac/releases/tag/v0.1.1", extra: String = "") -> Data {
+            Data("{\"tag_name\":\"\(tag)\",\"html_url\":\"\(url)\"\(extra)}".utf8)
+        }
+        XCTAssertEqual(UpdateChecker.parse(json())?.tag, "v0.1.1")
+        XCTAssertNil(UpdateChecker.parse(json(url: "https://evil.example/whitewater-png/Flect-fork-for-Mac/releases/tag/v0.1.1")))
+        XCTAssertNil(UpdateChecker.parse(json(url: "http://github.com/whitewater-png/Flect-fork-for-Mac/releases/tag/v0.1.1")))
+        XCTAssertNil(UpdateChecker.parse(json(url: "https://github.com/someone-else/repo/releases/tag/v0.1.1")))
+        XCTAssertNil(UpdateChecker.parse(json(tag: "v0.1.1; rm -rf")))
+        XCTAssertNil(UpdateChecker.parse(json(tag: "v0.1.1-beta")))
+        XCTAssertNil(UpdateChecker.parse(json(extra: ",\"prerelease\":true")))
+        XCTAssertNil(UpdateChecker.parse(json(extra: ",\"draft\":true")))
+        XCTAssertNil(UpdateChecker.parse(Data("not json".utf8)))
+        XCTAssertNil(UpdateChecker.parse(Data(count: 300_000)))
+    }
+
+    func testUpdateDecisionAndSchedule() throws {
+        let latest = try XCTUnwrap(UpdateChecker.parse(Data("{\"tag_name\":\"v0.1.1\",\"html_url\":\"https://github.com/whitewater-png/Flect-fork-for-Mac/releases/tag/v0.1.1\"}".utf8)))
+        XCTAssertEqual(UpdateChecker.decide(current: "0.1.1", latest: latest), .upToDate)
+        XCTAssertEqual(UpdateChecker.decide(current: "0.2.0", latest: latest), .upToDate)
+        XCTAssertEqual(UpdateChecker.decide(current: "0.1.0", latest: latest), .available(latest))
+        XCTAssertEqual(UpdateChecker.decide(current: "0.0.0-dev", latest: latest), .available(latest))
+        let now = Date()
+        XCTAssertEqual(UpdateChecker.releaseInfo(forKnownTag: "v0.1.1")?.url.absoluteString, "https://github.com/whitewater-png/Flect-fork-for-Mac/releases/tag/v0.1.1")
+        XCTAssertNil(UpdateChecker.releaseInfo(forKnownTag: "v0.1.1/../../x"))
+        XCTAssertFalse(UpdateChecker.shouldAutoCheck(enabled: false, last: nil, now: now))
+        XCTAssertTrue(UpdateChecker.shouldAutoCheck(enabled: true, last: nil, now: now))
+        XCTAssertFalse(UpdateChecker.shouldAutoCheck(enabled: true, last: now.addingTimeInterval(-3600), now: now))
+        XCTAssertTrue(UpdateChecker.shouldAutoCheck(enabled: true, last: now.addingTimeInterval(-25 * 3600), now: now))
+    }
+
     /// Drives the real client against a stand-in engine script.
     func testEngineClientRoundTrip() async throws {
         let dir = tmp()
