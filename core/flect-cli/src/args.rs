@@ -211,6 +211,12 @@ fn absolute(p: &str, cwd: &std::path::Path) -> Result<String, String> {
 }
 
 /// `image.resize` + [(scale,50)] -> `image.resize?scale=50`; values are percent-encoded.
+///
+/// An option overrides the same name in the task's own query (`'image.resize?scale=50' -o scale=30`
+/// sends `scale=30` once), and a later option overrides an earlier one, so the engine, which refuses
+/// a repeated name, gets each name once. Names match literally and case-sensitively, as the engine
+/// reads them: `%73cale` or `Scale` in the query is another name. The deleting-task guard runs on
+/// the result afterwards, so `-o dry=0` / `-o confirm=1` are dropped like any other spelling.
 fn build_task(task: &str, options: &[(String, String)]) -> Result<String, String> {
     let (name, query) = task.split_once('?').unwrap_or((task, ""));
     if name.is_empty()
@@ -223,12 +229,31 @@ fn build_task(task: &str, options: &[(String, String)]) -> Result<String, String
     if query.bytes().any(|b| b.is_ascii_control()) {
         return Err("invalid task query".into());
     }
-    let mut parts: Vec<String> = Some(query)
-        .filter(|q| !q.is_empty())
+    let mut parts: Vec<String> = query
+        .split('&')
+        .filter(|p| !p.is_empty())
         .map(str::to_owned)
-        .into_iter()
         .collect();
-    parts.extend(options.iter().map(|(k, v)| format!("{k}={}", encode(v))));
+    for (k, v) in options {
+        let part = format!("{k}={}", encode(v));
+        let name_of = |p: &str| p.split_once('=').map_or(p, |(n, _)| n).to_owned();
+        match parts.iter().position(|p| name_of(p) == *k) {
+            Some(i) => {
+                parts[i] = part;
+                // drop any later repeat of the same name in the query
+                let mut seen = false;
+                parts.retain(|p| {
+                    if name_of(p) != *k {
+                        return true;
+                    }
+                    let first = !seen;
+                    seen = true;
+                    first
+                });
+            }
+            None => parts.push(part),
+        }
+    }
     Ok(if parts.is_empty() {
         name.to_owned()
     } else {
@@ -277,6 +302,53 @@ mod tests {
         assert_eq!(r.task, "image.resize?scale=50&w=a%20b%26c");
         assert_eq!(r.paths, ["/work/x.png", "/abs/y.png"]);
         assert!(!r.json);
+    }
+
+    /// A repeated name used to reach the engine twice and be refused with `task.badOption`.
+    #[test]
+    fn options_override_the_query_instead_of_repeating_a_name() {
+        let task = |args: &[&str]| {
+            let mut v = vec!["run"];
+            v.extend_from_slice(args);
+            v.push("a");
+            match p(&v) {
+                Ok(Command::Run(r)) => r.task,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            task(&["image.resize?scale=50", "-o", "scale=30"]),
+            "image.resize?scale=30"
+        );
+        assert_eq!(
+            task(&["image.resize?scale=50&fit=1", "-o", "scale=30", "-o", "w=2"]),
+            "image.resize?scale=30&fit=1&w=2"
+        );
+        assert_eq!(
+            task(&["image.resize", "-o", "scale=10", "--option=scale=20"]),
+            "image.resize?scale=20",
+            "the later option wins"
+        );
+        assert_eq!(
+            task(&["image.resize?scale=50", "--json-options", r#"{"scale":40}"#]),
+            "image.resize?scale=40"
+        );
+        assert_eq!(
+            task(&["image.resize?scale=50&x=1&scale=60", "-o", "scale=30"]),
+            "image.resize?scale=30&x=1"
+        );
+        // literal, case-sensitive names: these are other names (the engine refuses the encoded one)
+        assert_eq!(
+            task(&["image.resize?Scale=50", "-o", "scale=30"]),
+            "image.resize?Scale=50&scale=30"
+        );
+        assert_eq!(
+            task(&["image.resize?%73cale=50", "-o", "scale=30"]),
+            "image.resize?%73cale=50&scale=30"
+        );
+        // a name without a value is the same name
+        assert_eq!(task(&["t.x?flag", "-o", "flag=1"]), "t.x?flag=1");
+        assert_eq!(task(&["t.x?a=1&&b=2", "-o", "c=3"]), "t.x?a=1&b=2&c=3");
     }
 
     #[test]

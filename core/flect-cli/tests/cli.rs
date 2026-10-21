@@ -382,6 +382,69 @@ fn encoded_or_disguised_option_names_cannot_bypass_apply() {
     }
 }
 
+/// `-o` repeating a name of the task's query reached the engine twice and was refused
+/// (`task.badOption`, exit 1). The option now overrides it; the deleting-task guard still applies.
+#[test]
+fn an_option_overrides_the_same_name_in_the_task() {
+    let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let src = work.path().join("a.txt");
+    fs::write(&src, "one\ntwo\n").unwrap();
+    let out = run(
+        home.path(),
+        &[
+            "run",
+            "text.lineEndings?to=LF",
+            "-o",
+            "to=CRLF",
+            src.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(!text(&out.stderr).contains("task.badOption"));
+    let made: Vec<String> = names(work.path())
+        .into_iter()
+        .filter(|n| n != "a.txt")
+        .collect();
+    assert_eq!(made.len(), 1, "{made:?}");
+    assert_eq!(
+        fs::read(work.path().join(&made[0])).unwrap(),
+        b"one\r\ntwo\r\n",
+        "the -o value wins"
+    );
+
+    // -o dry=0 / confirm=1 overriding the query still cannot delete without --apply
+    let empty = work.path().join("hollow");
+    fs::create_dir(&empty).unwrap();
+    fs::write(work.path().join("b.txt"), "one\ntwo\n").unwrap();
+    let root = work.path().to_str().unwrap();
+    for args in [
+        &["folder.removeEmpty?confirm=0", "-o", "confirm=1"][..],
+        &["folder.removeDuplicate?mode=all&dry=1", "-o", "dry=0"][..],
+        &[
+            "folder.removeDuplicate?mode=all",
+            "-o",
+            "dry=0",
+            "-o",
+            "mode=all",
+        ][..],
+    ] {
+        let mut v = vec!["run"];
+        v.extend_from_slice(args);
+        v.push(root);
+        let out = run(home.path(), &v);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&out.stderr)
+        );
+        assert!(
+            empty.is_dir() && src.exists() && work.path().join("b.txt").exists(),
+            "{args:?} deleted without --apply"
+        );
+    }
+}
+
 #[test]
 fn ctrl_c_cancels_with_130_and_keeps_originals() {
     let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());

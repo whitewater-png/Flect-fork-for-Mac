@@ -36,7 +36,11 @@ flect settings path
   app passes, e.g. `flect run image.resize -o scale=50 photo.png`,
   `flect run text.lineEndings -o to=CRLF notes.txt`. `--json-options '{"scale":50}'` does the
   same from a flat JSON object (booleans become `1`/`0`). See the protocol document for each
-  task's parameters. Use `--` before paths that start with `-`.
+  task's parameters. Use `--` before paths that start with `-`. An option overrides the same
+  name in the task's own query, and a later option overrides an earlier one, so each name reaches
+  the engine once: `flect run 'image.resize?scale=50' -o scale=30 photo.png` resizes to 30 %.
+  Names match exactly as written (case-sensitive, not decoded): `Scale` or `%73cale` in the query
+  is another name, and the engine refuses a malformed or repeated name (`task.badOption`, exit 1).
 - `flect run --preset NAME` runs a preset saved in the app (Settings > Presets): the exact name,
   or the preset's id. A preset with several steps runs as one pipeline: intermediate files stay
   in a private folder under `$TMPDIR` that is removed afterwards, and only the final file is
