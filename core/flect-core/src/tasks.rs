@@ -552,6 +552,7 @@ pub struct Ctx<'a> {
 
 pub fn is_file_task(name: &str) -> bool {
     is_text_task(name)
+        || name == "jar.decompile"
         || is_archive_task(name)
         || is_image_task(name)
         || crate::mediatasks::is_media_task(name)
@@ -604,6 +605,12 @@ pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine answers "unimplemented" to any task `is_file_task` does not list, which made JAR decompiling unreachable.
+    #[test]
+    fn jar_decompile_is_dispatched_as_a_file_task() {
+        assert!(is_file_task("jar.decompile"));
+    }
 
     #[test]
     fn percent_decoding() {
