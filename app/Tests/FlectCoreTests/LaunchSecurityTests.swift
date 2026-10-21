@@ -3,7 +3,9 @@ import XCTest
 
 extension XCTestCase {
     /// A selection file where and how a Quick Action's `mktemp -t flect-sel` makes one.
-    func makeSelectionFile(_ data: Data) throws -> URL {
+    /// `@nonobjc`: both overloads would otherwise get the Objective-C selector `makeSelectionFile:error:`
+    /// on XCTestCase, which fails to compile under real XCTest.
+    @nonobjc func makeSelectionFile(_ data: Data) throws -> URL {
         let letters = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
         let name = LaunchRequest.inputPrefix + String((0..<10).map { _ in letters.randomElement()! })
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
@@ -11,7 +13,7 @@ extension XCTestCase {
         return url
     }
 
-    func makeSelectionFile(_ text: String) throws -> URL { try makeSelectionFile(Data(text.utf8)) }
+    @nonobjc func makeSelectionFile(_ text: String) throws -> URL { try makeSelectionFile(Data(text.utf8)) }
 }
 
 /// Regression tests for the launch path (`--task <id> --input <file>`): nothing but a Quick Action's own selection file
