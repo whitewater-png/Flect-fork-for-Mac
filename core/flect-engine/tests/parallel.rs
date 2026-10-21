@@ -117,3 +117,40 @@ fn jobs_option_overrides_the_environment() {
     assert_eq!(ev.last().unwrap()["outcome"], "succeeded");
     assert_eq!(ev.iter().filter(|e| e["event"] == "data").count(), 4);
 }
+
+#[test]
+fn broken_stdout_stops_dispatching_new_files() {
+    let d = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let body = format!("{{\"a\":[{}]}}", vec!["1"; 60_000].join(","));
+    let paths: Vec<String> = (0..300)
+        .map(|i| {
+            let p = d.path().join(format!("h{i:03}.json"));
+            std::fs::write(&p, &body).unwrap();
+            p.to_string_lossy().into_owned()
+        })
+        .collect();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_flect-engine"))
+        .env("FLECT_HOME", home.path())
+        .env("FLECT_JOBS", "2")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take()); // the reader went away before the first event
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", request(&paths)).unwrap();
+    drop(stdin);
+    let _ = child.wait();
+    let made = std::fs::read_dir(d.path())
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("_pretty")
+        })
+        .count();
+    assert!(made < paths.len() / 2, "kept processing: {made} outputs");
+}

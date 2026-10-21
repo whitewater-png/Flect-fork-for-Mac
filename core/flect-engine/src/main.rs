@@ -310,6 +310,10 @@ fn run_files_parallel(
     let name = task.split('?').next().unwrap_or("");
     let report = name == privacy::REPORT_TASK;
     let is_cancelled = || cancel.load(Ordering::SeqCst);
+    // Set when stdout broke: stop handing out new files instead of processing the whole batch
+    // with nobody left to report to.
+    let broken = AtomicBool::new(false);
+    let stop = || is_cancelled() || broken.load(Ordering::SeqCst);
     let quiet = QuietProgress { cancel };
     let work = |i: usize| {
         let wctx = tasks::Ctx {
@@ -326,7 +330,7 @@ fn run_files_parallel(
     let mut failures = 0;
     let mut io_error = None;
     let mut interrupted = false;
-    let delivered = pool::run_ordered(paths.len(), workers, &is_cancelled, &work, |u| {
+    let delivered = pool::run_ordered(paths.len(), workers, &stop, &work, |u| {
         if io_error.is_some() {
             return;
         }
@@ -345,7 +349,10 @@ fn run_files_parallel(
         };
         match r {
             Ok(ok) => interrupted |= !ok,
-            Err(e) => io_error = Some(e),
+            Err(e) => {
+                broken.store(true, Ordering::SeqCst);
+                io_error = Some(e);
+            }
         }
     });
     if let Some(e) = io_error {
