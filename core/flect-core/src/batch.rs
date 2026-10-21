@@ -167,6 +167,58 @@ fn carry_out(
     }
 }
 
+/// Carry out a confirmed empty-folder plan. Every folder is re-checked right before it is handed on
+/// (Trash) or removed (permanent): one that is not empty any more is left alone and reported with
+/// `msg.emptySkipped`; nothing is ever deleted recursively.
+fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
+    let f = &ctx.settings.folder;
+    let skipped_event = |p: &Path, why: Option<String>| {
+        let mut args = vec![p.to_string_lossy().into_owned()];
+        args.extend(why);
+        (ctx.emit)(Event::Warn {
+            key: "msg.emptySkipped".into(),
+            args,
+        });
+    };
+    if f.delete_method == DeleteMethod::Permanent {
+        match ft::delete_empty_permanently(planned, roots, f) {
+            Err(e) => fail(ctx, "msg.ioError", e.to_string()),
+            Ok(out) => {
+                for (p, why) in &out.skipped {
+                    skipped_event(p, Some(why.clone()));
+                }
+                if out.removed == 0 {
+                    return done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]);
+                }
+                done(
+                    ctx,
+                    Outcome::Succeeded,
+                    Some("msg.emptyDeleted"),
+                    vec![out.removed.to_string()],
+                );
+            }
+        }
+    } else {
+        let (keep, total, skipped) = ft::recheck_empty(planned, f);
+        for p in &skipped {
+            skipped_event(p, None);
+        }
+        if keep.is_empty() {
+            return done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]);
+        }
+        (ctx.emit)(Event::Needs {
+            what: "trash".into(),
+            paths: path_list(&keep),
+        });
+        done(
+            ctx,
+            Outcome::Succeeded,
+            Some("msg.emptyRecycled"),
+            vec![total.to_string()],
+        );
+    }
+}
+
 pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
     let (name, params) = parse_task(task);
     let roots = folders(paths);
@@ -304,14 +356,7 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                     vec![total.to_string()],
                 );
             }
-            carry_out(
-                ctx,
-                plan.paths,
-                &roots,
-                "msg.emptyRecycled",
-                "msg.emptyDeleted",
-                vec![total.to_string()],
-            );
+            remove_empty(ctx, &plan.paths, &roots);
         }
         "folder.rename" => {
             let plan = RenamePlan {
@@ -392,6 +437,7 @@ pub fn first_root(paths: &[String]) -> Option<&Path> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
 
     fn run(task: &str, paths: &[&Path], settings: &Settings) -> Vec<serde_json::Value> {
@@ -640,6 +686,66 @@ mod tests {
         assert_eq!(p["removeCount"], 1, "{p}");
         let g = &p["groups"][0];
         assert_ne!(g["keep"]["path"], g["remove"][0]["path"]);
+    }
+
+    /// An excluded subfolder was skipped by the scan, so its parent looked empty; permanent mode then
+    /// fell back to `remove_dir_all` and deleted `node_modules/lib.js`, and Trash mode trashed the tree.
+    #[test]
+    fn excluded_or_unreadable_folders_are_content_and_never_deleted() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        let lib = r.join("B/keep/node_modules/lib.js");
+        fs::create_dir_all(lib.parent().unwrap()).unwrap();
+        fs::write(&lib, "module.exports = 1").unwrap();
+        fs::create_dir_all(r.join("B/hollow")).unwrap();
+        fs::create_dir_all(r.join("litter")).unwrap();
+        fs::write(r.join("litter/.DS_Store"), "x").unwrap();
+        fs::write(r.join("litter/._x"), "x").unwrap();
+        // a zero-byte file next to real content must not make it "empty", even with the toggle on
+        fs::create_dir_all(r.join("zero/node_modules")).unwrap();
+        fs::write(r.join("zero/marker"), "").unwrap();
+        // an unreadable folder is content too
+        let locked = r.join("C/locked");
+        fs::create_dir_all(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let mut s = Settings::default();
+        s.folder.scan_exclusions.folders = "node_modules".into();
+        s.folder.empty.ignore_zero_byte_files = true;
+        let mut perm = s.clone();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+
+        let listed = run("folder.removeEmpty", &[r], &s);
+        let targets: Vec<String> = find(&listed, "data").unwrap()["data"]["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t.as_str().unwrap().to_owned())
+            .collect();
+        let want: Vec<String> = ["B/hollow", "litter"]
+            .iter()
+            .map(|p| r.join(p).to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(targets, want, "{listed:?}");
+
+        let ev = run("folder.removeEmpty?confirm=1", &[r], &s);
+        let trash: Vec<&str> = find(&ev, "needs").unwrap()["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        assert_eq!(trash, want.iter().map(String::as_str).collect::<Vec<_>>());
+
+        let ev = run("folder.removeEmpty?confirm=1", &[r], &perm);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            find(&ev, "done").unwrap()["summary_key"],
+            "msg.emptyDeleted",
+            "{ev:?}"
+        );
+        assert!(lib.exists(), "excluded content was deleted: {ev:?}");
+        assert!(r.join("zero/marker").exists() && locked.exists());
+        assert!(!r.join("B/hollow").exists() && !r.join("litter").exists());
     }
 
     #[test]

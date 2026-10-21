@@ -148,8 +148,12 @@ impl TreeScan {
 
 /// Files that do not make a folder "non-empty" (OS litter), per the user's toggles.
 /// The Windows toggle names are kept for settings compatibility; the "desktop.ini"
-/// toggle also covers macOS litter (`.DS_Store`, `.localized`, AppleDouble `._*`).
-fn ignorable(name: &str, size: u64, empty: &EmptyFolderSettings) -> bool {
+/// toggle also covers macOS litter (`.DS_Store`, `.localized`, `Icon\r`, AppleDouble `._*`).
+/// The opt-in zero-byte toggle (off by default) is the Windows original's `IgnoreZeroByteFiles`:
+/// a 0-byte file is ignored only in the sense that it alone does not make its folder non-empty;
+/// anything else in the folder (a file, an excluded or unreadable folder, a link) still does.
+/// Only regular files reach this function; folders, links and special files are always content.
+pub(crate) fn ignorable(name: &str, size: u64, empty: &EmptyFolderSettings) -> bool {
     if empty.ignore_zero_byte_files && size == 0 {
         return true;
     }
@@ -158,6 +162,7 @@ fn ignorable(name: &str, size: u64, empty: &EmptyFolderSettings) -> bool {
         && (lower == "desktop.ini"
             || lower == ".ds_store"
             || lower == ".localized"
+            || name == "Icon\r"
             || name.starts_with("._"))
     {
         return true;
@@ -213,7 +218,9 @@ pub fn scan(
     Ok(out)
 }
 
-/// Returns whether the directory contains something that counts as content.
+/// Returns whether the directory contains something that counts as content. Anything the walk
+/// cannot see into counts as content: an unreadable folder or entry, and an excluded folder (it is
+/// not looked at, so its parent is never "empty").
 fn walk(
     dir: &Path,
     out: &mut TreeScan,
@@ -230,8 +237,13 @@ fn walk(
     }; // unreadable: assume it has content
     let mut has_content = false;
     let mut subdirs = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            has_content = true; // unreadable entry
+            continue;
+        };
         let Ok(meta) = entry.path().symlink_metadata() else {
+            has_content = true; // vanished or unreadable: never assume it was nothing
             continue;
         };
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -241,7 +253,9 @@ fn walk(
             continue;
         }
         if ft.is_dir() {
-            if !excl.excludes_folder(&name) {
+            if excl.excludes_folder(&name) {
+                has_content = true; // not scanned, so not known to be empty
+            } else {
                 subdirs.push(entry.path());
             }
         } else if ft.is_file() {

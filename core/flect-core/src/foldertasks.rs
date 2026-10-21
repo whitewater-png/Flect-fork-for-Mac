@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::folder::{self, Cancelled, ExclusionFilter, Progress, ScannedFile, TreeScan};
-use crate::settings::{FolderSettings, RenameSettings, ReportFormat};
+use crate::settings::{EmptyFolderSettings, FolderSettings, RenameSettings, ReportFormat};
 use crate::text::natural_cmp;
 
 // ------------------------------------------------------------------ rename
@@ -512,32 +512,148 @@ pub fn plan_remove_empty(
     ))
 }
 
-/// Permanent deletion, used only when the user chose it in settings. Refuses anything that
-/// is not inside one of `roots` (defence against a corrupted plan) and never follows symlinks.
-pub fn delete_permanently(paths: &[PathBuf], roots: &[PathBuf]) -> io::Result<usize> {
-    let canon_roots: Vec<PathBuf> = roots
+fn canonical_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots
         .iter()
         .filter_map(|r| fs::canonicalize(r).ok())
-        .collect();
+        .collect()
+}
+
+/// Refuses anything that is not inside one of the (canonical) roots: defence against a corrupted plan.
+fn check_inside(path: &Path, canon_roots: &[PathBuf]) -> io::Result<()> {
+    let parent = path.parent().and_then(|d| fs::canonicalize(d).ok());
+    if parent.is_some_and(|d| canon_roots.iter().any(|r| d.starts_with(r))) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is outside the selected folders", path.display()),
+        ))
+    }
+}
+
+/// Permanent deletion of files (duplicate removal), used only when the user chose it in settings.
+/// Refuses anything that is not inside one of `roots` and never follows symlinks. A folder is only
+/// ever removed when it is already empty (`remove_dir`); nothing here deletes a tree.
+pub fn delete_permanently(paths: &[PathBuf], roots: &[PathBuf]) -> io::Result<usize> {
+    let canon_roots = canonical_roots(roots);
     let mut n = 0;
     for path in paths {
-        let parent = path.parent().and_then(|d| fs::canonicalize(d).ok());
-        let inside = parent.is_some_and(|d| canon_roots.iter().any(|r| d.starts_with(r)));
-        if !inside {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("{} is outside the selected folders", path.display()),
-            ));
-        }
+        check_inside(path, &canon_roots)?;
         let meta = fs::symlink_metadata(path)?;
         if meta.is_dir() {
-            fs::remove_dir(path).or_else(|_| fs::remove_dir_all(path))?;
+            fs::remove_dir(path)?;
         } else {
             fs::remove_file(path)?;
         }
         n += 1;
     }
     Ok(n)
+}
+
+/// Re-check, right before acting on it, that `dir` still holds nothing but empty folders and OS
+/// litter (see `folder::ignorable`). Read-only. Returns the number of folders in it (itself
+/// included), or `None` when anything counts as content: a file, a link, a special file, an
+/// excluded folder, or anything that cannot be read.
+pub fn still_empty(
+    dir: &Path,
+    excl: &ExclusionFilter,
+    empty: &EmptyFolderSettings,
+) -> Option<usize> {
+    if !fs::symlink_metadata(dir).ok()?.is_dir() {
+        return None;
+    }
+    let mut folders = 1;
+    for entry in fs::read_dir(dir).ok()? {
+        let entry = entry.ok()?;
+        let meta = fs::symlink_metadata(entry.path()).ok()?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if meta.is_dir() {
+            if excl.excludes_folder(&name) {
+                return None;
+            }
+            folders += still_empty(&entry.path(), excl, empty)?;
+        } else if !(meta.is_file() && folder::ignorable(&name, meta.len(), empty)) {
+            return None;
+        }
+    }
+    Some(folders)
+}
+
+/// Delete an empty tree deepest first: litter files one by one (each re-checked), then each folder
+/// with `remove_dir`, which refuses a folder that is not empty. Stops at the first thing that is not
+/// litter, so content that appeared after the check is left alone.
+fn remove_empty_tree(
+    dir: &Path,
+    excl: &ExclusionFilter,
+    empty: &EmptyFolderSettings,
+) -> io::Result<usize> {
+    let not_empty = || io::Error::other(format!("{} is not empty", dir.display()));
+    let mut removed = 0;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let meta = fs::symlink_metadata(entry.path())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if meta.is_dir() && !excl.excludes_folder(&name) {
+            removed += remove_empty_tree(&entry.path(), excl, empty)?;
+        } else if meta.is_file() && folder::ignorable(&name, meta.len(), empty) {
+            fs::remove_file(entry.path())?;
+        } else {
+            return Err(not_empty());
+        }
+    }
+    fs::remove_dir(dir)?;
+    Ok(removed + 1)
+}
+
+#[derive(Debug, Default)]
+pub struct EmptyRemoval {
+    /// Folders removed (nested ones included).
+    pub removed: usize,
+    /// Planned folders left alone, with the reason (no longer empty, or the removal failed).
+    pub skipped: Vec<(PathBuf, String)>,
+}
+
+/// Permanent removal of planned empty folders. Each one is re-checked right before it is touched
+/// and only removed if it is still empty (OS litter aside); failures are reported, never retried
+/// with a recursive delete.
+pub fn delete_empty_permanently(
+    paths: &[PathBuf],
+    roots: &[PathBuf],
+    f: &FolderSettings,
+) -> io::Result<EmptyRemoval> {
+    let canon_roots = canonical_roots(roots);
+    let excl = ExclusionFilter::from_rules(&f.scan_exclusions);
+    let mut out = EmptyRemoval::default();
+    for path in paths {
+        check_inside(path, &canon_roots)?;
+        if still_empty(path, &excl, &f.empty).is_none() {
+            out.skipped.push((path.clone(), "no longer empty".into()));
+            continue;
+        }
+        match remove_empty_tree(path, &excl, &f.empty) {
+            Ok(n) => out.removed += n,
+            Err(e) => out.skipped.push((path.clone(), e.to_string())),
+        }
+    }
+    Ok(out)
+}
+
+/// For Trash mode: the planned folders that are still empty right now (the app trashes exactly
+/// these), the number of folders in them, and the ones that are not empty any more.
+pub fn recheck_empty(paths: &[PathBuf], f: &FolderSettings) -> (Vec<PathBuf>, usize, Vec<PathBuf>) {
+    let excl = ExclusionFilter::from_rules(&f.scan_exclusions);
+    let (mut keep, mut total, mut skipped) = (Vec::new(), 0, Vec::new());
+    for p in paths {
+        match still_empty(p, &excl, &f.empty) {
+            Some(n) => {
+                keep.push(p.clone());
+                total += n;
+            }
+            None => skipped.push(p.clone()),
+        }
+    }
+    (keep, total, skipped)
 }
 
 #[cfg(test)]
@@ -815,6 +931,40 @@ mod tests {
         assert!(!html.contains("<script>alert") && html.contains("&lt;script&gt;"));
     }
 
+    /// Content that appears between the plan and the deletion is never deleted, in either mode.
+    #[test]
+    fn empty_folders_are_rechecked_right_before_deletion() {
+        let d = tempfile::tempdir().unwrap();
+        let root = [d.path().to_path_buf()];
+        fs::create_dir_all(d.path().join("e/inner")).unwrap();
+        fs::create_dir_all(d.path().join("f")).unwrap();
+        touch(&d.path().join("f/.DS_Store"), b"litter");
+        touch(&d.path().join("f/Icon\r"), b"");
+        fs::create_dir_all(d.path().join("g")).unwrap();
+        let f = Settings::default().folder;
+        let (plan, total) = plan_remove_empty(&root, &f, &NullProgress).unwrap();
+        assert_eq!(total, 4);
+        assert_eq!(
+            plan.paths,
+            ["e", "f", "g"].map(|p| d.path().join(p)).to_vec()
+        );
+        touch(&d.path().join("e/inner/new.txt"), b"arrived late");
+        std::os::unix::fs::symlink("/", d.path().join("g/link")).unwrap();
+        let (keep, n, skipped) = recheck_empty(&plan.paths, &f);
+        assert_eq!((keep, n), (vec![d.path().join("f")], 1));
+        assert_eq!(skipped, ["e", "g"].map(|p| d.path().join(p)).to_vec());
+        let out = delete_empty_permanently(&plan.paths, &root, &f).unwrap();
+        assert_eq!(out.removed, 1);
+        assert_eq!(out.skipped.len(), 2);
+        assert!(d.path().join("e/inner/new.txt").exists() && d.path().join("g/link").exists());
+        assert!(!d.path().join("f").exists(), "litter-only folder removed");
+        // the litter rule is a per-file rule: litter next to content does not make a folder empty
+        fs::create_dir_all(d.path().join("h")).unwrap();
+        touch(&d.path().join("h/.DS_Store"), b"x");
+        touch(&d.path().join("h/real.txt"), b"x");
+        assert!(still_empty(&d.path().join("h"), &ExclusionFilter::default(), &f.empty).is_none());
+    }
+
     #[test]
     fn delete_plans_and_the_permanent_guard() {
         let d = tempfile::tempdir().unwrap();
@@ -835,10 +985,11 @@ mod tests {
 
         // nothing is removed by planning
         assert!(d.path().join("a/one.bin").exists() && d.path().join("x/y/z").exists());
-        assert_eq!(
-            delete_permanently(&ep.paths, &[d.path().to_path_buf()]).unwrap(),
-            1
-        );
+        // the file deleter never removes a folder that is not empty (no recursive fallback)
+        assert!(delete_permanently(&ep.paths, &[d.path().to_path_buf()]).is_err());
+        assert!(d.path().join("x/y/z").exists());
+        let gone = delete_empty_permanently(&ep.paths, &[d.path().to_path_buf()], &f).unwrap();
+        assert_eq!((gone.removed, gone.skipped.len()), (3, 0));
         assert!(!d.path().join("x").exists());
         // a plan pointing outside the selected folders is refused
         let other = tempfile::tempdir().unwrap();

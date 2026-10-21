@@ -267,6 +267,7 @@
  "msg.emptyFile": "This file is empty.",
  "msg.emptyFound": "Found {0} empty folders.",
  "msg.emptyRecycled": "Moved {0} to the Trash.",
+ "msg.emptySkipped": "Not removed because it is no longer empty: {0}",
  "msg.ffmpegFailed": "ffmpeg failed.",
  "msg.ffmpegMissing": "ffmpeg was not found. Install it with: brew install ffmpeg",
  "msg.fileTooLarge": "The file is too large to process.",

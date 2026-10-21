@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed (data loss): **Remove Duplicate** could offer a file as a duplicate of itself when the selection contained a folder and a folder inside it (or the same folder twice, or the same folder under another spelling such as `/var/…` and `/private/var/…`), so confirming removed the only copy. Each file is now scanned once; hard links (two names for one file) count as one file and are never offered as a pair. The preview and the real run refuse any group that names one file twice.
+- Fixed (data loss): **Remove Empty** treated a folder as empty when its only content was in an excluded subfolder (for example `node_modules`), and permanent mode then deleted the whole tree. Excluded and unreadable folders now count as content, only OS litter (`.DS_Store`, `._*`, `.localized`, `Icon\r`, `desktop.ini`, `Thumbs.db`, and 0-byte files only if you switched that on) is ignored, and every folder is checked again right before it is moved to the Trash or deleted. Permanent mode deletes the litter files one by one and then removes each folder only if it is empty; it never deletes a folder recursively. A folder that is no longer empty is left alone and reported (`msg.emptySkipped`).
 
 ## 0.2.0 - share safely, presets, command line
 

@@ -259,6 +259,7 @@
  "msg.emptyFile": "このファイルは空です。",
  "msg.emptyFound": "空フォルダが {0} 件見つかりました。",
  "msg.emptyRecycled": "{0} をゴミ箱へ移動しました。",
+ "msg.emptySkipped": "空ではなくなったため削除しませんでした: {0}",
  "msg.ffmpegFailed": "ffmpeg の実行に失敗しました。",
  "msg.ffmpegMissing": "ffmpeg が見つかりません。brew install ffmpeg で導入してください。",
  "msg.fileTooLarge": "ファイルが大きすぎて処理できません。",
