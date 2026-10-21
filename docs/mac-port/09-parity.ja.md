@@ -31,7 +31,7 @@
 - `image.chromakey` は色キー方式のみ（旧 `ChromaKeyOnly` モード）。AI 背景除去（rembg）は未実装で、設定が AI モードでも色キーで動く。
 - 画像のリサイズ・変換などでは**元ファイルのメタデータ（EXIF/ICC）は出力に引き継がれない**（再エンコードのため）。EXIF の向きは画素に反映する。旧版（ImageMagick）はプロファイルを保持していた。意図的な差分。
 - 旧版との挙動差は他に: 動画の `-threads` 段階的縮退は「既定→4→1」に簡略化、プロセス優先度は `nice -n 5`。
-- `pdf.merge` は実機確認の結果、アプリ側（PDFKit）の実装に切り替えた。Rust エンジンの `pdf.merge` は残っているが、アプリからは呼ばれない。
+- `pdf.merge` は実機確認の結果、アプリ側（PDFKit）の実装に切り替えた。Rust エンジンの `pdf.merge`（と依存の `lopdf`）は、使われなくなったため削除した。
 - 字幕は ffmpeg の `whisper` フィルタ（whisper.cpp）で生成する。Python 不要。この Mac の `ffmpeg`（Homebrew の `ffmpeg-full` 9.0.2）では `ffmpeg -filters` に `whisper` がある。標準の `ffmpeg` に入っているかは未確認。モデルは `scripts/fetch-whisper-model.sh` で入れる（SHA-256 固定、エンジンは固定ハッシュ以外を使わない）。Linux の CI には whisper 付き ffmpeg がないため、実際の文字起こしは Mac でのみ確認できる。
 - AI 背景除去（rembg）は引き続き未実装（設定が AI モードでも色キーで動く）。
 - `image.chromakey`（背景を削除）は、設定が AI のとき Swift アプリが Vision（`VNGenerateForegroundInstanceMaskRequest`、macOS 14+）で前景を切り出し、`名前_nobg.png` を出力する。AI が失敗した画像は、設定が「AI + 失敗時は色キー」ならエンジンの色キーに切り替わる。「色キーのみ」はエンジンが処理する。Mac でのみ確認できる。

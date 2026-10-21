@@ -121,9 +121,6 @@ fn carry_out(
 
 pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
     let (name, params) = parse_task(task);
-    if name == "pdf.merge" {
-        return merge_pdfs(paths, ctx);
-    }
     let roots = folders(paths);
     if roots.is_empty() {
         return fail(ctx, "msg.notAFolder", String::new());
@@ -304,39 +301,6 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
             }
         }
         _ => fail(ctx, "task.unimplemented", task.to_owned()),
-    }
-}
-
-fn merge_pdfs(paths: &[String], ctx: &Ctx<'_>) {
-    if paths.len() < 2 {
-        return fail(ctx, "msg.pdfNeedTwo", String::new());
-    }
-    let list: Vec<&Path> = paths.iter().map(Path::new).collect();
-    (ctx.emit)(Event::Status {
-        key: "msg.merging".into(),
-        args: vec![],
-    });
-    if (ctx.cancelled)() {
-        return cancelled(ctx);
-    }
-    let bytes = match crate::pdf::merge(&list) {
-        Ok(b) => b,
-        Err(e) => return fail(ctx, e.key(), String::new()),
-    };
-    match tasks::write_result(list[0], "_merged", Some("pdf"), &bytes) {
-        Ok(out) => {
-            let name = out
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            done(
-                ctx,
-                Outcome::Succeeded,
-                Some("msg.mergedInto"),
-                vec![paths.len().to_string(), name],
-            );
-        }
-        Err(e) => fail(ctx, e.key(), String::new()),
     }
 }
 
@@ -527,64 +491,6 @@ mod tests {
         assert_eq!(
             find(&run("folder.tree", &[&file], &s), "error").unwrap()["key"],
             "msg.notAFolder"
-        );
-    }
-
-    #[test]
-    fn pdf_merge_end_to_end() {
-        let d = tempfile::tempdir().unwrap();
-        let mk = |name: &str, text: &str| {
-            use lopdf::{dictionary, Document, Object, Stream};
-            let mut doc = Document::with_version("1.5");
-            let pages = doc.new_object_id();
-            let content = doc.add_object(Stream::new(
-                dictionary! {},
-                format!("BT ({text}) Tj ET").into_bytes(),
-            ));
-            let page = doc.add_object(dictionary! {"Type" => "Page", "Parent" => pages, "Contents" => content, "MediaBox" => vec![0.into(), 0.into(), 10.into(), 10.into()]});
-            doc.objects.insert(
-                pages,
-                Object::Dictionary(
-                    dictionary! {"Type" => "Pages", "Count" => 1, "Kids" => vec![page.into()]},
-                ),
-            );
-            let cat = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
-            doc.trailer.set("Root", cat);
-            let p = d.path().join(name);
-            doc.save(&p).unwrap();
-            p
-        };
-        let (a, b) = (mk("a.pdf", "first"), mk("b.pdf", "second"));
-        let s = Settings::default();
-        let ev = run("pdf.merge", &[&b, &a], &s);
-        let done = find(&ev, "done").unwrap();
-        assert_eq!(
-            (
-                done["outcome"].as_str(),
-                done["summary_key"].as_str(),
-                done["summary_args"][1].as_str()
-            ),
-            (
-                Some("succeeded"),
-                Some("msg.mergedInto"),
-                Some("b_merged.pdf")
-            )
-        );
-        assert!(d.path().join("b_merged.pdf").exists());
-        assert_eq!(
-            find(&run("pdf.merge", &[&a], &s), "error").unwrap()["key"],
-            "msg.pdfNeedTwo"
-        );
-        let junk = d.path().join("junk.pdf");
-        fs::write(&junk, "nope").unwrap();
-        assert_eq!(
-            find(&run("pdf.merge", &[&a, &junk], &s), "error").unwrap()["key"],
-            "msg.pdfInvalid"
-        );
-        assert_eq!(
-            fs::read_dir(d.path()).unwrap().count(),
-            4,
-            "failures leave no output behind"
         );
     }
 

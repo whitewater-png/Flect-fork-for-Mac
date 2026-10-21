@@ -24,7 +24,6 @@ fast_image_resize = "5"
 png = "0.17"
 color_quant = "1"
 base64 = "0.22"
-lopdf = { version = "0.45.0", default-features = false }
 sha2 = "0.11.1"
 
 [dev-dependencies]
