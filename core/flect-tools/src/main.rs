@@ -142,10 +142,17 @@ fn uuid_for(seed: &str, salt: u64) -> String {
     )
 }
 
+/// Written into every generated script. The app (`QuickActionInstaller.workflowFormatMarker`) looks for exactly this
+/// text to tell Quick Actions installed by an older version, which must be installed again. Bump the number whenever
+/// the contract between the script and the app changes.
+pub const FORMAT_MARKER: &str = "flect-quick-action-format=2";
+
 pub fn script_for(task: &str, app: &str) -> String {
     // task/app are validated tokens, so quoting them is enough.
+    // Each path is followed by a NUL byte: a file name can contain a line break but never NUL, so the app splits on
+    // NUL only and a name like "x\n/Users/me" stays one path.
     format!(
-        "f=\"$(mktemp -t flect-sel)\" || exit 1\nchmod 600 \"$f\"\nfor p in \"$@\"; do printf '%s\\n' \"$p\" >> \"$f\"; done\nopen -n -a \"{app}\" --args --task \"{task}\" --input \"$f\"\n"
+        "# {FORMAT_MARKER} (selection: one NUL-terminated path per item)\nf=\"$(mktemp -t flect-sel)\" || exit 1\nchmod 600 \"$f\"\nfor p in \"$@\"; do printf '%s\\0' \"$p\" >> \"$f\"; done\nopen -n -a \"{app}\" --args --task \"{task}\" --input \"$f\"\n"
     )
 }
 
@@ -332,6 +339,31 @@ mod tests {
             .all(|a| valid_token(&a.task) && !a.utis.is_empty()));
     }
 
+    /// The app accepts from launch arguments only plain catalog ids (`[A-Za-z0-9.]`, no `?` parameters), and its
+    /// tests check every id in `app/Tests/quick-action-tasks.txt`: the generated actions must pass exactly those.
+    #[test]
+    fn tasks_are_plain_catalog_ids_listed_for_the_app_tests() {
+        let tasks: Vec<String> = actions().into_iter().map(|a| a.task).collect();
+        for t in &tasks {
+            assert!(
+                t.contains('.')
+                    && !t.starts_with('.')
+                    && !t.ends_with('.')
+                    && t.len() <= 64
+                    && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '.'),
+                "{t:?} is not a plain catalog id"
+            );
+        }
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/Tests/quick-action-tasks.txt");
+        let listed: Vec<String> = fs::read_to_string(&fixture)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(tasks, listed, "update {}", fixture.display());
+    }
+
     #[test]
     fn video_actions_also_match_mkv_where_macos_gives_it_a_dynamic_type() {
         let a = actions()
@@ -380,6 +412,13 @@ mod tests {
                 && script.contains("open -n -a \"Flect-for-Mac\"")
         );
         assert!(script.contains(">> \"$f\"") && script.contains("chmod 600"));
+        // the XML escaping round-trips to exactly the generated script
+        assert_eq!(script, script_for("text.convert", "Flect-for-Mac"));
+        // NUL-separated selection, and the marker the app checks to spot outdated Quick Actions
+        assert!(script.contains("printf '%s\\0' \"$p\""));
+        assert!(!script.contains("printf '%s\\n'"));
+        assert!(script.contains(FORMAT_MARKER));
+        assert!(document_wflow(&a, "Flect-for-Mac").contains(FORMAT_MARKER));
         let meta = d["workflowMetaData"].as_dictionary().unwrap();
         assert_eq!(
             meta["workflowTypeIdentifier"].as_string(),
@@ -389,6 +428,79 @@ mod tests {
             meta["serviceApplicationBundleID"].as_string(),
             Some("com.apple.finder")
         );
+    }
+
+    /// Runs the generated script with bash, with `mktemp` and `open` replaced by shell functions (so it runs the same
+    /// on Linux CI and opens nothing), and checks the bytes of the selection file it hands to the app.
+    #[cfg(unix)]
+    #[test]
+    fn script_writes_each_path_nul_terminated_byte_for_byte() {
+        use std::process::Command;
+        let Ok(bash) = which_bash() else {
+            eprintln!("no bash; skipped");
+            return;
+        };
+        let d = tempfile::tempdir().unwrap();
+        let sel = d.path().join("flect-sel.TEST000001");
+        let got = d.path().join("got");
+        let prelude = format!(
+            "mktemp() {{ : > '{sel}'; printf '%s\\n' '{sel}'; }}\nopen() {{ shift 7; printf '%s' \"$1\" > '{got}'; }}\n",
+            sel = sel.display(),
+            got = got.display()
+        );
+        let script = format!("{prelude}{}", script_for("image.strip", "Flect-for-Mac"));
+        let names = [
+            "/Users/me/a b.png",
+            "/Users/me/x\n/Users/me",
+            "/Users/me/cr\rlf\r\n.png",
+            "/Users/me/\u{2028}ls\u{85}nel.png",
+            " /Users/me/leading space ",
+            "/Users/me/-n",
+            "/Users/me/%s\\0.png",
+        ];
+        let st = Command::new(&bash)
+            .arg("-c")
+            .arg(&script)
+            .arg("flect")
+            .args(names)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        // `open` received `--input <the selection file>`
+        assert_eq!(fs::read_to_string(&got).unwrap(), sel.display().to_string());
+        let mut want = Vec::new();
+        for n in names {
+            want.extend_from_slice(n.as_bytes());
+            want.push(0);
+        }
+        assert_eq!(fs::read(&sel).unwrap(), want);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&sel).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        // No selection at all: an empty file (the app answers "nothing selected").
+        fs::remove_file(&sel).unwrap();
+        let st = Command::new(&bash)
+            .arg("-c")
+            .arg(&script)
+            .arg("flect")
+            .status()
+            .unwrap();
+        assert!(st.success());
+        assert_eq!(fs::read(&sel).unwrap(), Vec::<u8>::new());
+    }
+
+    #[cfg(unix)]
+    fn which_bash() -> Result<PathBuf, ()> {
+        ["/bin/bash", "/usr/bin/bash"]
+            .iter()
+            .map(PathBuf::from)
+            .find(|p| p.is_file())
+            .ok_or(())
     }
 
     #[test]

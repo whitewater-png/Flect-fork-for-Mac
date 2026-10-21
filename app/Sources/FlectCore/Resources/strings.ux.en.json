@@ -2,6 +2,10 @@
  "ux.history.empty": "No runs that created files yet.",
  "ux.history.pick": "Select a run to see what it created.",
  "ux.history.title": "Recent runs",
+ "ux.launch.missing": "Flect did not start: a selected item no longer exists ({0}). Nothing was changed.",
+ "ux.launch.reinstall": "Flect did not start: this Quick Action was installed by an older version of Flect and passes the selection in a format that is no longer accepted (a file name with a line break could add an item you did not select). Nothing was changed. Open Flect, go to the “Getting started” tab and click “Install again”, then run the Quick Action again.",
+ "ux.launch.rejectedTask": "Flect did not start: it was asked to run a task that is not one of its own Quick Actions. Nothing was changed. Start Flect from a Flect Quick Action in Finder, or drop the items on the Flect icon and pick the task there.",
+ "ux.launch.untrustedInput": "Flect did not start: the list of selected items was not one a Flect Quick Action made, so it was neither read nor deleted. Run the Quick Action again from Finder.",
  "ux.menu.file": "File",
  "ux.menu.history": "Recent Runs…",
  "ux.menu.open": "Open…",
@@ -76,5 +80,8 @@
  "ux.results.undo": "Undo (move outputs to the Trash)",
  "ux.results.undone": "Moved {0} to the Trash, left {1} alone.",
  "ux.results.untracked": "{0} other outputs were not tracked, so they cannot be undone here.",
- "ux.results.untracked.one": "1 other output was not tracked, so it cannot be undone here."
+ "ux.results.untracked.one": "1 other output was not tracked, so it cannot be undone here.",
+ "ux.setup.outdated": "{0} Flect Quick Actions are from an older version and no longer work. Click “Install again” to update them.",
+ "ux.setup.outdated.one": "1 Flect Quick Action is from an older version and no longer works. Click “Install again” to update it.",
+ "ux.setup.outdatedBanner": "The installed Quick Actions are from an older version of Flect. Open the “Getting started” tab and click “Install again”."
 }

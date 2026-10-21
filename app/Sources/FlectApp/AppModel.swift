@@ -107,17 +107,40 @@ final class AppModel: ObservableObject {
         startedInSettings = !arguments.contains("--task")
         guard arguments.contains("--task") else { screen = .settings; return }
         switch LaunchRequest.parse(arguments: arguments) {
+        case .failure(.untrustedInput):
+            screen = .message(loc.t("ux.launch.untrustedInput"))
+        case .failure(.outdatedQuickAction):
+            screen = .message(loc.t("ux.launch.reinstall"))
+        case .failure(.missing(let path)):
+            screen = .message(loc.f("ux.launch.missing", [path]))
         case .failure:
             screen = .message(loc.t("app.noTask"))
         case .success(let req):
             paths = req.paths
-            handle(task: req.task)
+            handleLaunch(task: req.task)
         }
     }
 
+    /// `--task` from the launch arguments: only `preset:<UUID>` or an id of the engine's menu (what the generated
+    /// Quick Actions pass). Parameters such as `folder.removeDuplicate?mode=all` are refused, never run.
+    private func handleLaunch(task: String) {
+        if LaunchRequest.presetID(task) != nil { runPreset(ref: task); return }
+        guard PickerRef.isCatalogID(task) else { screen = .message(loc.t("ux.launch.rejectedTask")); return }
+        guard let engine = engine else { screen = .message(loc.t("app.engineMissing")); return }
+        Task {
+            if catalog == nil, let m = await engine.fetchMenu() { catalog = MenuCatalog(menu: m) }
+            guard let catalog = catalog else { screen = .message(loc.t("app.engineMissing")); return }
+            guard case .catalog(let id)? = LaunchRequest.launchTask(task, catalog: catalog) else {
+                screen = .message(loc.t("ux.launch.rejectedTask"))
+                return
+            }
+            handle(task: id)
+        }
+    }
+
+    /// A catalog id chosen in the app (chooser, action picker, pinned item, "Run again") or admitted by `handleLaunch`.
     func handle(task: String) {
-        if task.hasPrefix("preset:") { runPreset(ref: task); return } // `--task preset:<UUID>` from a Quick Action
-        switch Planner.resolve(task, settings: settings) {
+        switch Planner.resolveCatalogID(task, settings: settings) {
         case .engine(let t): runEngine(t, paths: paths)
         case .choose(let group): chooseFrom(group)
         case .dialog(let d): screen = .dialog(d)

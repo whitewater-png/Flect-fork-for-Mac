@@ -31,19 +31,20 @@ final class CoreTests: XCTestCase {
 
     func testLaunchRequest() throws {
         let dir = tmp()
-        let file = dir.appendingPathComponent("sel.txt")
-        try "\u{FEFF}/Users/a/写真 1.png\r\n/Users/a/b.png\n\n".write(to: file, atomically: true, encoding: .utf8)
+        let a = dir.appendingPathComponent("写真 1.png").path, b = dir.appendingPathComponent("b.png").path
+        for p in [a, b] { FileManager.default.createFile(atPath: p, contents: Data()) }
+        let file = try makeSelectionFile("\(a)\0\(b)\0")
         let r = LaunchRequest.parse(arguments: ["--task", "image.ocr", "--input", file.path])
-        XCTAssertEqual(try r.get(), LaunchRequest(task: "image.ocr", paths: ["/Users/a/写真 1.png", "/Users/a/b.png"]))
+        XCTAssertEqual(try r.get(), LaunchRequest(task: "image.ocr", paths: [a, b]))
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "the selection file is deleted after reading")
 
-        let bad = dir.appendingPathComponent("bad.txt")
-        try "relative/path.png\n".write(to: bad, atomically: true, encoding: .utf8)
+        let bad = try makeSelectionFile("relative/path.png\0")
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", bad.path]), .failure(.badPath("relative/path.png")))
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x"]), .failure(.missingArguments))
-        XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", "/nonexistent/file"]), .failure(.unreadable))
-        let empty = dir.appendingPathComponent("empty.txt")
-        try "\n \n".write(to: empty, atomically: true, encoding: .utf8)
+        XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", "/nonexistent/file"]), .failure(.untrustedInput))
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("flect-sel.missing0000")
+        XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", missing.path]), .failure(.unreadable))
+        let empty = try makeSelectionFile("")
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", empty.path]), .failure(.empty))
     }
 
