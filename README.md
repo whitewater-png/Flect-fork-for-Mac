@@ -25,7 +25,7 @@ Subtitles (speech to SRT/VTT/TXT) use the `whisper` filter of a whisper-enabled 
 
 - macOS 14 or later, Apple Silicon
 - Xcode Command Line Tools (Swift 5.9+), [Rust](https://rustup.rs)
-- `brew install ffmpeg-full sevenzip` (video/audio and 7z; optional `openjdk` for JAR decompilation)
+- `scripts/setup-deps.sh` checks for the tools Flect calls but does not bundle (ffmpeg-full, 7-Zip, optional Java/CFR and a subtitle model) and installs them with Homebrew after asking; `--check` only reports. The app lists what is missing under **Required tools** in its settings, with a command to copy. Or by hand: `brew install ffmpeg-full sevenzip`
 
 ## Download (ad-hoc signed build)
 
