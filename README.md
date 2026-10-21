@@ -59,6 +59,10 @@ macOS leaves new Quick Actions **off**, so they do not show up until you turn th
 
 Then right-click a file in Finder → **Quick Actions** → Flect. Open the app itself to change settings.
 
+## Reporting problems
+
+Bugs and questions: open an issue (**Issues** tab) with your macOS version, the Flect version (Finder → Get Info on the app), what you did and what happened. Please do not attach files you would not want to be public. Security problems: report them privately, see [SECURITY.md](SECURITY.md).
+
 ## Security design
 
 - The Swift app does the UI and OS work; all file processing runs in a separate Rust process (`flect-engine`, `#![forbid(unsafe_code)]`) that talks JSON Lines over stdio. One process per run.
