@@ -79,8 +79,9 @@ fn folders(paths: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The selected items (files and folders, links not followed) by (device, inode), and the same
-/// plus every folder that holds one of them. Neither deleting task ever removes a selected item,
+/// The selected items (files and folders; for a link both the link and its target) by (device,
+/// inode), and the same plus every folder that holds one of them (along the spelled and the
+/// resolved path). Neither deleting task ever removes a selected item,
 /// or a folder that holds one, in either Trash or permanent mode.
 type IdSet = std::collections::HashSet<(u64, u64)>;
 
@@ -93,6 +94,10 @@ fn selected_ids(paths: &[String]) -> (IdSet, IdSet) {
     for p in paths {
         let p = Path::new(p);
         if let Ok(m) = std::fs::symlink_metadata(p) {
+            items.insert((m.dev(), m.ino()));
+        }
+        // A selected link stands for what it points to as well: both are protected.
+        if let Ok(m) = std::fs::metadata(p) {
             items.insert((m.dev(), m.ino()));
         }
         for spelled in [Some(p.to_path_buf()), std::fs::canonicalize(p).ok()]
@@ -1323,6 +1328,49 @@ mod tests {
             assert_eq!(kept[d.path.as_path()].path, groups[i][0].path);
         }
         assert!(kept_copies(&groups, &doomed, DuplicateMode::DeleteAll).is_empty());
+    }
+
+    /// A selected link to a file or folder inside a selected folder protects its target too: with
+    /// D plus `Lnk -> D/chosen.txt` selected, chosen.txt was removed.
+    #[test]
+    fn a_selected_link_protects_its_target() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        for settings in [&Settings::default(), &perm] {
+            let top = tempfile::tempdir().unwrap();
+            let d = top.path().join("D");
+            fs::create_dir_all(d.join("E")).unwrap();
+            fs::write(d.join("copy.txt"), "same").unwrap();
+            fs::write(d.join("chosen.txt"), "same").unwrap();
+            let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+            fs::File::options()
+                .write(true)
+                .open(d.join("copy.txt"))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            let (lf, ld) = (top.path().join("Lnk"), top.path().join("LnkE"));
+            std::os::unix::fs::symlink(d.join("chosen.txt"), &lf).unwrap();
+            std::os::unix::fs::symlink(d.join("E"), &ld).unwrap();
+            for mode in ["oldest", "all"] {
+                let ev = run(
+                    &format!("folder.removeDuplicate?mode={mode}"),
+                    &[&d, &lf],
+                    settings,
+                );
+                assert!(d.join("chosen.txt").exists(), "{mode}: {ev:?}");
+                if let Some(n) = find(&ev, "needs") {
+                    assert!(
+                        !n["paths"].to_string().contains("chosen.txt"),
+                        "{mode}: {ev:?}"
+                    );
+                }
+            }
+            let listed = run("folder.removeEmpty", &[&d, &ld], settings);
+            assert!(find(&listed, "data").is_none(), "{listed:?}");
+            run("folder.removeEmpty?confirm=1", &[&d, &ld], settings);
+            assert!(d.join("E").is_dir());
+        }
     }
 
     /// The plan is looked at again right before it is carried out.
