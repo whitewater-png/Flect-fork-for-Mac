@@ -8,11 +8,13 @@ pub const USAGE: &str = "\
 Usage:
   flect list [--json]
   flect run <task> [--option key=value ...] [--json-options '{...}'] [--json] <paths...>
+  flect run --preset <name> [--json] <paths...>
   flect settings path
   flect --help | --version
 
 Tasks come from `flect list`. Options are passed to the task like the app does,
-e.g. `flect run image.resize -o scale=50 photo.png`.
+e.g. `flect run image.resize -o scale=50 photo.png`. `--preset` runs a preset saved in
+the app (its name, or its id), e.g. `flect run --preset \"SNS 1080px / 2MB\" photo.png`.
 Exit status: 0 success, 1 failed, 2 usage error, 130 cancelled (Ctrl-C).";
 
 #[derive(Debug, PartialEq)]
@@ -27,7 +29,10 @@ pub enum Command {
 #[derive(Debug, PartialEq)]
 pub struct RunArgs {
     /// Task id plus its encoded query, as the engine's `run.task` expects (`ID?k=v&k=v`).
+    /// Empty when `preset` is set.
     pub task: String,
+    /// `--preset NAME`: a preset from `presets.json` instead of a task.
+    pub preset: Option<String>,
     /// Absolute paths, in the order given (order matters for `pdf.merge`).
     pub paths: Vec<String>,
     pub json: bool,
@@ -73,6 +78,7 @@ fn parse_run<'a>(
     let mut json = false;
     let mut options: Vec<(String, String)> = vec![];
     let mut positional: Vec<&str> = vec![];
+    let mut preset: Option<String> = None;
     while let Some(a) = it.next() {
         match a {
             "--" => {
@@ -80,6 +86,8 @@ fn parse_run<'a>(
                 break;
             }
             "--json" => json = true,
+            "--preset" => preset = Some(it.next().ok_or("--preset needs a name")?.to_owned()),
+            _ if a.starts_with("--preset=") => preset = Some(a["--preset=".len()..].to_owned()),
             "-o" | "--option" => {
                 let v = it.next().ok_or("--option needs key=value")?;
                 options.push(parse_option(v)?);
@@ -96,6 +104,27 @@ fn parse_run<'a>(
             _ => positional.push(a),
         }
     }
+    if let Some(name) = preset {
+        if name.is_empty() {
+            return Err("--preset needs a name".into());
+        }
+        if !options.is_empty() {
+            return Err("--preset cannot be combined with --option / --json-options".into());
+        }
+        let paths: Vec<String> = positional
+            .into_iter()
+            .map(|p| absolute(p, cwd))
+            .collect::<Result<_, _>>()?;
+        if paths.is_empty() {
+            return Err("missing path(s)".into());
+        }
+        return Ok(Command::Run(RunArgs {
+            task: String::new(),
+            preset: Some(name),
+            paths,
+            json,
+        }));
+    }
     let mut positional = positional.into_iter();
     let task = positional.next().ok_or("missing task (see `flect list`)")?;
     let paths: Vec<String> = positional
@@ -106,6 +135,7 @@ fn parse_run<'a>(
     }
     Ok(Command::Run(RunArgs {
         task: build_task(task, &options)?,
+        preset: None,
         paths,
         json,
     }))
@@ -261,6 +291,26 @@ mod tests {
             panic!()
         };
         assert_eq!(r.paths, ["/work/-weird.txt"]);
+    }
+
+    #[test]
+    fn preset_takes_only_paths() {
+        let Ok(Command::Run(r)) = p(&["run", "--preset", "SNS 1080px / 2MB", "a.png", "/b.png"])
+        else {
+            panic!()
+        };
+        assert_eq!(r.preset.as_deref(), Some("SNS 1080px / 2MB"));
+        assert_eq!(r.paths, ["/work/a.png", "/b.png"]);
+        assert!(r.task.is_empty());
+        let Ok(Command::Run(r)) = p(&["run", "--json", "--preset=web", "--", "-x.png"]) else {
+            panic!()
+        };
+        assert_eq!((r.preset.as_deref(), r.json), (Some("web"), true));
+        assert_eq!(r.paths, ["/work/-x.png"]);
+        assert!(p(&["run", "--preset"]).is_err());
+        assert!(p(&["run", "--preset=", "a"]).is_err());
+        assert!(p(&["run", "--preset", "web"]).is_err());
+        assert!(p(&["run", "--preset", "web", "-o", "scale=5", "a"]).is_err());
     }
 
     #[test]

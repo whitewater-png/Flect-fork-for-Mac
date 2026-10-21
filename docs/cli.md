@@ -23,6 +23,7 @@ From a source checkout: `cd core && cargo build --release`, then use
 ```
 flect list [--json]
 flect run <task> [-o key=value ...] [--json-options '{...}'] [--json] <paths...>
+flect run --preset <name> [--json] <paths...>
 flect settings path
 ```
 
@@ -35,6 +36,11 @@ flect settings path
   `flect run text.lineEndings -o to=CRLF notes.txt`. `--json-options '{"scale":50}'` does the
   same from a flat JSON object (booleans become `1`/`0`). See the protocol document for each
   task's parameters. Use `--` before paths that start with `-`.
+- `flect run --preset NAME` runs a preset saved in the app (Settings > Presets): the exact name,
+  or the preset's id. A preset with several steps runs as one pipeline: intermediate files stay
+  in a private folder under `$TMPDIR` that is removed afterwards, and only the final file is
+  written next to each original. `presets.json` is only read (and checked strictly); a missing,
+  invalid or newer-version file is an error (exit 1) and is left as it is.
 - `flect settings path` prints the settings file (`FLECT_HOME` overrides the data folder).
 
 Results are written next to the originals under new names; existing files are never overwritten.

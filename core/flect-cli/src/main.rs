@@ -185,12 +185,41 @@ fn fail(message: &str) -> i32 {
     EXIT_FAILED
 }
 
+/// The request for `--preset NAME`: `run` for one step, `pipeline` for more. The app writes
+/// `presets.json`; here it is only read, through the same strict checks the engine applies.
+fn preset_request(name: &str, paths: &[String]) -> Result<Value, String> {
+    use flect_core::presets::{self, PresetError};
+    let dir = flect_core::locations::data_dir()
+        .ok_or("cannot determine the data folder (HOME is not set)")?;
+    let all = match presets::load(&dir) {
+        Ok(p) => p,
+        Err(PresetError::Missing) => {
+            return Err(
+                "no presets have been saved yet (create them in the app's Presets tab)".into(),
+            )
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let preset = presets::find(&all, name).ok_or_else(|| format!("no preset named {name:?}"))?;
+    Ok(match preset.steps.as_slice() {
+        [one] => json!({"op": "run", "task": one, "paths": paths}),
+        steps => json!({"op": "pipeline", "steps": steps, "paths": paths}),
+    })
+}
+
 fn run(a: RunArgs) -> i32 {
+    let request = match &a.preset {
+        Some(name) => match preset_request(name, &a.paths) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        },
+        None => json!({"op": "run", "task": a.task, "paths": a.paths}),
+    };
     let mut engine = match Engine::spawn() {
         Ok(e) => e,
         Err(e) => return fail(&e),
     };
-    if !engine.send(&json!({"op": "run", "task": a.task, "paths": a.paths})) {
+    if !engine.send(&request) {
         return fail("flect-engine closed its input");
     }
     let (mut signals, mut stdout_ok) = (0u32, true);

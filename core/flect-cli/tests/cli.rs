@@ -203,6 +203,82 @@ fn list_shows_runnable_tasks() {
         .any(|t| t["id"] == "image.resize"));
 }
 
+const PRESETS: &str = r#"{"version":1,"presets":[
+  {"id":"6F1C2A8E-0B7D-4C1E-9A55-3D2B1C0E9F11","name":"Unix UTF-16","steps":["text.lineEndings?to=LF","text.encode?to=UTF16"]},
+  {"id":"0E4C7A1B-9D3E-4F2A-8B6C-5A4D3C2B1A00","name":"CRLF","steps":["text.lineEndings?to=CRLF"]}
+]}"#;
+
+#[test]
+fn preset_runs_its_steps_and_writes_only_the_final_file() {
+    let (home, work, tmp) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    fs::write(home.path().join("presets.json"), PRESETS).unwrap();
+    let src = work.path().join("n.txt");
+    fs::write(&src, "a\r\nb\r\n").unwrap();
+    let out = flect(home.path())
+        .env("TMPDIR", tmp.path())
+        .args(["run", "--preset", "Unix UTF-16", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(names(work.path()), ["n.txt", "n_lf_utf16.txt"]);
+    assert_eq!(fs::read(&src).unwrap(), b"a\r\nb\r\n");
+    assert!(names(tmp.path()).is_empty(), "work folder left behind");
+    // one step: an ordinary run; the id works as well as the name
+    let out = run(
+        home.path(),
+        &[
+            "run",
+            "--preset",
+            "0e4c7a1b-9d3e-4f2a-8b6c-5a4d3c2b1a00",
+            src.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(work.path().join("n_crlf.txt").exists());
+    // the presets file is only read, never rewritten
+    assert_eq!(
+        fs::read_to_string(home.path().join("presets.json")).unwrap(),
+        PRESETS
+    );
+}
+
+#[test]
+fn unknown_missing_or_invalid_presets_fail_without_touching_anything() {
+    let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let src = work.path().join("n.txt");
+    fs::write(&src, "a\n").unwrap();
+    let arg = src.to_str().unwrap();
+    let out = run(home.path(), &["run", "--preset", "CRLF", arg]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("no presets"),
+        "{}",
+        text(&out.stderr)
+    );
+    fs::write(home.path().join("presets.json"), PRESETS).unwrap();
+    let out = run(home.path(), &["run", "--preset", "crlf", arg]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(text(&out.stderr).contains("no preset named"));
+    let hostile = r#"{"version":1,"presets":[{"id":"6F1C2A8E-0B7D-4C1E-9A55-3D2B1C0E9F11","name":"x","steps":["folder.removeDuplicate?mode=all"]}]}"#;
+    fs::write(home.path().join("presets.json"), hostile).unwrap();
+    let out = run(home.path(), &["run", "--preset", "x", arg]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("invalid"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(home.path().join("presets.json")).unwrap(),
+        hostile
+    );
+    assert_eq!(names(work.path()), ["n.txt"]);
+}
+
 #[test]
 fn settings_path_matches_the_store() {
     let home = tempfile::tempdir().unwrap();
