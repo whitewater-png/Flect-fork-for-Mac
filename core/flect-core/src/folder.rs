@@ -546,6 +546,21 @@ fn confirm(
     Ok(sets.into_iter().filter(|s| s.len() > 1).collect())
 }
 
+/// OS bookkeeping files that belong to another file or folder, never duplicates of anything:
+/// AppleDouble `._*` (on FAT, exFAT and SMB they hold the extended attributes and resource fork of
+/// the file next to them), `.DS_Store`, `.localized`, `Icon\r`, `desktop.ini`, `Thumbs.db`.
+pub fn is_os_litter(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    name.starts_with("._")
+        || name == "Icon\r"
+        || matches!(
+            lower.as_str(),
+            ".ds_store" | ".localized" | "desktop.ini" | "thumbs.db"
+        )
+}
+
+/// Groups of identical files. OS litter ([`is_os_litter`]) is never considered: removing an
+/// AppleDouble file as a "duplicate" strips its owner's metadata.
 pub fn find_duplicates(
     files: &[ScannedFile],
     s: &DuplicateSettings,
@@ -553,6 +568,11 @@ pub fn find_duplicates(
 ) -> Result<Vec<Vec<ScannedFile>>, Cancelled> {
     let eligible: Vec<&ScannedFile> = files
         .iter()
+        .filter(|f| {
+            !f.path
+                .file_name()
+                .is_some_and(|n| is_os_litter(&n.to_string_lossy()))
+        })
         .filter(|f| !(s.ignore_empty_files && f.size == 0))
         .filter(|f| f.size as i64 >= s.minimum_bytes)
         .collect();
@@ -1281,6 +1301,57 @@ mod tests {
         let (held, changed) = unchanged_groups(groups);
         assert!(held.is_empty());
         assert_eq!(changed, [r.join("k")]);
+    }
+
+    /// AppleDouble files of identical files are identical too; removing one strips its owner's
+    /// extended attributes / resource fork (FAT, exFAT, SMB).
+    #[test]
+    fn os_litter_is_never_a_duplicate() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        for dir in ["a", "b"] {
+            write(&r.join(dir).join("photo.jpg"), b"same picture");
+            write(&r.join(dir).join("._photo.jpg"), b"same appledouble");
+            for n in [
+                ".DS_Store",
+                ".localized",
+                "Icon\r",
+                "desktop.ini",
+                "Thumbs.db",
+                "._other",
+            ] {
+                write(&r.join(dir).join(n), b"same litter");
+            }
+        }
+        let s = scan(
+            &[r.to_path_buf()],
+            &ExclusionFilter::default(),
+            &EmptyFolderSettings::default(),
+            &NullProgress,
+        )
+        .unwrap();
+        for strictness in [
+            DuplicateStrictness::SizeOnly,
+            DuplicateStrictness::HeadHash,
+            DuplicateSettings::default().strictness,
+        ] {
+            let settings = DuplicateSettings {
+                strictness,
+                ..Default::default()
+            };
+            let groups = find_duplicates(&s.files, &settings, &NullProgress).unwrap();
+            let names: Vec<Vec<String>> = groups
+                .iter()
+                .map(|g| {
+                    g.iter()
+                        .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .collect();
+            assert_eq!(names, [["photo.jpg", "photo.jpg"]], "{strictness:?}");
+        }
+        assert!(is_os_litter("._x") && is_os_litter(".ds_store") && is_os_litter("THUMBS.DB"));
+        assert!(!is_os_litter("_x") && !is_os_litter("Icon") && !is_os_litter("notes.txt"));
     }
 
     #[test]
