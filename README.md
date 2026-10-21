@@ -27,6 +27,19 @@ Subtitles (speech to SRT/VTT/TXT) use the `whisper` filter of a whisper-enabled 
 - Xcode Command Line Tools (Swift 5.9+), [Rust](https://rustup.rs)
 - `brew install ffmpeg-full sevenzip` (video/audio and 7z; optional `openjdk` for JAR decompilation)
 
+## Download (ad-hoc signed build)
+
+Releases contain `Flect-for-Mac-macos-arm64.zip` (Apple Silicon, macOS 14+) and its `.sha256`. The app is **not notarized**, so macOS will warn on first launch:
+
+```bash
+shasum -a 256 -c Flect-for-Mac-macos-arm64.zip.sha256     # verify the download
+unzip Flect-for-Mac-macos-arm64.zip && mv Flect-for-Mac.app ~/Applications/
+xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app
+~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # install the Quick Actions
+killall Finder
+```
+If you would rather not trust a binary, build it yourself (below). You also need `brew install ffmpeg-full sevenzip`.
+
 ## Build and install
 
 ```bash

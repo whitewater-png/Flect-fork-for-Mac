@@ -1,11 +1,14 @@
 # Security Policy
 
-> DRAFT - contact details and supported versions are pending the maintainer's decision.
-
 ## Reporting a vulnerability
 
 Please do **not** open a public issue for a security problem. Use GitHub's
-"Report a vulnerability" (private security advisory) on this repository.
+**Security → Report a vulnerability** (private vulnerability reporting) on this repository.
+Include the file or command that triggers it and your macOS version. Reports are handled on a best-effort basis.
+
+## Supported versions
+
+Only the latest release (and the default branch) receives fixes.
 
 ## Scope
 
@@ -15,7 +18,7 @@ those reachable through a crafted file:
 - archive extraction escaping its destination (path traversal, links), or exhausting disk/CPU (decompression bombs)
 - data-format conversion (XML/CSV/JSON) reading local files or exhausting memory
 - a request to the engine that makes it read or write outside the selected items
-- unsafe use of the external tools (ffmpeg, 7-Zip, Java, Python)
+- unsafe use of the external tools (ffmpeg, 7-Zip, Java)
 
 ## Design principles
 

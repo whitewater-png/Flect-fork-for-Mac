@@ -27,6 +27,19 @@ English: [README.md](README.md)
 - Xcode Command Line Tools（Swift 5.9 以上）、[Rust](https://rustup.rs)
 - `brew install ffmpeg-full sevenzip`（動画・音声と 7z 用。JAR を使うなら `openjdk` も）
 
+## ダウンロード（ad-hoc 署名のビルド）
+
+Releases に `Flect-for-Mac-macos-arm64.zip`（Apple Silicon・macOS 14 以降）と `.sha256` を置きます。**公証はしていない**ため、初回起動で macOS が警告します。
+
+```bash
+shasum -a 256 -c Flect-for-Mac-macos-arm64.zip.sha256     # ダウンロードの検証
+unzip Flect-for-Mac-macos-arm64.zip && mv Flect-for-Mac.app ~/Applications/
+xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app
+~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # Quick Action を配置
+killall Finder
+```
+バイナリを信用したくない場合は、下の手順で自分でビルドしてください。`brew install ffmpeg-full sevenzip` も必要です。
+
 ## ビルドとインストール
 
 ```bash

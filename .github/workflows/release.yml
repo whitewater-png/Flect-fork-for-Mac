@@ -1,0 +1,45 @@
+name: Release
+
+# Builds the ad-hoc signed .app on a tag (v*) and attaches it, with its SHA-256, to a GitHub release.
+# Ad-hoc signed means Gatekeeper will warn on first launch; see "Download" in the README.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and publish the .app
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        env:
+          FLECT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-dev' }}
+        run: |
+          set -o pipefail
+          scripts/build.sh 2>&1 | tail -20
+      - name: Zip and checksum
+        run: |
+          cd dist
+          ditto -c -k --keepParent Flect-for-Mac.app Flect-for-Mac-macos-arm64.zip
+          shasum -a 256 Flect-for-Mac-macos-arm64.zip | tee Flect-for-Mac-macos-arm64.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Flect-for-Mac-macos-arm64
+          path: |
+            dist/Flect-for-Mac-macos-arm64.zip
+            dist/Flect-for-Mac-macos-arm64.zip.sha256
+      - name: Attach to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Ad-hoc signed build for Apple Silicon (macOS 14+). Verify with the .sha256 file. See the README for first-launch steps."
+          gh release upload "$GITHUB_REF_NAME" dist/Flect-for-Mac-macos-arm64.zip dist/Flect-for-Mac-macos-arm64.zip.sha256 --clobber

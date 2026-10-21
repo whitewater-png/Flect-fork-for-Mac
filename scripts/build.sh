@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 APP="$ROOT/dist/Flect-for-Mac.app"
-BUNDLE_ID="${FLECT_BUNDLE_ID:-io.github.flect-for-mac}"
+BUNDLE_ID="${FLECT_BUNDLE_ID:-io.github.whitewater-png.flect-for-mac}"
 VERSION="${FLECT_VERSION:-0.1.0}"
 
 command -v cargo >/dev/null || { echo "cargo not found: brew install rustup && rustup-init" >&2; exit 1; }
