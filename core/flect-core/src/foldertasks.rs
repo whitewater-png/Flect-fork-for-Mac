@@ -575,7 +575,11 @@ pub fn still_empty(
     let mut folders = 1;
     for entry in fs::read_dir(dir).ok()? {
         let entry = entry.ok()?;
-        let meta = fs::symlink_metadata(entry.path()).ok()?;
+        let meta = match fs::symlink_metadata(entry.path()) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue, // gone since the listing
+            Err(_) => return None,
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         if meta.is_dir() {
             if excl.excludes_folder(&name) {
@@ -615,7 +619,14 @@ fn remove_empty_tree_at(
     }
     let mut removed = 0;
     for entry in fsat::names_in(&dir)? {
-        let st = fsat::stat_at(&dir, &entry)?;
+        let st = match fsat::stat_at(&dir, &entry) {
+            Ok(st) => st,
+            // Gone since the listing: on FAT, exFAT and SMB removing `.DS_Store` also removes its
+            // AppleDouble `._.DS_Store`. Nothing to do for it (the folder removal still refuses a
+            // folder that is not empty).
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
         let ename = entry.to_string_lossy().into_owned();
         if fsat::is_dir(&st) && !excl.excludes_folder(&ename) {
             let sub = fsat::Fingerprint::of_stat(&st).id();
@@ -1210,6 +1221,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// On FAT, exFAT and SMB removing `.DS_Store` also removes `._.DS_Store`; the later look at the
+    /// already-gone name aborted the folder. A litter file that vanished is simply gone.
+    #[test]
+    fn litter_that_vanishes_meanwhile_does_not_abort_the_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().to_path_buf();
+        fs::create_dir_all(r.join("e")).unwrap();
+        for n in [".DS_Store", "._.DS_Store", "._x"] {
+            fs::write(r.join("e").join(n), "litter").unwrap();
+        }
+        let f = Settings::default().folder;
+        let (plan, _) = plan_remove_empty(std::slice::from_ref(&r), &f, &NullProgress).unwrap();
+        let rr = r.clone();
+        let out = crate::fsat::with_seam(
+            move |p, name| {
+                if p == "E3" {
+                    // removing one litter file takes the others with it
+                    for n in [".DS_Store", "._.DS_Store", "._x"] {
+                        if Path::new(n) != name {
+                            let _ = fs::remove_file(rr.join("e").join(n));
+                        }
+                    }
+                }
+            },
+            || delete_empty_permanently(&plan, std::slice::from_ref(&r), &f).unwrap(),
+        );
+        assert_eq!((out.removed, out.skipped.len()), (1, 0), "{out:?}");
+        assert!(!r.join("e").exists());
+        assert!(still_empty(&r, &ExclusionFilter::default(), &f.empty).is_some());
     }
 
     fn walk_names(r: &Path) -> Vec<String> {
