@@ -275,6 +275,7 @@
  "msg.separator.tab": "タブ",
  "msg.sjisFailed": "Shift_JIS に対応しない文字が含まれています。",
  "msg.sjisReplaced": "{0} - Shift_JIS にない文字があったため置き換えました。",
+ "msg.subtitleLanguageInvalid": "字幕の言語は ja や en のような言語コードで指定してください（空欄なら自動判定）。",
  "msg.subtitlesCreatingEnv": "%LOCALAPPDATA%\\Flect\\env に字幕用の仮想環境を作成しています",
  "msg.subtitlesCudaFailed": "CUDA ライブラリを用意できませんでした - 字幕は CPU で処理します",
  "msg.subtitlesCudaReady": "GPU 文字起こしの準備ができました",

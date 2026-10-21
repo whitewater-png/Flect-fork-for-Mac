@@ -58,9 +58,6 @@ import FlectCore
                     .textSelection(.enabled)
             }
             .frame(minHeight: 100)
-            if model.finished {
-                Text(model.finishedText).font(.headline)
-            }
             HStack {
                 Spacer()
                 if model.finished {

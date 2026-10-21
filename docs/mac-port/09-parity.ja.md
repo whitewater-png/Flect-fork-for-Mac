@@ -36,3 +36,5 @@
 - AI 背景除去（rembg）は引き続き未実装（設定が AI モードでも色キーで動く）。
 - `image.chromakey`（背景を削除）は、設定が AI のとき Swift アプリが Vision（`VNGenerateForegroundInstanceMaskRequest`、macOS 14+）で前景を切り出し、`名前_nobg.png` を出力する。AI が失敗した画像は、設定が「AI + 失敗時は色キー」ならエンジンの色キーに切り替わる。「色キーのみ」はエンジンが処理する。Mac でのみ確認できる。
 - 実機確認の手順（第 2 回）: [13](13-mac-verification-round2.ja.md)。
+- 字幕: 実機（第 2 回）で、GPU 自動の Tiny は 60 秒の音声が 1.5 秒、Small は 4.9 秒。CPU のみは大幅に遅く（7.4 秒の音声に 26 秒、負荷も高い）、通常は GPU 自動を使う。出力は cue を 1 から振り直し、音声の長さを超える終了時刻は丸め、範囲外の cue は捨てる。VTT に cue 番号は付けない。
+- 背景除去の出力名は、AI が `_nobg.png`、色キーが `_keyed.png`。

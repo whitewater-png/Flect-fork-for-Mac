@@ -141,6 +141,7 @@ final class AppModel: ObservableObject {
         case .cancelled: finishedText = loc.t("progress.cancelled")
         case .failed: finishedText = summary ?? loc.t("progress.failed")
         }
+        status = finishedText // the headline must not keep saying "working" after the run ended
         let close: Bool
         switch outcome {
         case .succeeded: close = settings.closeOnSuccess && !sawProblem

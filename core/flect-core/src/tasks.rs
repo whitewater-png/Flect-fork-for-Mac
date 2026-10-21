@@ -43,6 +43,18 @@ impl TaskError {
     }
 }
 
+impl TaskError {
+    /// Arguments for the message: normally the file name, but errors about the speech model name that instead.
+    pub fn args(&self, shown: String) -> Vec<String> {
+        match self {
+            Self::Media(
+                crate::media::MediaError::NoModel(m) | crate::media::MediaError::ModelMismatch(m),
+            ) => vec![m.clone()],
+            _ => vec![shown],
+        }
+    }
+}
+
 impl From<io::Error> for TaskError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)

@@ -37,6 +37,8 @@ pub enum MediaError {
     ModelMismatch(String),
     /// Transcription produced no text.
     NoSpeech,
+    /// The subtitle language setting is not a language code.
+    BadLanguage,
     Io(std::io::Error),
 }
 
@@ -56,6 +58,7 @@ impl MediaError {
             Self::NoModel(_) => "msg.whisperModelMissing",
             Self::ModelMismatch(_) => "msg.whisperModelMismatch",
             Self::NoSpeech => "msg.noSpeech",
+            Self::BadLanguage => "msg.subtitleLanguageInvalid",
             Self::Io(_) => "msg.ioError",
         }
     }

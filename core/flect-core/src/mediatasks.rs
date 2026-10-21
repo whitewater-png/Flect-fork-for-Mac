@@ -480,8 +480,7 @@ fn subtitles(job: &Job<'_>, input: &Path) -> Result<PathBuf, MediaError> {
         .map(|d| d.join(model.file))
         .filter(|p| p.is_file())
         .ok_or_else(|| MediaError::NoModel(model.file.to_owned()))?;
-    let language = crate::subtitles::language_arg(&sub.language)
-        .ok_or_else(|| MediaError::Unsupported("subtitle language".into()))?;
+    let language = crate::subtitles::language_arg(&sub.language).ok_or(MediaError::BadLanguage)?;
     job.progress
         .status("msg.verifying", &[model.file.to_owned()]);
     if crate::jar::sha256_of(&model_path)? != model.sha256 {
@@ -514,10 +513,20 @@ fn subtitles(job: &Job<'_>, input: &Path) -> Result<PathBuf, MediaError> {
     if raw.trim().is_empty() {
         return Err(MediaError::NoSpeech);
     }
+    let duration_ms = (info.duration_seconds.max(0.0) * 1000.0) as u64;
     let (ext, body) = match sub.output {
-        SubtitleOutput::Srt => ("srt", raw),
-        SubtitleOutput::Vtt => ("vtt", crate::subtitles::srt_to_vtt(&raw)),
         SubtitleOutput::Txt => ("txt", raw),
+        other => {
+            let cues = crate::subtitles::normalize(crate::subtitles::parse_srt(&raw), duration_ms);
+            if cues.is_empty() {
+                return Err(MediaError::NoSpeech);
+            }
+            if other == SubtitleOutput::Vtt {
+                ("vtt", crate::subtitles::render_vtt(&cues))
+            } else {
+                ("srt", crate::subtitles::render_srt(&cues))
+            }
+        }
     };
     let staged = scratch.path_for(&format!("final.{ext}"));
     fs::write(&staged, body)?;

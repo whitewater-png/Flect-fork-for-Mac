@@ -275,6 +275,7 @@
  "msg.separator.tab": "制表符",
  "msg.sjisFailed": "包含 Shift_JIS 无法表示的字符。",
  "msg.sjisReplaced": "{0} - 存在 Shift_JIS 无法表示的字符，已被替换。",
+ "msg.subtitleLanguageInvalid": "字幕语言必须是 ja、en 这样的语言代码（留空为自动检测）。",
  "msg.subtitlesCreatingEnv": "正在 %LOCALAPPDATA%\\Flect\\env 中创建字幕用的虚拟环境",
  "msg.subtitlesCudaFailed": "无法准备 CUDA 库 - 字幕将使用 CPU",
  "msg.subtitlesCudaReady": "GPU 转录已就绪",

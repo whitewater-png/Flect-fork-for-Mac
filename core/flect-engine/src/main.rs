@@ -245,7 +245,7 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
             }
             Err(e) => {
                 failures += 1;
-                emit(out, &error(e.key(), vec![shown]))?;
+                emit(out, &error(e.key(), e.args(shown)))?;
             }
         }
         emit(

@@ -283,6 +283,7 @@
  "msg.separator.tab": "tab",
  "msg.sjisFailed": "Some characters have no Shift_JIS equivalent.",
  "msg.sjisReplaced": "{0} - Some characters have no Shift_JIS equivalent and were replaced.",
+ "msg.subtitleLanguageInvalid": "The subtitle language must be a language code such as ja or en (or empty for automatic).",
  "msg.subtitlesCreatingEnv": "Creating the subtitles virtual environment in %LOCALAPPDATA%\\Flect\\env",
  "msg.subtitlesCudaFailed": "CUDA libraries could not be set up, using CPU for subtitle generation.",
  "msg.subtitlesCudaReady": "CUDA transcription is ready",
