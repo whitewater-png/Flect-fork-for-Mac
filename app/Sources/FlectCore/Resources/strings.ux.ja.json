@@ -1,4 +1,5 @@
 {
+ "app.trashPartial": "{1} 件のうち {0} 件をゴミ箱へ移動しました。{2} 件はそのまま残しています（下の一覧を参照）。",
  "app.trashRefused": "ゴミ箱へ移動しませんでした: {0}（{1}）",
  "app.trashWhy.invalidPath": "正しいパスではありません",
  "app.trashWhy.isSelected": "選択した項目そのものです",

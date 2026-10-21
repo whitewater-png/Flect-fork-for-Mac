@@ -1,4 +1,5 @@
 {
+ "app.trashPartial": "已将 {1} 项中的 {0} 项移到废纸篓；{2} 项保留在原处（见下方列表）。",
  "app.trashRefused": "未移到废纸篓：{0}（{1}）",
  "app.trashWhy.invalidPath": "不是有效的路径",
  "app.trashWhy.isSelected": "它就是所选项目之一",

@@ -165,11 +165,32 @@ final class TrashGuardTests: XCTestCase {
         XCTAssertNil(TrashGuard.check(thumbs.path, inputs: [sel.path], kind: .emptyFolders, litter: .init()))
     }
 
+    /// Refused or failed items used to leave the run looking clean, with the engine's "Moved N to the Trash".
+    func testSummaryDoesNotClaimItemsThatWereNotMoved() {
+        let loc = Loc(language: .english)
+        var t = TrashGuard.Tally()
+        XCTAssertEqual(TrashGuard.runSummary("engine says", tally: t, loc: loc), "engine says")
+        t.add(.init(requested: 3, moved: 3))
+        XCTAssertEqual(t.notMoved, 0)
+        XCTAssertEqual(TrashGuard.runSummary("Moved 3 to the Trash.", tally: t, loc: loc), "Moved 3 to the Trash.")
+        t.add(.init(requested: 2, moved: 0))
+        XCTAssertEqual(t, .init(requested: 5, moved: 3))
+        let s = TrashGuard.runSummary("Moved 5 to the Trash.", tally: t, loc: loc)
+        XCTAssertEqual(s, "Moved 3 of 5 items to the Trash; 2 were left in place (see the list below).")
+        XCTAssertEqual(TrashGuard.runSummary(nil, tally: .init(requested: 1, moved: 0), loc: loc),
+                       "Moved 0 of 1 items to the Trash; 1 were left in place (see the list below).")
+        for lang in [AppLanguage.japanese, .chinese] {
+            let text = TrashGuard.runSummary(nil, tally: .init(requested: 5, moved: 3), loc: Loc(language: lang)) ?? ""
+            XCTAssertTrue(text.contains("3") && text.contains("5") && text.contains("2") && !text.contains("{"), text)
+        }
+    }
+
     func testRefusalMessagesExistInEveryLanguage() throws {
         for code in ["en", "ja", "zh"] {
             let url = try XCTUnwrap(Bundle.module.url(forResource: "strings.ux.\(code)", withExtension: "json", subdirectory: "Resources"))
             let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: String])
             XCTAssertNotNil(obj["app.trashRefused"], code)
+            XCTAssertNotNil(obj["app.trashPartial"], code)
             for r in TrashGuard.Refusal.allCases { XCTAssertNotNil(obj[r.key], "\(code): \(r.key)") }
         }
     }

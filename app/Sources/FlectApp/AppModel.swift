@@ -191,6 +191,7 @@ final class AppModel: ObservableObject {
             var outcome = Outcome.failed
             var summary: String?
             var sawProblem = false
+            var trashed = TrashGuard.Tally()
             for await event in events {
                 switch event {
                 case .status(let k, let a): status = loc.f(k, a)
@@ -199,7 +200,11 @@ final class AppModel: ObservableObject {
                 case .info(let k, let a): log.append(LogLine(kind: .info, text: loc.f(k, a)))
                 case .warn(let k, let a): log.append(LogLine(kind: .warn, text: loc.f(k, a))); sawProblem = true
                 case .error(let k, let a): log.append(LogLine(kind: .error, text: loc.f(k, a))); sawProblem = true
-                case .needs(let what, let ps): if what == "trash" { trash(ps) }
+                case .needs(let what, let ps):
+                    if what == "trash" {
+                        trashed.add(trash(ps))
+                        if trashed.notMoved > 0 { sawProblem = true }
+                    }
                 case .data(let n, let d):
                     if n == "outputs" { tracker.add(paths: (d["paths"]?.array ?? []).compactMap { $0.string }) } else { pendingData.append((n, d)) }
                 case .menu: break
@@ -211,7 +216,7 @@ final class AppModel: ObservableObject {
                     sawProblem = true
                 }
             }
-            finishRun(outcome: outcome, summary: summary, sawProblem: sawProblem)
+            finishRun(outcome: outcome, summary: TrashGuard.runSummary(summary, tally: trashed, loc: loc), sawProblem: sawProblem)
         }
     }
 
@@ -295,17 +300,23 @@ final class AppModel: ObservableObject {
     private var trashScope: (inputs: [String], kind: TrashGuard.Kind) = ([], .files)
 
     /// Every path is checked by `TrashGuard` right before it is moved (inside the run's selection, not a link, and for
-    /// Remove Empty still nothing but OS litter); one that fails is skipped and reported.
-    private func trash(_ ps: [String]) {
+    /// Remove Empty still nothing but OS litter); one that fails is skipped and reported. Returns how many were asked
+    /// for and how many were moved, so the run is marked as having a problem and its summary does not claim more.
+    private func trash(_ ps: [String]) -> TrashGuard.Tally {
         let litter = TrashGuard.LitterRules(settings: settings)
+        var tally = TrashGuard.Tally()
         for p in ps {
+            tally.requested += 1
             if let why = TrashGuard.check(p, inputs: trashScope.inputs, kind: trashScope.kind, litter: litter) {
                 log.append(LogLine(kind: .warn, text: loc.f("app.trashRefused", [p, loc.t(why.key)])))
                 continue
             }
-            do { try FileManager.default.trashItem(at: URL(fileURLWithPath: p), resultingItemURL: nil) }
-            catch { log.append(LogLine(kind: .error, text: loc.f("app.trashFailed", [(p as NSString).lastPathComponent]))) }
+            do {
+                try FileManager.default.trashItem(at: URL(fileURLWithPath: p), resultingItemURL: nil)
+                tally.moved += 1
+            } catch { log.append(LogLine(kind: .error, text: loc.f("app.trashFailed", [(p as NSString).lastPathComponent]))) }
         }
+        return tally
     }
 
     // MARK: answers from dialogs and results

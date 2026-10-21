@@ -24,6 +24,21 @@ public enum TrashGuard {
         public var key: String { "app.trashWhy.\(rawValue)" }
     }
 
+    /// What a run's Trash requests came to.
+    public struct Tally: Equatable {
+        public var requested = 0, moved = 0
+        public var notMoved: Int { requested - moved }
+        public init(requested: Int = 0, moved: Int = 0) { self.requested = requested; self.moved = moved }
+        public mutating func add(_ other: Tally) { requested += other.requested; moved += other.moved }
+    }
+
+    /// The run's closing line: the engine's own ("Moved 5 to the Trash...") only when everything it asked for was
+    /// moved; otherwise how many of how many were moved and how many were left in place.
+    public static func runSummary(_ engine: String?, tally: Tally, loc: Loc) -> String? {
+        guard tally.notMoved > 0 else { return engine }
+        return loc.f("app.trashPartial", [String(tally.moved), String(tally.requested), String(tally.notMoved)])
+    }
+
     /// Entries looked at inside one folder before giving up (refused as `unreadable`).
     public static let maxEntries = 20_000
     public static let maxDepth = 64
