@@ -182,6 +182,27 @@ fn changed_event(ctx: &Ctx<'_>, p: &Path) {
     });
 }
 
+/// [`folder::plan_still_holds`], reporting what changed when it does not hold: files keep changing
+/// while the plan is made (an app saving, a sync client), so this is a normal outcome, not an error.
+/// Nothing is then shown or removed.
+fn plan_holds_or_report(
+    ctx: &Ctx<'_>,
+    groups: &[Vec<folder::ScannedFile>],
+    doomed: &[folder::ScannedFile],
+) -> bool {
+    if folder::plan_still_holds(groups, doomed) {
+        return true;
+    }
+    let (_, mut changed) = folder::unchanged_groups(groups.to_vec());
+    if changed.is_empty() {
+        changed = doomed.iter().map(|d| d.path.clone()).collect();
+    }
+    for p in &changed {
+        changed_event(ctx, p);
+    }
+    false
+}
+
 /// Carry out a confirmed duplicate plan, one file at a time. Right before each file is removed
 /// (permanent) or handed on to the app for the Trash, it and the copy that stays are checked again
 /// ([`folder::still_safe_to_remove`]: same files as scanned, contents still identical); a file that
@@ -416,10 +437,8 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
             if doomed.is_empty() {
                 return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
             }
-            if !folder::plan_still_holds(&groups, &doomed) {
-                // A copy that stays is gone, or a copy that goes changed or is now the same file as
-                // one that stays: nothing is shown or removed.
-                return fail(ctx, "msg.ioError", "duplicate plan changed".into());
+            if !plan_holds_or_report(ctx, &groups, &doomed) {
+                return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
             }
             let bytes: u64 = doomed.iter().map(|d| d.size).sum();
             if params.get("dry").is_some_and(|v| v == "1") {
@@ -921,6 +940,48 @@ mod tests {
             .filter(|e| e["event"] == "warn" && e["key"] == "msg.duplicateChanged")
             .map(|e| e["args"][0].as_str().unwrap().to_owned())
             .collect()
+    }
+
+    /// A plan that stops holding between the per-group check and the run (a file touched in that
+    /// window, as legit.sh's background `touch` did) used to end the task with `msg.ioError`; it is
+    /// reported per file and nothing is removed.
+    #[test]
+    fn a_plan_that_stops_holding_is_reported_not_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("a.txt"), "same").unwrap();
+        fs::write(d.path().join("b.txt"), "same").unwrap();
+        let s = folder::scan(
+            &[d.path().to_path_buf()],
+            &folder::ExclusionFilter::default(),
+            &Default::default(),
+            &folder::NullProgress,
+        )
+        .unwrap();
+        let groups =
+            folder::find_duplicates(&s.files, &Default::default(), &folder::NullProgress).unwrap();
+        let doomed = folder::to_delete(&groups, DuplicateMode::KeepOldest);
+        let events = Mutex::new(Vec::new());
+        let emit = |e: Event| {
+            events
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&e).unwrap())
+        };
+        let never = || false;
+        let settings = Settings::default();
+        let ctx = Ctx {
+            settings: &settings,
+            cancelled: &never,
+            emit: &emit,
+        };
+        assert!(plan_holds_or_report(&ctx, &groups, &doomed));
+        assert!(events.lock().unwrap().is_empty());
+        let kept = groups[0].iter().find(|f| f.path != doomed[0].path).unwrap();
+        fs::write(&kept.path, "same").unwrap(); // touched: new mtime / ctime, same content
+        assert!(!plan_holds_or_report(&ctx, &groups, &doomed));
+        let ev = events.into_inner().unwrap();
+        assert_eq!(changed_paths(&ev), [kept.path.to_string_lossy()], "{ev:?}");
+        assert!(ev.iter().all(|e| e["event"] != "error"), "{ev:?}");
     }
 
     /// race.py "doomed" / "kept" / FAT: a copy that goes was rewritten in place, the copy that stays
