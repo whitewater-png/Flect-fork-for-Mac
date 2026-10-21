@@ -11,6 +11,7 @@
 - Security: `--task` from the launch arguments may only name a menu id (what the Quick Actions pass) or `preset:<UUID>`. Engine parameters such as `folder.removeDuplicate?mode=all`, `folder.removeEmpty?confirm=1` or `folder.rename?...&dry=0` are refused instead of deleting or renaming without the preview. Every entry point (Quick Action, Dock drop, Open…, Services, pinned items, Run again) starts Remove Duplicate, Remove Empty and Rename with their preview or dialog.
 - Security: the Quick Actions now write the selection NUL-separated and the app splits on NUL only, without trimming, and requires every listed item to exist. Before, a file named `x⏎/Users/me` added `/Users/me` to the selection.
 - Folder tasks: a very large selection (thousands of folders) is de-duplicated in O(n log n) instead of comparing every folder with every other (about 90 s near the 20,000-item limit before), and Cancel works while it runs.
+- Folder tasks: two entries count as one file (a hard link) only when device, inode, size and modification time all match. On file systems that report the same inode number for different files, those files are no longer hidden from Remove Duplicate or the Analyze counts.
 
 ## 0.2.0 - share safely, presets, command line
 
