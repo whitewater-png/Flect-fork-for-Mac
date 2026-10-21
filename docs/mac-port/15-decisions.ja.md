@@ -34,7 +34,7 @@
 | 5 | B: ad-hoc 署名の `.app` を Releases に置く | `.github/workflows/release.yml`（`v*` タグ）と README に反映済み |
 | 6 | A: PR で main に取り込む | 未実施（PR の作成は指示待ち） |
 | 7 | A: GitHub の private vulnerability reporting | `SECURITY.md` 反映済み。**リポジトリ設定で有効化が必要（手動）** |
-| 8 | A: 新規に作る。グリーン系・リキッドグラス風 | アイコン第 1 案を `assets/icon/` に作成。他の素材は未作成 |
+| 8 | A: 新規に作る。グリーン系・リキッドグラス風 | アイコン第 2 案（1 つながりのガラスの F・薄めの緑）を `assets/icon/` に作成。他の素材は未作成 |
 | 9 | A: `legacy/windows/` は残す | 変更なし |
 | 10 | B: 旧 PoC は削除 | `poc/` 削除済み。Mac の「Flect PoC.workflow」は手動で削除 |
 | 11 | B: Rust の `pdf.merge` を削除 | 削除済み（`lopdf` も除去） |
