@@ -157,6 +157,11 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(en.t("no.such.key"), "no.such.key")
         XCTAssertEqual(en.n("count.file", 1), "1 file")
         XCTAssertEqual(en.n("count.file", 3), "3 files")
+        // A singular form must never fall back to English in another language (the results header once did).
+        for key in ["ux.results.count", "ux.notify.created", "ux.results.confirm"] {
+            XCTAssertNotEqual(ja.n(key, 1), en.n(key, 1), key)
+            XCTAssertNotEqual(zh.n(key, 1), en.n(key, 1), key)
+        }
         XCTAssertEqual(AppLanguage.from(setting: "System", preferred: ["ja-JP"]), .japanese)
         XCTAssertEqual(AppLanguage.from(setting: "System", preferred: ["zh-Hans-CN"]), .chinese)
         XCTAssertEqual(AppLanguage.from(setting: "English", preferred: ["ja-JP"]), .english)

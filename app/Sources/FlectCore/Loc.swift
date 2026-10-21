@@ -77,7 +77,9 @@ public final class Loc {
 
     /// Count with singular form (`key.one`).
     public func n(_ key: String, _ count: Int) -> String {
-        let template = (count == 1 ? (table[key + ".one"] ?? english[key + ".one"]) : nil) ?? t(key)
+        // The English singular is only for a key this language lacks altogether; a translated plain form wins over it.
+        let one = table[key + ".one"] ?? (table[key] == nil ? english[key + ".one"] : nil)
+        let template = (count == 1 ? one : nil) ?? t(key)
         return Loc.format(template, [String(count)])
     }
 
