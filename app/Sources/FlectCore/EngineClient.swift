@@ -28,8 +28,18 @@ public final class EngineClient {
     }
 
     /// Start a run and stream its events. The stream ends after `.done` (or `.crashed`).
+    /// `trashAck`: this app answers every Trash request (`ackTrash()`), so the engine hands items on one at a time and
+    /// waits for each (engines that predate it ignore the option).
     public func run(task: String, paths: [String], environment: [String: String] = [:]) -> AsyncStream<EngineEvent> {
-        send(request: ["op": "run", "task": task, "paths": paths], environment: environment)
+        send(request: ["op": "run", "task": task, "paths": paths, "options": ["trashAck": true]], environment: environment)
+    }
+
+    /// The answer to a `needs: trash` item that asked for one (`ack`): the app has dealt with it (moved or refused).
+    public func ackTrash() {
+        queue.async { [weak self] in
+            guard let h = self?.stdin else { return }
+            try? h.write(contentsOf: Data("{\"op\":\"trash-ack\"}\n".utf8))
+        }
     }
 
     /// Chain `steps` on each path (`op: pipeline`); only the final files are written and reported as outputs.

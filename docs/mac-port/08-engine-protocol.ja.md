@@ -10,10 +10,11 @@
 ## リクエスト
 | op | 形 | 意味 |
 | --- | --- | --- |
-| `run` | `{"op":"run","task":"image.resize?scale=50","paths":["/abs/a.png"]}` | タスクを実行。`task` は `ID?key=value&...`（値は `%XX` パーセントエンコード、UTF-8）。**キー名はデコードせず文字どおりに扱い**、`^[A-Za-z][A-Za-z0-9_]*$` に合わない名前（`%63onfirm`・`+confirm`・空白入りなど）や同じ名前の重複があるとタスク全体を `error task.badOption` [task] + `done(failed)` で拒否する（何も実行しない）。`options` は予約（現在無視） |
+| `run` | `{"op":"run","task":"image.resize?scale=50","paths":["/abs/a.png"]}` | タスクを実行。`task` は `ID?key=value&...`（値は `%XX` パーセントエンコード、UTF-8）。**キー名はデコードせず文字どおりに扱い**、`^[A-Za-z][A-Za-z0-9_]*$` に合わない名前（`%63onfirm`・`+confirm`・空白入りなど）や同じ名前の重複があるとタスク全体を `error task.badOption` [task] + `done(failed)` で拒否する（何も実行しない）。`options` は省略可: `jobs`（並列数、下記）、`trashAck`（`true` のとき、アプリが `needs:trash` の各項目に `trash-ack` で答える。エンジンは 1 項目ずつ渡し、答えを待ってから次を確認する。最大 120 秒待ち、`cancel` でも止まる。知らないキーは無視） |
 | `pipeline` | `{"op":"pipeline","steps":["image.resize?scale=50","image.convert?to=JPG","image.strip"],"paths":["/abs/a.png"]}` | 各パスに `steps` を順に適用し、**最後の結果だけ**を元ファイルの隣（または最後のタスクの出力フォルダ）に書く。`steps` は 1〜8 個・各 1024 バイト以内（超えると `protocol.badPipeline`）。使えるタスク・パラメータ・種類の連結は `17-presets-pipeline.ja.md`。中間ファイルは `$TMPDIR` の非公開フォルダ（0700）で、`done` の前に消える。`outputs` は最終出力のみ |
 | `cancel` | `{"op":"cancel"}` | 実行中のタスクを中断。処理中でも即時に受理され、`done` が `outcome:"cancelled"` で届く。待機中なら何も起きない |
 | `export-menu` | `{"op":"export-menu"}` | `menu` イベントを 1 つ返す（`menu.json` と同内容。Quick Action 生成にも使用） |
+| `trash-ack` | `{"op":"trash-ack"}` | `ack:true` の付いた `needs:trash` 項目をアプリが処理し終えた（移動した・断った）ことを伝える。待っていないときは無視される |
 
 リクエストは**直列処理**（`run` は 1 つずつ）。
 
@@ -26,7 +27,7 @@
 | `step` | `done`, `total` | **ファイル単位**の全体進捗 |
 | `file_step` | `permille` (0–1000) | 現在のファイル内の進捗（動画のみ） |
 | `info` / `warn` / `error` | `key`, `args[]` | 表示用メッセージ。`error` は 1 ファイルの失敗で、バッチは継続する |
-| `needs` | `what`, `paths[]`, `items[]`（省略可） | アプリに OS 操作を依頼。現在は `what:"trash"` のみ（`paths` をごみ箱へ移動。エンジンは移動後の応答を待たない）。`trash` では項目ごとに確認した直後に 1 件ずつ送り、`items` に `{path, fingerprint}` を付ける。`fingerprint` はファイルなら `f:dev:ino:size:mtime秒.ナノ秒:ctime秒.ナノ秒`、フォルダなら `d:dev:ino`（lstat、リンクは辿らない）。アプリは移動の直前に lstat し、完全一致したものだけ移動する（フォルダはさらに OS のゴミだけかを再確認）。`items` の無い要求・一致しない項目は移動しない。`items` は追加フィールドなので、知らない受け手は無視できる |
+| `needs` | `what`, `paths[]`, `items[]`（省略可） | アプリに OS 操作を依頼。現在は `what:"trash"` のみ（`paths` をごみ箱へ移動。エンジンは移動後の応答を待たない）。`trash` では項目ごとに確認した直後に 1 件ずつ送り、`items` に `{path, fingerprint}` を付ける。`fingerprint` はファイルなら `f:dev:ino:size:mtime秒.ナノ秒:ctime秒.ナノ秒`、フォルダなら `d:dev:ino`（lstat、リンクは辿らない）。アプリは移動の直前に lstat し、完全一致したものだけ移動する（フォルダはさらに OS のゴミだけかを再確認）。`items` の無い要求・一致しない項目は移動しない（`items` が無いのはアプリより古いエンジン）。重複の項目には `kept: {path, fingerprint}`（残す側のコピー）も付き、アプリは移動の直前にこちらも完全一致を確認する。run で `options.trashAck` を指定したときだけ `ack:true` が付き、エンジンはその項目への `trash-ack` を待ってから次の項目を確認する（アプリ側に溜まる要求は最大 1 件）。指定しないとき（古いアプリ・CLI）は待たずに送る。`items`・`kept`・`ack` は追加フィールドなので、知らない受け手は無視できる。FAT/exFAT の更新時刻は 2 秒単位のため、その間に同じサイズで書き換えられた場合はフィンガープリントでは検出できない（中身の再比較はエンジンが渡す前に行う） |
 | `data` | `name`, `data` | 結果の提示用データ（下表） |
 | `menu` | `menu` | `export-menu` の応答 |
 | `done` | `outcome` (`succeeded`/`failed`/`cancelled`), `summary_key`, `summary_args[]` | 1 つの `run` の終わり。必ず 1 回届く |

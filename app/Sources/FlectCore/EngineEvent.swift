@@ -5,6 +5,13 @@ public enum Outcome: String {
 }
 
 /// One line of engine output (see docs/mac-port/08-engine-protocol.ja.md).
+/// The copy of a duplicate that stays, as the engine checked it.
+public struct TrashKept: Equatable {
+    public let path: String
+    public let fingerprint: String
+    public init(path: String, fingerprint: String) { self.path = path; self.fingerprint = fingerprint }
+}
+
 public enum EngineEvent: Equatable {
     case status(key: String, args: [String])
     case step(done: Int, total: Int)
@@ -13,7 +20,9 @@ public enum EngineEvent: Equatable {
     case warn(key: String, args: [String])
     case error(key: String, args: [String])
     /// `fingerprints`: for `trash`, path -> the fingerprint the engine verified (see `TrashGuard.fingerprint`).
-    case needs(what: String, paths: [String], fingerprints: [String: String])
+    /// `kept`: path -> the copy that stays (a duplicate's), which must still match too. `ack`: the engine waits for
+    /// `EngineClient.ackTrash()` before it goes on.
+    case needs(what: String, paths: [String], fingerprints: [String: String], kept: [String: TrashKept], ack: Bool)
     case menu(JSONValue)
     case data(name: String, data: JSONValue)
     case done(outcome: Outcome, summaryKey: String?, summaryArgs: [String])
@@ -32,11 +41,16 @@ public enum EngineEvent: Equatable {
         case "warn": return .warn(key: key, args: args)
         case "error": return .error(key: key, args: args)
         case "needs":
-            var fps: [String: String] = [:]
+            var fps: [String: String] = [:], kept: [String: TrashKept] = [:]
             for item in v["items"]?.array ?? [] {
-                if let p = item["path"]?.string, let f = item["fingerprint"]?.string { fps[p] = f }
+                guard let p = item["path"]?.string else { continue }
+                if let f = item["fingerprint"]?.string { fps[p] = f }
+                if let kp = item["kept"]?["path"]?.string, let kf = item["kept"]?["fingerprint"]?.string {
+                    kept[p] = TrashKept(path: kp, fingerprint: kf)
+                }
             }
-            return .needs(what: v["what"]?.string ?? "", paths: (v["paths"]?.array ?? []).compactMap { $0.string }, fingerprints: fps)
+            return .needs(what: v["what"]?.string ?? "", paths: (v["paths"]?.array ?? []).compactMap { $0.string },
+                          fingerprints: fps, kept: kept, ack: v["ack"]?.bool ?? false)
         case "menu": return v["menu"].map { .menu($0) }
         case "data": return .data(name: v["name"]?.string ?? "", data: v["data"] ?? .null)
         case "done":

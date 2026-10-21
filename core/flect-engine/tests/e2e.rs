@@ -409,3 +409,53 @@ fn cancel_stops_a_pipeline_and_removes_its_work_folder() {
     assert!(made.len() < 100);
     assert!(names(tmp.path()).is_empty(), "{:?}", names(tmp.path()));
 }
+
+/// With `options.trashAck`, the engine hands on one Trash item at a time and waits for
+/// `{"op":"trash-ack"}`; a cancel while it waits stops the run. Without the option nothing waits.
+#[test]
+fn trash_requests_wait_for_the_apps_answer_when_asked() {
+    let d = tempfile::tempdir().unwrap();
+    for i in 0..3 {
+        std::fs::write(d.path().join(format!("a{i}")), format!("{i}")).unwrap();
+        std::fs::write(d.path().join(format!("b{i}")), format!("{i}")).unwrap();
+    }
+    let mut e = Engine::start(&d.path().join("home"));
+    let run = format!(
+        r#"{{"op":"run","task":"folder.removeDuplicate?mode=oldest","paths":["{}"],"options":{{"trashAck":true}}}}"#,
+        d.path().display()
+    );
+    e.send(&run);
+    let mut needs = 0;
+    loop {
+        let ev = e.next();
+        if ev["event"] == "needs" {
+            needs += 1;
+            assert_eq!(ev["ack"], true, "{ev}");
+            assert!(ev["items"][0]["kept"]["fingerprint"].is_string(), "{ev}");
+            if needs == 2 {
+                e.send(r#"{"op":"cancel"}"#);
+            } else {
+                e.send(r#"{"op":"trash-ack"}"#);
+            }
+        }
+        if ev["event"] == "done" {
+            assert_eq!(ev["outcome"], "cancelled", "{ev}");
+            assert_eq!(ev["summary_key"], "msg.cancelledAfterTrashing");
+            break;
+        }
+    }
+    assert_eq!(needs, 2, "the third item was never handed on");
+    // without the option: all three at once, no ack asked
+    e.send(&format!(
+        r#"{{"op":"run","task":"folder.removeDuplicate?mode=oldest","paths":["{}"]}}"#,
+        d.path().display()
+    ));
+    let ev = e.until_done();
+    let needs: Vec<_> = ev.iter().filter(|x| x["event"] == "needs").collect();
+    assert_eq!(needs.len(), 3);
+    assert!(needs.iter().all(|n| n.get("ack").is_none()));
+    // a stray answer is harmless
+    e.send(r#"{"op":"trash-ack"}"#);
+    e.send(r#"{"op":"export-menu"}"#);
+    assert_eq!(e.next()["event"], "menu");
+}

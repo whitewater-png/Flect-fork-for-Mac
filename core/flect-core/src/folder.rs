@@ -908,6 +908,7 @@ pub fn remove_duplicate(
     let Some(mut d) = open_still(doomed, &dp, &dn) else {
         return Ok(Removal::Changed);
     };
+    let mut kept_at: Option<(Parent, &ScannedFile)> = None;
     if let Some(kept) = kept {
         if kept.may_be_same_file(doomed) || kept.path == doomed.path {
             return Ok(Removal::Changed);
@@ -938,6 +939,7 @@ pub fn remove_duplicate(
         if !(still(kept, &k) && is_still(kept, &kp, &kn)) {
             return Ok(Removal::Changed);
         }
+        kept_at = Some(((kp, kn), kept));
     }
     if !(d.metadata().is_ok_and(|m| doomed.unchanged(&m)) && is_still(doomed, &dp, &dn)) {
         return Ok(Removal::Changed);
@@ -958,8 +960,15 @@ pub fn remove_duplicate(
         let now = fsat::Fingerprint::of_stat(st);
         (now.dev, now.ino, now.size, now.mtime) == (want.dev, want.ino, want.size, want.mtime)
     };
+    // Last of all, right before the unlink: the copy that stays is still there, still the file that
+    // was compared (identity and metadata; the bytes were compared above), in its folder.
+    let kept_still = || {
+        kept_at
+            .as_ref()
+            .is_none_or(|((kp, kn), k)| is_still(k, kp, kn) && parent_still_here(k))
+    };
     Ok(
-        match fsat::remove_checked(&dp, &dn, false, &same, &|| true) {
+        match fsat::remove_checked(&dp, &dn, false, &same, &kept_still) {
             Ok(()) => Removal::Removed,
             Err(fsat::NotRemoved::Gone | fsat::NotRemoved::Changed) => Removal::Changed,
             Err(fsat::NotRemoved::LeftAs(t)) => Removal::LeftAs(doomed.path.with_file_name(t)),

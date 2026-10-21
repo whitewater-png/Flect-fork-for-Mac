@@ -20,7 +20,7 @@ public enum TrashGuard {
     }
 
     public enum Refusal: String, Error, Equatable, CaseIterable {
-        case invalidPath, outsideSelection, isSelected, holdsSelected, changed, missing, symlink, unexpectedType, notEmpty, unreadable
+        case invalidPath, outsideSelection, isSelected, holdsSelected, changed, keptChanged, engineOutdated, cancelled, missing, symlink, unexpectedType, notEmpty, unreadable
         /// The request came from a run that is not the current one.
         case staleRun
         /// The localized reason (`strings.ux.*.json`).
@@ -39,12 +39,18 @@ public enum TrashGuard {
 
     /// `check` for a request of the run `scope` belongs to; `.staleRun` when that run is not `currentRun`.
     /// `fingerprint`: what the engine verified for this path (`needs` item). The item is moved only while `lstat`
-    /// still gives exactly that (`fingerprint(of:)`); a request without one is refused.
+    /// still gives exactly that (`fingerprint(of:)`); a request without one comes from an engine older than this app
+    /// and is refused (`.engineOutdated`). `kept`: for a duplicate, the copy that stays, which must also still have
+    /// exactly the fingerprint the engine checked (`.keptChanged`).
     public static func check(_ path: String, scope: Scope, currentRun: UUID?, litter: LitterRules = LitterRules(),
-                             fingerprint: String?) -> Refusal? {
+                             fingerprint: String?, kept: TrashKept? = nil) -> Refusal? {
         guard scope.run == currentRun else { return .staleRun }
         if let r = check(path, inputs: scope.inputs, kind: scope.kind, litter: litter) { return r }
-        guard let want = fingerprint, Self.fingerprint(of: path) == want else { return .changed }
+        guard let want = fingerprint else { return .engineOutdated }
+        guard Self.fingerprint(of: path) == want else { return .changed }
+        if let k = kept {
+            guard k.path != path, Self.fingerprint(of: k.path) == k.fingerprint else { return .keptChanged }
+        }
         return nil
     }
 

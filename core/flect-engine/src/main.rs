@@ -95,6 +95,8 @@ enum Msg {
         task: String,
         paths: Vec<String>,
         jobs: Option<usize>,
+        /// The app answers every Trash request (`trash-ack`).
+        trash_ack: bool,
     },
     Pipeline {
         steps: Vec<String>,
@@ -103,7 +105,12 @@ enum Msg {
 }
 
 /// stdin -> queue. Handles everything that must not wait behind a running task.
-fn reader(out: Out, cancel: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) -> io::Result<()> {
+fn reader(
+    out: Out,
+    cancel: Arc<AtomicBool>,
+    tx: mpsc::Sender<Msg>,
+    acks: mpsc::Sender<()>,
+) -> io::Result<()> {
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut buf = Vec::new();
@@ -124,6 +131,9 @@ fn reader(out: Out, cancel: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) -> io::Resul
                 },
             )?,
             Ok(Request::Cancel) => cancel.store(true, Ordering::SeqCst),
+            Ok(Request::TrashAck) => {
+                let _ = acks.send(());
+            }
             Ok(Request::Run {
                 task,
                 paths,
@@ -133,7 +143,19 @@ fn reader(out: Out, cancel: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) -> io::Resul
                     .get("jobs")
                     .and_then(serde_json::Value::as_u64)
                     .map(|n| n as usize);
-                if tx.send(Msg::Run { task, paths, jobs }).is_err() {
+                let trash_ack = options
+                    .get("trashAck")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                if tx
+                    .send(Msg::Run {
+                        task,
+                        paths,
+                        jobs,
+                        trash_ack,
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -512,7 +534,16 @@ fn each_file<E: Failure>(
     Ok(outcome_of(failures))
 }
 
-fn run_batch(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io::Result<()> {
+/// How long the engine waits for the app to answer one Trash request before it stops the run.
+const TRASH_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn run_batch(
+    out: &Out,
+    cancel: &AtomicBool,
+    task: &str,
+    paths: &[String],
+    acks: Option<&Mutex<mpsc::Receiver<()>>>,
+) -> io::Result<()> {
     let settings: Settings = locations::data_dir()
         .map(|d| Store::new(d).load())
         .unwrap_or_default();
@@ -523,6 +554,23 @@ fn run_batch(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
             *failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(err);
         }
     };
+    // One answer per Trash request: wait for it, but never past a cancel or the timeout.
+    let wait = || {
+        let Some(rx) = acks else { return true };
+        let rx = rx.lock().unwrap_or_else(|p| p.into_inner());
+        let started = std::time::Instant::now();
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(()) => return true,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if is_cancelled() || started.elapsed() > TRASH_ACK_TIMEOUT {
+                        return false;
+                    }
+                }
+            }
+        }
+    };
     batch::run_batch(
         task,
         paths,
@@ -530,6 +578,7 @@ fn run_batch(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
             settings: &settings,
             cancelled: &is_cancelled,
             emit: &emit,
+            trash_ack: acks.map(|_| &wait as &(dyn Fn() -> bool + Sync)),
         },
     );
     failure
@@ -542,14 +591,28 @@ fn main() -> io::Result<()> {
     let out: Out = Arc::new(Mutex::new(io::stdout()));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = mpsc::channel();
+    let (ack_tx, ack_rx) = mpsc::channel();
+    let acks = Mutex::new(ack_rx);
     let handle = {
         let (out, cancel) = (out.clone(), cancel.clone());
-        std::thread::spawn(move || reader(out, cancel, tx))
+        std::thread::spawn(move || reader(out, cancel, tx, ack_tx))
     };
     for msg in rx {
         cancel.store(false, Ordering::SeqCst); // a stale cancel must not kill the next run
-        let (task, paths, jobs) = match msg {
-            Msg::Run { task, paths, jobs } => (task, paths, jobs),
+                                               // stale answers must not count for the next run
+        while acks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .try_recv()
+            .is_ok()
+        {}
+        let (task, paths, jobs, trash_ack) = match msg {
+            Msg::Run {
+                task,
+                paths,
+                jobs,
+                trash_ack,
+            } => (task, paths, jobs, trash_ack),
             Msg::Pipeline { steps, paths } => {
                 run_pipeline(&out, &cancel, &steps, &paths)?;
                 continue;
@@ -561,7 +624,7 @@ fn main() -> io::Result<()> {
             // is refused before a task runs (a guard that reads the names sees what runs).
             failed(&out, "task.badOption", vec![task])?;
         } else if batch::is_batch_task(name) {
-            run_batch(&out, &cancel, &task, &paths)?;
+            run_batch(&out, &cancel, &task, &paths, trash_ack.then_some(&acks))?;
         } else if tasks::is_file_task(name) {
             run_files(&out, &cancel, &task, &paths, jobs)?;
         } else if known_task(&task) {

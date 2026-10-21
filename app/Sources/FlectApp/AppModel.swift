@@ -204,9 +204,11 @@ final class AppModel: ObservableObject {
                     log.append(LogLine(kind: .warn, text: loc.f(k, a))); sawProblem = true
                     if DeletionCounts.leftAloneKeys.contains(k) { leftAlone += 1 }
                 case .error(let k, let a): log.append(LogLine(kind: .error, text: loc.f(k, a))); sawProblem = true
-                case .needs(let what, let ps, let fingerprints):
+                case .needs(let what, let ps, let fingerprints, let kept, let ack):
                     if what == "trash" {
-                        trashed.add(trash(ps, fingerprints: fingerprints, scope: scope))
+                        trashed.add(trash(ps, fingerprints: fingerprints, kept: kept, scope: scope))
+                        // Answered after the item was dealt with, so the engine checks the next one only now.
+                        if ack { engine.ackTrash() }
                         if trashed.notMoved > 0 { sawProblem = true }
                     }
                 case .data(let n, let d):
@@ -318,12 +320,15 @@ final class AppModel: ObservableObject {
     /// for and how many were moved, so the run is marked as having a problem and its summary does not claim more.
     /// The engine sends each item as soon as it has checked it, with its fingerprint; it is moved only while it still
     /// has exactly that fingerprint.
-    private func trash(_ ps: [String], fingerprints: [String: String], scope: TrashGuard.Scope) -> TrashGuard.Tally {
+    private func trash(_ ps: [String], fingerprints: [String: String], kept: [String: TrashKept], scope: TrashGuard.Scope) -> TrashGuard.Tally {
         let litter = TrashGuard.LitterRules(settings: settings)
         var tally = TrashGuard.Tally()
         for p in ps {
             tally.requested += 1
-            if let why = TrashGuard.check(p, scope: scope, currentRun: currentRun, litter: litter, fingerprint: fingerprints[p]) {
+            // After Cancel, nothing more is moved, even an item that is already on its way.
+            let why = cancelling ? .cancelled
+                : TrashGuard.check(p, scope: scope, currentRun: currentRun, litter: litter, fingerprint: fingerprints[p], kept: kept[p])
+            if let why = why {
                 log.append(LogLine(kind: .warn, text: loc.f("app.trashRefused", [p, loc.t(why.key)])))
                 continue
             }

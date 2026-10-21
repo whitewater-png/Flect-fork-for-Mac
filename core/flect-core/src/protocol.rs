@@ -25,11 +25,23 @@ pub enum Request {
     },
     Cancel,
     ExportMenu,
+    /// The app has dealt with the last `needs: trash` item that asked for an answer (`ack`).
+    TrashAck,
 }
 
 /// One item of a `needs` event: a path and the fingerprint it had when the engine checked it.
 #[derive(Debug, Serialize, PartialEq)]
 pub struct NeedsItem {
+    pub path: String,
+    pub fingerprint: String,
+    /// For a duplicate: the copy that stays, which must also still match when the item is moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kept: Option<NeedsKept>,
+}
+
+/// The copy that stays, as checked by the engine.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct NeedsKept {
     pub path: String,
     pub fingerprint: String,
 }
@@ -71,6 +83,10 @@ pub enum Event {
         /// only while it still has exactly this fingerprint. Omitted when empty.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         items: Vec<NeedsItem>,
+        /// The engine waits for `{"op":"trash-ack"}` before going on (only when the run asked for
+        /// it with the `trashAck` option). Omitted when false.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        ack: bool,
     },
     Menu {
         menu: Value,
@@ -128,7 +144,7 @@ pub fn parse_line(line: &[u8]) -> Result<Request, ParseError> {
     // serde cannot deny unknown fields on unit variants of a tagged enum; do it here.
     if matches!(
         value.get("op").and_then(Value::as_str),
-        Some("cancel" | "export-menu")
+        Some("cancel" | "export-menu" | "trash-ack")
     ) && value.as_object().is_some_and(|o| o.len() != 1)
     {
         return Err(ParseError::Json("unknown field".into()));
@@ -149,7 +165,7 @@ pub fn parse_line(line: &[u8]) -> Result<Request, ParseError> {
             }
             check_paths(paths)?
         }
-        Request::Cancel | Request::ExportMenu => {}
+        Request::Cancel | Request::ExportMenu | Request::TrashAck => {}
     }
     Ok(request)
 }

@@ -26,6 +26,11 @@ pub struct Ctx<'a> {
     pub settings: &'a Settings,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
     pub emit: &'a (dyn Fn(Event) + Sync),
+    /// Set when the app answers every Trash request (`trash-ack`, see the protocol document): the
+    /// engine then hands on one item at a time and waits until the app has dealt with it before
+    /// checking the next one. Returns false when the run is cancelled (or the app stops
+    /// answering). Without it (older apps, the CLI) items are sent without waiting.
+    pub trash_ack: Option<&'a (dyn Fn() -> bool + Sync)>,
 }
 
 struct Prog<'a>(&'a Ctx<'a>);
@@ -319,7 +324,11 @@ fn remove_duplicates_with(
             Ok(folder::Removal::Verified) => {
                 // Handed on at once, with the fingerprint just verified, so the app moves it while
                 // the check is fresh (and only if it still matches), not after the whole run.
-                trash_one(ctx, &d.path, d.fingerprint().to_string());
+                if !trash_one(ctx, &d.path, d.fingerprint().to_string(), kept) {
+                    handed.push(d.path.clone());
+                    bytes += d.size;
+                    return stopped(&handed, bytes);
+                }
             }
             Ok(folder::Removal::Removed) => {}
         }
@@ -353,13 +362,31 @@ fn remove_duplicates_with(
 }
 
 /// Ask the app to move one checked item to the Trash (undoable; the engine never does it itself).
-fn trash_one(ctx: &Ctx<'_>, path: &Path, fingerprint: String) {
+/// Ask the app to move one checked item to the Trash (undoable; the engine never does it itself),
+/// with its fingerprint and, for a duplicate, the copy that stays and its fingerprint (the app
+/// checks both right before moving). With `trash_ack`, waits until the app has dealt with it;
+/// returns false when the run must stop.
+fn trash_one(
+    ctx: &Ctx<'_>,
+    path: &Path,
+    fingerprint: String,
+    kept: Option<&folder::ScannedFile>,
+) -> bool {
     let path = path.to_string_lossy().into_owned();
     (ctx.emit)(Event::Needs {
         what: "trash".into(),
         paths: vec![path.clone()],
-        items: vec![crate::protocol::NeedsItem { path, fingerprint }],
+        items: vec![crate::protocol::NeedsItem {
+            path,
+            fingerprint,
+            kept: kept.map(|k| crate::protocol::NeedsKept {
+                path: k.path.to_string_lossy().into_owned(),
+                fingerprint: k.fingerprint().to_string(),
+            }),
+        }],
+        ack: ctx.trash_ack.is_some(),
     });
+    ctx.trash_ack.is_none_or(|wait| wait())
 }
 
 /// Carry out a confirmed empty-folder plan. Every folder is re-checked right before it is handed on
@@ -426,9 +453,17 @@ fn remove_empty(ctx: &Ctx<'_>, plan: &ft::DeletePlan, roots: &[PathBuf]) {
             let same = want.is_some() && before == want && after == want;
             match (checked, want.filter(|_| same)) {
                 (Ok(n), Some(id)) => {
-                    trash_one(ctx, p, crate::fsat::dir_fingerprint(id));
+                    let go_on = trash_one(ctx, p, crate::fsat::dir_fingerprint(id), None);
                     handed += 1;
                     total += n;
+                    if !go_on {
+                        return done(
+                            ctx,
+                            Outcome::Cancelled,
+                            Some("msg.cancelledAfterTrashing"),
+                            vec![handed.to_string(), "0".into()],
+                        );
+                    }
                 }
                 (Err(why), _) => {
                     skipped_event(p, why.reason().as_deref());
@@ -711,6 +746,7 @@ mod tests {
             settings,
             cancelled: &never,
             emit: &emit,
+            trash_ack: None,
         };
         let p: Vec<String> = paths
             .iter()
@@ -1075,6 +1111,7 @@ mod tests {
             settings,
             cancelled: &never,
             emit: &emit,
+            trash_ack: None,
         };
         remove_duplicates(&ctx, &groups, &doomed, mode, &[dir.to_path_buf()]);
         events.into_inner().unwrap()
@@ -1118,6 +1155,7 @@ mod tests {
             settings: &settings,
             cancelled: &never,
             emit: &emit,
+            trash_ack: None,
         };
         assert!(plan_holds_or_report(&ctx, &groups, &doomed));
         assert!(events.lock().unwrap().is_empty());
@@ -1198,6 +1236,7 @@ mod tests {
                 settings: &perm,
                 cancelled: &never,
                 emit: &emit,
+                trash_ack: None,
             };
             remove_duplicates_with(
                 &ctx,
@@ -1318,6 +1357,7 @@ mod tests {
                         settings: &perm,
                         cancelled: &never,
                         emit: &emit,
+                        trash_ack: None,
                     };
                     remove_duplicates(
                         &ctx,
@@ -1370,6 +1410,171 @@ mod tests {
                 .collect();
             assert!(leftovers.is_empty(), "{phase} {attack}: {leftovers:?}");
         }
+    }
+
+    /// The copy that stays is checked last, right before the unlink: replaced (atomic save),
+    /// rewritten or removed at that moment (seam R2, after the doomed copy's own last check), the
+    /// doomed copy is put back and nothing is removed.
+    #[test]
+    fn the_kept_copy_is_checked_last_before_the_unlink() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        for attack in ["kept_atomic", "kept_inplace", "kept_gone"] {
+            let d = tempfile::tempdir().unwrap();
+            let r = d.path().to_path_buf();
+            for (p, c) in [
+                ("keep/x.txt", "dup-content\n"),
+                ("A/x.txt", "dup-content\n"),
+            ] {
+                fs::create_dir_all(r.join(p).parent().unwrap()).unwrap();
+                fs::write(r.join(p), c).unwrap();
+            }
+            let old =
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+            fs::File::options()
+                .write(true)
+                .open(r.join("keep/x.txt"))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            let s = folder::scan(
+                std::slice::from_ref(&r),
+                &folder::ExclusionFilter::default(),
+                &Default::default(),
+                &folder::NullProgress,
+            )
+            .unwrap();
+            let groups =
+                folder::find_duplicates(&s.files, &Default::default(), &folder::NullProgress)
+                    .unwrap();
+            let doomed = folder::to_delete(&groups, DuplicateMode::KeepOldest);
+            let rr = r.clone();
+            let ev = crate::fsat::with_seam(
+                move |p, _| {
+                    if p != "R2" {
+                        return;
+                    }
+                    match attack {
+                        "kept_atomic" => {
+                            fs::write(rr.join("keep/.t"), "NEW-KEPT\n").unwrap();
+                            fs::rename(rr.join("keep/.t"), rr.join("keep/x.txt")).unwrap();
+                        }
+                        "kept_inplace" => {
+                            fs::write(rr.join("keep/x.txt"), "NEW-KEPT!!!\n").unwrap()
+                        }
+                        _ => fs::remove_file(rr.join("keep/x.txt")).unwrap(),
+                    }
+                },
+                || {
+                    let events = Mutex::new(Vec::new());
+                    let emit = |e: Event| {
+                        events
+                            .lock()
+                            .unwrap()
+                            .push(serde_json::to_value(&e).unwrap())
+                    };
+                    let never = || false;
+                    let ctx = Ctx {
+                        settings: &perm,
+                        cancelled: &never,
+                        emit: &emit,
+                        trash_ack: None,
+                    };
+                    remove_duplicates(
+                        &ctx,
+                        &groups,
+                        &doomed,
+                        DuplicateMode::KeepOldest,
+                        std::slice::from_ref(&r),
+                    );
+                    events.into_inner().unwrap()
+                },
+            );
+            assert_eq!(
+                fs::read_to_string(r.join("A/x.txt")).unwrap(),
+                "dup-content\n",
+                "{attack}: {ev:?}"
+            );
+            assert_eq!(
+                changed_paths(&ev),
+                [r.join("A/x.txt").to_string_lossy()],
+                "{attack}"
+            );
+        }
+    }
+
+    /// Trash mode with `trash_ack`: one item at a time, each with the kept copy's fingerprint, and
+    /// the engine waits for the answer; a cancel while it waits stops the run with the count.
+    #[test]
+    fn trash_items_wait_for_the_answer_and_carry_the_kept_copy() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..3 {
+            fs::write(d.path().join(format!("a{i}")), format!("{i}")).unwrap();
+            fs::write(d.path().join(format!("b{i}")), format!("{i}")).unwrap();
+        }
+        let events = Mutex::new(Vec::new());
+        let answered = std::sync::atomic::AtomicUsize::new(0);
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let emit = |e: Event| {
+            events
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&e).unwrap())
+        };
+        let cancelled = || stop.load(std::sync::atomic::Ordering::SeqCst);
+        // the "app" answers the first request; while it handles the second the user cancels
+        let wait = || {
+            let pending = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e["event"] == "needs")
+                .count();
+            let n = answered.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            assert_eq!(pending, n, "one request at a time");
+            if n == 2 {
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                return false;
+            }
+            true
+        };
+        let s = Settings::default();
+        let ctx = Ctx {
+            settings: &s,
+            cancelled: &cancelled,
+            emit: &emit,
+            trash_ack: Some(&wait),
+        };
+        run_batch(
+            "folder.removeDuplicate?mode=oldest",
+            &[d.path().to_string_lossy().into_owned()],
+            &ctx,
+        );
+        let ev = events.into_inner().unwrap();
+        let needs: Vec<_> = ev.iter().filter(|e| e["event"] == "needs").collect();
+        assert_eq!(needs.len(), 2, "{ev:?}");
+        for n in &needs {
+            assert_eq!(n["ack"], true);
+            let item = &n["items"][0];
+            assert!(
+                item["kept"]["fingerprint"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("f:"),
+                "{n}"
+            );
+            assert_ne!(item["kept"]["path"], item["path"]);
+        }
+        let done = find(&ev, "done").unwrap();
+        assert_eq!(done["outcome"], "cancelled", "{ev:?}");
+        assert_eq!(done["summary_key"], "msg.cancelledAfterTrashing");
+        assert_eq!(done["summary_args"][0], "2");
+        // without an answering app nothing waits and no `ack` is asked for
+        let ev = run("folder.removeDuplicate?mode=oldest", &[d.path()], &s);
+        assert!(ev
+            .iter()
+            .filter(|e| e["event"] == "needs")
+            .all(|e| e.get("ack").is_none()));
     }
 
     /// race.py "doomed" / "kept" / FAT: a copy that goes was rewritten in place, the copy that stays
@@ -1588,6 +1793,7 @@ mod tests {
             settings: &perm,
             cancelled: &cancel,
             emit: &emit,
+            trash_ack: None,
         };
         let hook = |_: &folder::ScannedFile| stop.store(true, std::sync::atomic::Ordering::SeqCst);
         remove_duplicates_with(
@@ -1961,6 +2167,7 @@ mod tests {
                 settings: &s,
                 cancelled: &yes,
                 emit: &emit,
+                trash_ack: None,
             },
         );
         let ev = events.into_inner().unwrap();

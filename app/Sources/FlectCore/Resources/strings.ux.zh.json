@@ -1,10 +1,13 @@
 {
  "app.trashPartial": "已将 {1} 项中的 {0} 项移到废纸篓；{2} 项保留在原处（见下方列表）。",
  "app.trashRefused": "未移到废纸篓：{0}（{1}）",
+ "app.trashWhy.cancelled": "运行已取消",
  "app.trashWhy.changed": "在 Flect 检查之后已被更改",
+ "app.trashWhy.engineOutdated": "引擎比此应用旧，未说明其检查的内容；请重新安装 Flect",
  "app.trashWhy.holdsSelected": "其中包含所选项目",
  "app.trashWhy.invalidPath": "不是有效的路径",
  "app.trashWhy.isSelected": "它就是所选项目之一",
+ "app.trashWhy.keptChanged": "保留的副本在 Flect 检查后已被更改",
  "app.trashWhy.missing": "已不存在",
  "app.trashWhy.notEmpty": "已不再为空",
  "app.trashWhy.outsideSelection": "不在所选文件夹内",

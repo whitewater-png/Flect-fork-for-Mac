@@ -265,8 +265,18 @@ final class TrashGuardTests: XCTestCase {
         XCTAssertTrue(dp.hasPrefix("d:") && dp.split(separator: ":").count == 3, dp)
         XCTAssertNil(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp))
         XCTAssertNil(TrashGuard.check(d.path, scope: folders, currentRun: folders.run, fingerprint: dp))
-        // no fingerprint (an older engine, or a forged request): refused
-        XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: nil), .changed)
+        // no fingerprint: an engine older than the app (or a forged request): refused, saying so
+        XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: nil), .engineOutdated)
+        // the copy that stays must still be the one the engine checked
+        let k = sel.appendingPathComponent("keep.txt")
+        file(k)
+        let kfp = try XCTUnwrap(TrashGuard.fingerprint(of: k.path))
+        XCTAssertNil(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp, kept: TrashKept(path: k.path, fingerprint: kfp)))
+        try "changed".write(to: k, atomically: true, encoding: .utf8) // an atomic save replaces it
+        XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp, kept: TrashKept(path: k.path, fingerprint: kfp)), .keptChanged)
+        try FileManager.default.removeItem(at: k)
+        XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp, kept: TrashKept(path: k.path, fingerprint: kfp)), .keptChanged)
+        XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp, kept: TrashKept(path: f.path, fingerprint: fp)), .keptChanged)
         // rewritten in place (same size), replaced, or a folder swapped for another: refused
         try "y".write(to: f, atomically: false, encoding: .utf8)
         XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp), .changed)
