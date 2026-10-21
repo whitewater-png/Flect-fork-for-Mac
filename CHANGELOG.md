@@ -14,6 +14,7 @@
 - Folder tasks: two entries count as one file (a hard link) only when device, inode, size and modification time all match. On file systems that report the same inode number for different files, those files are no longer hidden from Remove Duplicate or the Analyze counts.
 - Quick Actions: when macOS privacy protection does not let Flect read a selected item's location, Flect now says so and how to allow it (System Settings › Privacy & Security › Files and Folders, or Full Disk Access) instead of claiming the item no longer exists. Other read errors get their own message.
 - Messages: `msg.sandboxFailed` now shows why the sandbox could not be set up, and a folder that Remove Empty could not delete permanently is reported with the reason (`msg.emptyRemoveFailed`) instead of a reason that was never shown. Reasons are one line and at most 200 characters. A file name containing `{1}` can no longer be replaced by the next value in a message.
+- Security: the app checks every item the engine asks it to move to the Trash (Remove Duplicate, Remove Empty) right before moving it: it must lie inside one of the folders you selected for that run (never be one of them), must not be a symbolic link, and for Remove Empty must still hold nothing but folders and OS litter. Anything else is left alone and listed with the reason.
 
 ## 0.2.0 - share safely, presets, command line
 

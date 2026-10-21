@@ -184,6 +184,7 @@ final class AppModel: ObservableObject {
         screen = .running
         pendingData = []
         tracker.begin(task: label ?? task, inputs: runPaths)
+        trashScope = (inputs: runPaths, kind: TrashGuard.kind(task: task, steps: steps))
         remember(task: task, as: remembering)
         let events = steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
         Task {
@@ -290,9 +291,18 @@ final class AppModel: ObservableObject {
 
     // MARK: trash (the engine never deletes on its own in Recycle mode)
 
+    /// The current run's selected items and what its trash requests may contain (see `TrashGuard`).
+    private var trashScope: (inputs: [String], kind: TrashGuard.Kind) = ([], .files)
+
+    /// Every path is checked by `TrashGuard` right before it is moved (inside the run's selection, not a link, and for
+    /// Remove Empty still nothing but OS litter); one that fails is skipped and reported.
     private func trash(_ ps: [String]) {
+        let zeroByte = settings.bool("Folder", "Empty", "IgnoreZeroByteFiles", default: false)
         for p in ps {
-            guard p.hasPrefix("/") else { continue }
+            if let why = TrashGuard.check(p, inputs: trashScope.inputs, kind: trashScope.kind, zeroByteIsLitter: zeroByte) {
+                log.append(LogLine(kind: .warn, text: loc.f("app.trashRefused", [p, loc.t(why.key)])))
+                continue
+            }
             do { try FileManager.default.trashItem(at: URL(fileURLWithPath: p), resultingItemURL: nil) }
             catch { log.append(LogLine(kind: .error, text: loc.f("app.trashFailed", [(p as NSString).lastPathComponent]))) }
         }

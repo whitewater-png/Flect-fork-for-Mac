@@ -1,4 +1,13 @@
 {
+ "app.trashRefused": "未移到废纸篓：{0}（{1}）",
+ "app.trashWhy.invalidPath": "不是有效的路径",
+ "app.trashWhy.isSelected": "它就是所选项目之一",
+ "app.trashWhy.missing": "已不存在",
+ "app.trashWhy.notEmpty": "已不再为空",
+ "app.trashWhy.outsideSelection": "不在所选文件夹内",
+ "app.trashWhy.symlink": "它是符号链接",
+ "app.trashWhy.unexpectedType": "不是此任务要删除的项目类型",
+ "app.trashWhy.unreadable": "无法检查",
  "ux.history.empty": "还没有创建过文件的运行。",
  "ux.history.pick": "选择一次运行以查看它创建的文件。",
  "ux.history.title": "最近运行",

@@ -1,4 +1,13 @@
 {
+ "app.trashRefused": "ゴミ箱へ移動しませんでした: {0}（{1}）",
+ "app.trashWhy.invalidPath": "正しいパスではありません",
+ "app.trashWhy.isSelected": "選択した項目そのものです",
+ "app.trashWhy.missing": "すでに存在しません",
+ "app.trashWhy.notEmpty": "空ではなくなっています",
+ "app.trashWhy.outsideSelection": "選択したフォルダの中にありません",
+ "app.trashWhy.symlink": "シンボリックリンクです",
+ "app.trashWhy.unexpectedType": "この処理で削除する種類の項目ではありません",
+ "app.trashWhy.unreadable": "確認できませんでした",
  "ux.history.empty": "ファイルを作成した実行はまだありません。",
  "ux.history.pick": "実行を選ぶと、作成されたファイルが表示されます。",
  "ux.history.title": "最近の実行",

@@ -1,4 +1,13 @@
 {
+ "app.trashRefused": "Not moved to the Trash: {0} ({1})",
+ "app.trashWhy.invalidPath": "not a valid path",
+ "app.trashWhy.isSelected": "it is one of the selected items",
+ "app.trashWhy.missing": "it no longer exists",
+ "app.trashWhy.notEmpty": "it is no longer empty",
+ "app.trashWhy.outsideSelection": "it is not inside the selected folders",
+ "app.trashWhy.symlink": "it is a symbolic link",
+ "app.trashWhy.unexpectedType": "it is not the kind of item this task removes",
+ "app.trashWhy.unreadable": "it could not be checked",
  "ux.history.empty": "No runs that created files yet.",
  "ux.history.pick": "Select a run to see what it created.",
  "ux.history.title": "Recent runs",
