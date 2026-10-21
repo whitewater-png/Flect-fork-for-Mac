@@ -78,5 +78,7 @@ public final class SettingsStore {
     public var hiddenMenuItems: Set<String> { Set(strings("General", "HiddenMenuItems")) }
     public var closeOnSuccess: Bool { bool("General", "CloseOnSuccess", default: true) }
     public var closeOnFailure: Bool { bool("General", "CloseOnFailure", default: false) }
+    /// "Output" section: per-feature output folder (Image, Video, Audio, Text, Pdf, Ocr, ArchiveExtract, ArchiveCompress, Report). Empty = beside the original.
+    public func outputFolder(_ feature: String) -> String { string("Output", feature) }
     public var closeOnCancel: Bool { bool("General", "CloseOnCancel", default: true) }
 }

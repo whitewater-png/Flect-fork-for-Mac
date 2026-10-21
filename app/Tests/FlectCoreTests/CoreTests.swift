@@ -59,6 +59,40 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: first), "1")
     }
 
+    func testOutputFolderResolution() {
+        let src = URL(fileURLWithPath: "/data/photos/a.png")
+        let home = URL(fileURLWithPath: "/Users/me")
+        func dir(_ s: String) -> String { OutputPath.directory(for: src, folder: s, home: home).path }
+        XCTAssertEqual(dir(""), "/data/photos")
+        XCTAssertEqual(dir("  "), "/data/photos")
+        XCTAssertEqual(dir("./Compressed"), "/data/photos/Compressed")
+        XCTAssertEqual(dir("../out"), "/data/out")
+        XCTAssertEqual(dir("./a/../b/."), "/data/photos/b")
+        XCTAssertEqual(dir("../../../../x"), "/x")
+        XCTAssertEqual(dir("/srv/out/../results"), "/srv/results")
+        XCTAssertEqual(dir("~"), "/Users/me")
+        XCTAssertEqual(dir("~/Flect/out"), "/Users/me/Flect/out")
+        XCTAssertEqual(dir("~other"), "/data/photos/~other")
+    }
+
+    func testOutputFolderIsCreatedAndNeverOverwrites() throws {
+        let dir = tmp()
+        let src = dir.appendingPathComponent("a.png")
+        FileManager.default.createFile(atPath: src.path, contents: Data())
+        let first = try OutputPath.writeNew(Data("1".utf8), source: src, suffix: "_c", ext: "jpg", folder: "./Compressed")
+        let second = try OutputPath.writeNew(Data("2".utf8), source: src, suffix: "_c", ext: "jpg", folder: "./Compressed")
+        XCTAssertEqual(first.path, dir.appendingPathComponent("Compressed/a_c.jpg").path)
+        XCTAssertEqual(second.lastPathComponent, "a_c (2).jpg")
+        XCTAssertEqual(try String(contentsOf: first), "1")
+        // unset: beside the original, nothing created
+        let beside = try OutputPath.writeNew(Data("3".utf8), source: src, suffix: "_c", ext: "jpg")
+        XCTAssertEqual(beside.deletingLastPathComponent().path, dir.path)
+        // a file in the way is an error and stays untouched
+        try Data("keep".utf8).write(to: dir.appendingPathComponent("Out"))
+        XCTAssertThrowsError(try OutputPath.writeNew(Data("4".utf8), source: src, folder: "Out"))
+        XCTAssertEqual(try String(contentsOf: dir.appendingPathComponent("Out")), "keep")
+    }
+
     func testSettingsKeepUnknownKeysAndUseDefaults() throws {
         let dir = tmp()
         try Data("\u{FEFF}{\"Image\":{\"Presets\":{\"ResizeA\":80}},\"Mystery\":{\"x\":[1,2]}}".utf8).write(to: dir.appendingPathComponent("settings.json"))

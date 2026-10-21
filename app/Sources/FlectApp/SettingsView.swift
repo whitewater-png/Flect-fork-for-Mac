@@ -160,6 +160,9 @@ struct SettingsView: View {
                     .tag("setup")
                 ForEach(SettingsSchema.sections) { section in
                     Form {
+                        if section.id == "output" {
+                            Text(text(loc, "settings.output.hint", "Leave a field empty to save beside the original.")).font(.caption).foregroundStyle(.secondary)
+                        }
                         ForEach(section.fields) { f in FieldRow(field: f, editor: editor) }
                     }
                     .formStyle(.grouped)
@@ -213,6 +216,13 @@ struct FieldRow: View {
         return "\(base) \(letter)"
     }
 
+    /// An absolute folder picked in the standard panel (a typed relative path stays possible by hand).
+    static func chooseFolder() -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = true; panel.allowsMultipleSelection = false
+        return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+
     var body: some View {
         let loc = Loc.shared
         let label = FieldRow.label(for: field, loc: loc)
@@ -221,6 +231,11 @@ struct FieldRow: View {
             Toggle(label, isOn: Binding(get: { editor.bool(field) }, set: { editor.set(field, $0) }))
         case .text:
             TextField(label, text: Binding(get: { editor.string(field) }, set: { editor.set(field, String($0.prefix(1024))) }))
+        case .folder:
+            HStack {
+                TextField(label, text: Binding(get: { editor.string(field) }, set: { editor.set(field, String($0.prefix(1024))) }), prompt: Text("./Folder"))
+                Button(loc.t("common.browse")) { if let path = FieldRow.chooseFolder() { editor.set(field, path) } }
+            }
         case .int, .double:
             TextField(label, value: Binding(get: { editor.number(field) }, set: { editor.setNumber(field, $0) }), format: .number)
         case .mib:

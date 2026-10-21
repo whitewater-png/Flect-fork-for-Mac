@@ -51,7 +51,7 @@ enum NativeWorker {
 
     // MARK: HEIC
 
-    static func heic(url: URL, loc: Loc) -> NativeReport {
+    static func heic(url: URL, folder: String = "", loc: Loc) -> NativeReport {
         var r = NativeReport()
         guard let src = source(url, loc: loc, report: &r) else { return r }
         let out = NSMutableData()
@@ -61,14 +61,14 @@ enum NativeWorker {
         let opts: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.9]
         CGImageDestinationAddImageFromSource(dest, src, 0, opts as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r }
-        do { let o = try OutputPath.writeNew(out as Data, source: url, ext: "heic"); r.add(.info, o.lastPathComponent) }
+        do { let o = try OutputPath.writeNew(out as Data, source: url, ext: "heic", folder: folder); r.add(.info, o.lastPathComponent) }
         catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
         return r
     }
 
     // MARK: background removal (Vision)
 
-    static func removeBackground(url: URL, loc: Loc) -> NativeReport {
+    static func removeBackground(url: URL, folder: String = "", loc: Loc) -> NativeReport {
         var r = NativeReport()
         guard let src = source(url, loc: loc, report: &r), let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return r }
         let request = VNGenerateForegroundInstanceMaskRequest()
@@ -89,7 +89,7 @@ enum NativeWorker {
             }
             CGImageDestinationAddImage(dest, cg, nil)
             guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r }
-            let o = try OutputPath.writeNew(data as Data, source: url, suffix: "_nobg", ext: "png")
+            let o = try OutputPath.writeNew(data as Data, source: url, suffix: "_nobg", ext: "png", folder: folder)
             r.add(.info, o.lastPathComponent)
         } catch {
             r.add(.error, loc.f("msg.imageDecodeFailed", [url.lastPathComponent]))
@@ -108,7 +108,7 @@ enum NativeWorker {
         return doc
     }
 
-    static func pdfRender(url: URL, jpg: Bool, loc: Loc) -> NativeReport {
+    static func pdfRender(url: URL, jpg: Bool, folder: String = "", loc: Loc) -> NativeReport {
         var r = NativeReport()
         guard let doc = openPdf(url, loc: loc, report: &r) else { return r }
         let scale = 150.0 / 72.0
@@ -130,24 +130,24 @@ enum NativeWorker {
             guard let dest = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else { continue }
             CGImageDestinationAddImage(dest, image, jpg ? [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary : nil)
             guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); continue }
-            do { _ = try OutputPath.writeNew(data as Data, source: url, suffix: "_p\(i + 1)", ext: jpg ? "jpg" : "png") }
+            do { _ = try OutputPath.writeNew(data as Data, source: url, suffix: "_p\(i + 1)", ext: jpg ? "jpg" : "png", folder: folder) }
             catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
         }
         return r
     }
 
-    static func pdfText(url: URL, loc: Loc) -> NativeReport {
+    static func pdfText(url: URL, folder: String = "", loc: Loc) -> NativeReport {
         var r = NativeReport()
         guard let doc = openPdf(url, loc: loc, report: &r) else { return r }
         let text = (doc.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { r.add(.warn, loc.f("msg.noTextFound", [url.lastPathComponent])); return r }
-        do { _ = try OutputPath.writeNew(Data(text.utf8), source: url, ext: "txt") }
+        do { _ = try OutputPath.writeNew(Data(text.utf8), source: url, ext: "txt", folder: folder) }
         catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
         return r
     }
 
     /// Merge in the given order; the result goes next to the first file.
-    static func pdfMerge(urls: [URL], loc: Loc) -> NativeReport {
+    static func pdfMerge(urls: [URL], folder: String = "", loc: Loc) -> NativeReport {
         var r = NativeReport()
         guard urls.count >= 2 else { r.add(.error, loc.t("msg.pdfNeedTwo")); return r }
         let merged = PDFDocument()
@@ -161,7 +161,7 @@ enum NativeWorker {
             }
         }
         guard let data = merged.dataRepresentation() else { r.add(.error, loc.t("msg.ioError")); return r }
-        do { let o = try OutputPath.writeNew(data, source: urls[0], suffix: "_merged", ext: "pdf"); r.add(.info, o.lastPathComponent) }
+        do { let o = try OutputPath.writeNew(data, source: urls[0], suffix: "_merged", ext: "pdf", folder: folder); r.add(.info, o.lastPathComponent) }
         catch { r.add(.error, loc.t("msg.ioError")) }
         return r
     }
@@ -205,10 +205,11 @@ extension AppModel {
         screen = .running
         let urls = paths.map { URL(fileURLWithPath: $0) }
         let loc = self.loc
+        let pdfFolder = settings.outputFolder("Pdf"), imageFolder = settings.outputFolder("Image"), ocrFolder = settings.outputFolder("Ocr")
         if case .pdfMerge = task {
             status = loc.t("app.running"); total = 1
             Task {
-                let report = await Task.detached(priority: .userInitiated) { NativeWorker.pdfMerge(urls: urls, loc: loc) }.value
+                let report = await Task.detached(priority: .userInitiated) { NativeWorker.pdfMerge(urls: urls, folder: pdfFolder, loc: loc) }.value
                 for (k, t) in report.lines { log.append(LogLine(kind: k, text: t)) }
                 done = 1
                 finishRun(outcome: report.problems ? .failed : .succeeded, summary: nil, sawProblem: report.problems)
@@ -226,11 +227,11 @@ extension AppModel {
                 total = urls.count; done = i
                 let report: NativeReport = await Task.detached(priority: .userInitiated) {
                     switch task {
-                    case .heicConvert: return NativeWorker.heic(url: url, loc: loc)
-                    case .pdfRender(let f): return NativeWorker.pdfRender(url: url, jpg: f == "JPG", loc: loc)
-                    case .pdfText: return NativeWorker.pdfText(url: url, loc: loc)
+                    case .heicConvert: return NativeWorker.heic(url: url, folder: imageFolder, loc: loc)
+                    case .pdfRender(let f): return NativeWorker.pdfRender(url: url, jpg: f == "JPG", folder: pdfFolder, loc: loc)
+                    case .pdfText: return NativeWorker.pdfText(url: url, folder: pdfFolder, loc: loc)
                     case .ocr: return NativeWorker.ocr(url: url, languageSetting: ocrLang, loc: loc)
-                    case .removeBackground: return NativeWorker.removeBackground(url: url, loc: loc)
+                    case .removeBackground: return NativeWorker.removeBackground(url: url, folder: imageFolder, loc: loc)
                     case .pdfPreview, .pdfMerge: return NativeReport()
                     }
                 }.value
@@ -248,7 +249,7 @@ extension AppModel {
                         log.append(LogLine(kind: .info, text: loc.t("msg.ocrCopied")))
                     case "ShowOnly": combined.append(text)
                     default:
-                        do { _ = try OutputPath.writeNew(Data(("\u{FEFF}" + text).utf8), source: url, ext: "txt") }
+                        do { _ = try OutputPath.writeNew(Data(("\u{FEFF}" + text).utf8), source: url, ext: "txt", folder: ocrFolder) }
                         catch { log.append(LogLine(kind: .error, text: loc.f("msg.ioError", [url.lastPathComponent]))); problems = true }
                     }
                 }
