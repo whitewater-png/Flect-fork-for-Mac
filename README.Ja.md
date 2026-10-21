@@ -25,7 +25,7 @@ English: [README.md](README.md)
 
 - macOS 14 以降・Apple Silicon
 - Xcode Command Line Tools（Swift 5.9 以上）、[Rust](https://rustup.rs)
-- `brew install ffmpeg-full sevenzip`（動画・音声と 7z 用。JAR を使うなら `openjdk` も）
+- `scripts/setup-deps.sh` が、同梱しない外部ツール（ffmpeg-full、7-Zip、任意で Java・CFR・字幕モデル）の有無を調べ、確認のうえ Homebrew で入れます（`--check` は確認のみ）。手動なら `brew install ffmpeg-full sevenzip`
 
 ## ダウンロード（ad-hoc 署名のビルド）
 
