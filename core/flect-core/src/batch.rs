@@ -218,6 +218,28 @@ fn remove_duplicates(
     remove_duplicates_with(ctx, groups, doomed, mode, roots, &|_| {});
 }
 
+/// For each copy that goes, the copy that stays in its group (none in "delete all" mode), built
+/// in one pass over the groups (a file -> group map), not by searching the groups for every file.
+fn kept_copies<'a>(
+    groups: &'a [Vec<folder::ScannedFile>],
+    doomed: &[folder::ScannedFile],
+    mode: DuplicateMode,
+) -> std::collections::HashMap<&'a Path, &'a folder::ScannedFile> {
+    let mut out = std::collections::HashMap::new();
+    if mode == DuplicateMode::DeleteAll {
+        return out;
+    }
+    let gone: std::collections::HashSet<&Path> = doomed.iter().map(|d| d.path.as_path()).collect();
+    for g in groups {
+        if let Some(kept) = g.iter().find(|f| !gone.contains(f.path.as_path())) {
+            for f in g.iter().filter(|f| gone.contains(f.path.as_path())) {
+                out.insert(f.path.as_path(), kept);
+            }
+        }
+    }
+    out
+}
+
 /// [`remove_duplicates`] with a hook that runs after a file's checks, right before it is removed.
 fn remove_duplicates_with(
     ctx: &Ctx<'_>,
@@ -228,13 +250,8 @@ fn remove_duplicates_with(
     before_unlink: &dyn Fn(&folder::ScannedFile),
 ) {
     let permanent = ctx.settings.folder.delete_method == DeleteMethod::Permanent;
-    let gone: std::collections::HashSet<&Path> = doomed.iter().map(|d| d.path.as_path()).collect();
-    let kept_of = |d: &folder::ScannedFile| {
-        (mode != DuplicateMode::DeleteAll)
-            .then(|| groups.iter().find(|g| g.iter().any(|f| f.path == d.path)))
-            .flatten()
-            .and_then(|g| g.iter().find(|f| !gone.contains(f.path.as_path())))
-    };
+    let kept_of = kept_copies(groups, doomed, mode);
+    let kept_of = |d: &folder::ScannedFile| kept_of.get(d.path.as_path()).copied();
     let prog = Prog(ctx);
     let (mut handed, mut bytes) = (Vec::new(), 0u64);
     for (i, d) in doomed.iter().enumerate() {
@@ -1273,6 +1290,39 @@ mod tests {
                 assert!(!r.join("free").exists(), "{ev:?}");
             }
         }
+    }
+
+    /// `kept_of` searched every group for every doomed file (16,000 pairs: ~34 s in debug).
+    #[test]
+    fn kept_copies_are_found_in_one_pass() {
+        let t = |s| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s);
+        let f = |i: u64, s| folder::ScannedFile {
+            path: PathBuf::from(format!("/x/{i}")),
+            size: 1,
+            modified: t(s),
+            extension: String::new(),
+            file_id: (1, i),
+            changed: (0, 0),
+            mtime: (0, 0),
+            parent_id: (0, 0),
+            root: Default::default(),
+        };
+        let groups: Vec<Vec<folder::ScannedFile>> = (0..16_000u64)
+            .map(|i| vec![f(2 * i, 1), f(2 * i + 1, 2)])
+            .collect();
+        let doomed = folder::to_delete(&groups, DuplicateMode::KeepOldest);
+        let start = Instant::now();
+        let kept = kept_copies(&groups, &doomed, DuplicateMode::KeepOldest);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        assert_eq!(kept.len(), 16_000);
+        for (i, d) in doomed.iter().enumerate() {
+            assert_eq!(kept[d.path.as_path()].path, groups[i][0].path);
+        }
+        assert!(kept_copies(&groups, &doomed, DuplicateMode::DeleteAll).is_empty());
     }
 
     /// The plan is looked at again right before it is carried out.
