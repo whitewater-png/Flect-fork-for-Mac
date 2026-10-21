@@ -2,7 +2,7 @@
 
 **Right-click files in Finder to convert, compress, resize and more.** A macOS port of [Flect](https://github.com/Konayukiw/Flect) (Windows), rebuilt with a Rust processing core and a Swift front end.
 
-> **Status: pre-release.** Everything compiles and passes CI on macOS 14 (Apple Silicon), but the Finder integration and OS-specific features still need verification on real hardware. See [`docs/mac-port/11-mac-verification-guide.ja.md`](docs/mac-port/11-mac-verification-guide.ja.md) (Japanese). No signed or notarized builds exist yet - you build it yourself.
+> **Status: first release (0.1.0).** Verified on a MacBook (macOS 26, Apple Silicon) in two rounds, see [`docs/mac-port/`](docs/mac-port/). Builds are ad-hoc signed, **not notarized**. See [`CHANGELOG.md`](CHANGELOG.md) and the release notes for known limitations.
 
 [日本語](README.Ja.md) / English
 
