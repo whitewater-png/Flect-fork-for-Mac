@@ -143,27 +143,86 @@ fn duplicate_preview(
     })
 }
 
-/// Hand a delete plan to wherever it is carried out, and say what happened.
-fn carry_out(
+/// A duplicate that is not removed because it, or the copy that stays, is not what the scan saw.
+fn changed_event(ctx: &Ctx<'_>, p: &Path) {
+    (ctx.emit)(Event::Warn {
+        key: "msg.duplicateChanged".into(),
+        args: vec![p.to_string_lossy().into_owned()],
+    });
+}
+
+/// Carry out a confirmed duplicate plan, one file at a time. Right before each file is removed
+/// (permanent) or handed on to the app for the Trash, it and the copy that stays are checked again
+/// ([`folder::still_safe_to_remove`]: same files as scanned, contents still identical); a file that
+/// fails is skipped and reported with `msg.duplicateChanged`. The summary counts what was removed.
+fn remove_duplicates(
     ctx: &Ctx<'_>,
-    paths: Vec<PathBuf>,
+    groups: &[Vec<folder::ScannedFile>],
+    doomed: &[folder::ScannedFile],
+    mode: DuplicateMode,
     roots: &[PathBuf],
-    summary_trash: &str,
-    summary_perm: &str,
-    args: Vec<String>,
 ) {
-    if ctx.settings.folder.delete_method == DeleteMethod::Permanent {
-        match ft::delete_permanently(&paths, roots) {
-            Ok(_) => done(ctx, Outcome::Succeeded, Some(summary_perm), args),
-            Err(e) => fail(ctx, "msg.ioError", e.to_string()),
+    let permanent = ctx.settings.folder.delete_method == DeleteMethod::Permanent;
+    let gone: std::collections::HashSet<&Path> = doomed.iter().map(|d| d.path.as_path()).collect();
+    let kept_of = |d: &folder::ScannedFile| {
+        (mode != DuplicateMode::DeleteAll)
+            .then(|| groups.iter().find(|g| g.iter().any(|f| f.path == d.path)))
+            .flatten()
+            .and_then(|g| g.iter().find(|f| !gone.contains(f.path.as_path())))
+    };
+    let prog = Prog(ctx);
+    let (mut handed, mut bytes) = (Vec::new(), 0u64);
+    for (i, d) in doomed.iter().enumerate() {
+        let kept = kept_of(d);
+        if mode != DuplicateMode::DeleteAll && kept.is_none() {
+            changed_event(ctx, &d.path);
+            continue;
         }
+        match folder::still_safe_to_remove(d, kept, &prog) {
+            Err(_) => return cancelled(ctx),
+            Ok(false) => {
+                changed_event(ctx, &d.path);
+                continue;
+            }
+            Ok(true) => {}
+        }
+        if permanent {
+            if let Err(e) = ft::delete_permanently(std::slice::from_ref(&d.path), roots) {
+                (ctx.emit)(Event::Warn {
+                    key: "msg.emptyRemoveFailed".into(),
+                    args: vec![
+                        d.path.to_string_lossy().into_owned(),
+                        tasks::short_reason(&e.to_string()),
+                    ],
+                });
+                continue;
+            }
+        }
+        handed.push(d.path.clone());
+        bytes += d.size;
+        (ctx.emit)(Event::Step {
+            done: i as u64 + 1,
+            total: doomed.len() as u64,
+        });
+    }
+    if handed.is_empty() {
+        return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
+    }
+    let args = vec![handed.len().to_string(), bytes.to_string()];
+    if permanent {
+        done(
+            ctx,
+            Outcome::Succeeded,
+            Some("msg.deletedPermanently"),
+            args,
+        );
     } else {
         // The app moves these to the Trash (undoable); the engine never does it itself.
         (ctx.emit)(Event::Needs {
             what: "trash".into(),
-            paths: path_list(&paths),
+            paths: path_list(&handed),
         });
-        done(ctx, Outcome::Succeeded, Some(summary_trash), args);
+        done(ctx, Outcome::Succeeded, Some("msg.recycled"), args);
     }
 }
 
@@ -310,6 +369,11 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                 );
             };
             let _ = plan;
+            // Groups in which anything changed since the scan are left alone (and reported).
+            let (groups, changed) = folder::unchanged_groups(groups);
+            for p in &changed {
+                changed_event(ctx, p);
+            }
             let doomed = folder::to_delete(&groups, mode);
             if !folder::plan_is_consistent(&groups, &doomed, mode) {
                 // Never expected (the scan lists each file once); refuse rather than risk the only copy.
@@ -339,15 +403,7 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                     vec![doomed.len().to_string(), bytes.to_string()],
                 );
             }
-            let count = doomed.len().to_string();
-            carry_out(
-                ctx,
-                doomed.into_iter().map(|d| d.path).collect(),
-                &roots,
-                "msg.recycled",
-                "msg.deletedPermanently",
-                vec![count, bytes.to_string()],
-            );
+            remove_duplicates(ctx, &groups, &doomed, mode, &roots);
         }
         "folder.removeEmpty" => {
             let (plan, total) = match ft::plan_remove_empty(&roots, f, &prog) {
@@ -784,6 +840,144 @@ mod tests {
                 );
                 assert!(precious.exists(), "{mode}: the only copy is gone");
             }
+        }
+    }
+
+    /// Run the removal step of a duplicate plan made earlier: what happens when files change between
+    /// the scan and the removal (the race the review hit with a background writer), made
+    /// deterministic by changing them in between.
+    fn remove_stale(
+        dir: &Path,
+        mode: DuplicateMode,
+        settings: &Settings,
+        between: impl FnOnce(&[folder::ScannedFile]),
+    ) -> Vec<serde_json::Value> {
+        let s = folder::scan(
+            &[dir.to_path_buf()],
+            &folder::ExclusionFilter::default(),
+            &Default::default(),
+            &folder::NullProgress,
+        )
+        .unwrap();
+        let groups =
+            folder::find_duplicates(&s.files, &Default::default(), &folder::NullProgress).unwrap();
+        let doomed = folder::to_delete(&groups, mode);
+        between(&doomed);
+        let events = Mutex::new(Vec::new());
+        let emit = |e: Event| {
+            events
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&e).unwrap())
+        };
+        let never = || false;
+        let ctx = Ctx {
+            settings,
+            cancelled: &never,
+            emit: &emit,
+        };
+        remove_duplicates(&ctx, &groups, &doomed, mode, &[dir.to_path_buf()]);
+        events.into_inner().unwrap()
+    }
+
+    fn changed_paths(ev: &[serde_json::Value]) -> Vec<String> {
+        ev.iter()
+            .filter(|e| e["event"] == "warn" && e["key"] == "msg.duplicateChanged")
+            .map(|e| e["args"][0].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// race.py "doomed" / "kept" / FAT: a copy that goes was rewritten in place, the copy that stays
+    /// was replaced by an atomic save, or a file was recreated: the stale plan must not remove the
+    /// only copy of anything. A legitimate duplicate is still removed.
+    #[test]
+    fn files_changed_after_the_scan_are_never_removed() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        let make = || {
+            let d = tempfile::tempdir().unwrap();
+            fs::write(d.path().join("a.txt"), "original-0123456789\n").unwrap();
+            fs::write(d.path().join("b.txt"), "original-0123456789\n").unwrap();
+            // a.txt is older: KeepOldest keeps a.txt and removes b.txt
+            let old =
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+            fs::File::options()
+                .write(true)
+                .open(d.path().join("a.txt"))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            d
+        };
+        for settings in [&perm, &Settings::default()] {
+            // 1. the copy that goes is rewritten in place (same size)
+            let d = make();
+            let ev = remove_stale(d.path(), DuplicateMode::KeepOldest, settings, |doomed| {
+                assert_eq!(doomed.len(), 1);
+                fs::write(&doomed[0].path, "NEW-WORK-ONLY-HERE!\n").unwrap();
+            });
+            assert_eq!(
+                fs::read_to_string(d.path().join("b.txt")).unwrap(),
+                "NEW-WORK-ONLY-HERE!\n"
+            );
+            assert_eq!(
+                changed_paths(&ev),
+                [d.path().join("b.txt").to_string_lossy()],
+                "{ev:?}"
+            );
+            assert!(find(&ev, "needs").is_none(), "{ev:?}");
+            assert_eq!(
+                find(&ev, "done").unwrap()["summary_key"],
+                "msg.nothingToRemove"
+            );
+
+            // 2. the copy that stays is replaced by an atomic save with other content
+            let d = make();
+            let ev = remove_stale(d.path(), DuplicateMode::KeepOldest, settings, |_| {
+                fs::write(d.path().join(".tmp"), "version-2-different\n").unwrap();
+                fs::rename(d.path().join(".tmp"), d.path().join("a.txt")).unwrap();
+            });
+            assert_eq!(
+                fs::read_to_string(d.path().join("b.txt")).unwrap(),
+                "original-0123456789\n",
+                "the last copy of the original"
+            );
+            assert_eq!(changed_paths(&ev).len(), 1, "{ev:?}");
+            assert!(find(&ev, "needs").is_none());
+
+            // 3. the copy that stays changes content but keeps its inode and size (in-place write)
+            let d = make();
+            let ev = remove_stale(d.path(), DuplicateMode::KeepOldest, settings, |_| {
+                fs::write(d.path().join("a.txt"), "ORIGINAL-0123456789\n").unwrap();
+            });
+            assert!(d.path().join("b.txt").exists());
+            assert_eq!(changed_paths(&ev).len(), 1, "{ev:?}");
+
+            // 4. a removed copy recreated under the same name (inode reused on FAT): ctime differs
+            let d = make();
+            let ev = remove_stale(d.path(), DuplicateMode::DeleteAll, settings, |doomed| {
+                fs::remove_file(&doomed[1].path).unwrap();
+                fs::write(&doomed[1].path, "original-0123456789\n").unwrap();
+            });
+            assert_eq!(changed_paths(&ev).len(), 1, "{ev:?}");
+
+            // 5. nothing changed: the duplicate goes (or is handed to the Trash)
+            let d = make();
+            let ev = remove_stale(d.path(), DuplicateMode::KeepOldest, settings, |_| {});
+            assert!(changed_paths(&ev).is_empty(), "{ev:?}");
+            if std::ptr::eq(settings, &perm) {
+                assert!(!d.path().join("b.txt").exists());
+                assert_eq!(
+                    find(&ev, "done").unwrap()["summary_key"],
+                    "msg.deletedPermanently"
+                );
+            } else {
+                assert_eq!(
+                    find(&ev, "needs").unwrap()["paths"][0],
+                    d.path().join("b.txt").to_string_lossy().as_ref()
+                );
+            }
+            assert!(d.path().join("a.txt").exists());
         }
     }
 

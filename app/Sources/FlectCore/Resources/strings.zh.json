@@ -254,6 +254,7 @@
  "msg.decompiling": "{0} - 正在反编译",
  "msg.deletedPermanently": "已彻底删除 {0}，释放 {1}。",
  "msg.deletingPermanently": "正在删除 {0}",
+ "msg.duplicateChanged": "扫描后此文件或保留的副本已更改，未删除：{0}",
  "msg.duplicatesFound": "发现 {0} 组重复文件。",
  "msg.emptyDeleted": "已删除 {0}。",
  "msg.emptyFile": "此文件为空。",

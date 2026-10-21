@@ -262,6 +262,7 @@
  "msg.decompiling": "{0} - Decompiling",
  "msg.deletedPermanently": "Deleted {0}, reclaiming {1}.",
  "msg.deletingPermanently": "Deleting {0}",
+ "msg.duplicateChanged": "Not removed because it or the copy that stays changed since the scan: {0}",
  "msg.duplicatesFound": "Found {0} groups of duplicates.",
  "msg.emptyDeleted": "Deleted {0}.",
  "msg.emptyFile": "This file is empty.",

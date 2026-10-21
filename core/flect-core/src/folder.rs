@@ -131,6 +131,9 @@ pub struct ScannedFile {
     /// can report the same pair, so listing uses [`ScannedFile::same_file_key`]; but whatever decides
     /// what to delete treats a matching pair alone as one file ([`ScannedFile::may_be_same_file`]).
     pub file_id: (u64, u64),
+    /// Status change time (ctime) as (seconds, nanoseconds): with the other fields, what a later
+    /// look must find again before anything is removed ([`ScannedFile::unchanged`]).
+    pub changed: (i64, i64),
 }
 
 /// What two entries must share to be listed once (see [`TreeScan`]).
@@ -150,6 +153,18 @@ impl ScannedFile {
     /// what to delete uses this: of such a pair, neither name is ever removed.
     pub fn may_be_same_file(&self, other: &ScannedFile) -> bool {
         self.file_id == other.file_id
+    }
+
+    /// Whether `m` (taken without following links) still describes the file the scan saw: a regular
+    /// file with the same device, inode, size, modification time and status change time (to the
+    /// nanosecond). A file rewritten in place, replaced by another one (an atomic save) or recreated
+    /// under a reused inode number (FAT) fails at least one of these.
+    pub fn unchanged(&self, m: &fs::Metadata) -> bool {
+        m.file_type().is_file()
+            && (m.dev(), m.ino()) == self.file_id
+            && m.len() == self.size
+            && m.modified().unwrap_or(SystemTime::UNIX_EPOCH) == self.modified
+            && (m.ctime(), m.ctime_nsec()) == self.changed
     }
 }
 
@@ -363,6 +378,7 @@ fn walk(
                 modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                 extension: extension_of(&name),
                 file_id: (meta.dev(), meta.ino()),
+                changed: (meta.ctime(), meta.ctime_nsec()),
             });
             if !listed {
                 continue; // another name for a file already listed
@@ -678,32 +694,107 @@ pub fn plan_is_consistent(
 }
 
 /// Right before a duplicate plan is shown or carried out, look again (without following links):
-/// every copy that stays still exists, every copy that goes is still a regular file with the device
-/// and inode the scan saw, and no copy that goes is now the same (device, inode) as one that stays.
+/// every entry of every group, kept or not, is still the file the scan saw
+/// ([`ScannedFile::unchanged`]), and no copy that goes shares its (device, inode) with one that stays.
 pub fn plan_still_holds(groups: &[Vec<ScannedFile>], doomed: &[ScannedFile]) -> bool {
-    let now = |p: &Path| {
-        fs::symlink_metadata(p)
-            .ok()
-            .filter(|m| m.is_file())
-            .map(|m| (m.dev(), m.ino()))
-    };
+    let same = |f: &ScannedFile| fs::symlink_metadata(&f.path).is_ok_and(|m| f.unchanged(&m));
     let gone: HashSet<&Path> = doomed.iter().map(|d| d.path.as_path()).collect();
-    let mut kept_ids = HashSet::new();
-    for f in groups
+    let kept_ids: HashSet<(u64, u64)> = groups
         .iter()
         .flatten()
         .filter(|f| !gone.contains(f.path.as_path()))
-    {
-        match now(&f.path) {
-            Some(id) => {
-                kept_ids.insert(id);
-            }
-            None => return false,
+        .map(|f| f.file_id)
+        .collect();
+    groups.iter().flatten().all(same)
+        && doomed
+            .iter()
+            .all(|d| same(d) && !kept_ids.contains(&d.file_id))
+}
+
+/// The groups whose every entry is still the file the scan saw, and the paths of the entries that
+/// changed (their groups are left alone).
+pub fn unchanged_groups(groups: Vec<Vec<ScannedFile>>) -> (Vec<Vec<ScannedFile>>, Vec<PathBuf>) {
+    let mut changed = Vec::new();
+    let held = groups
+        .into_iter()
+        .filter(|g| {
+            let moved: Vec<PathBuf> = g
+                .iter()
+                .filter(|f| !fs::symlink_metadata(&f.path).is_ok_and(|m| f.unchanged(&m)))
+                .map(|f| f.path.clone())
+                .collect();
+            let ok = moved.is_empty();
+            changed.extend(moved);
+            ok
+        })
+        .collect();
+    (held, changed)
+}
+
+#[cfg(target_os = "macos")]
+const O_NOFOLLOW: i32 = 0x0100;
+#[cfg(not(target_os = "macos"))]
+const O_NOFOLLOW: i32 = 0o400000;
+
+/// Open a regular file for reading without following a link in the last component.
+fn open_nofollow(p: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(p)
+}
+
+/// The last check, made right before one duplicate is removed (or handed on to the Trash):
+/// - `doomed` and, in a keep mode, `kept` (the copy that stays) both still are the files the scan
+///   saw ([`ScannedFile::unchanged`]), by name and through a descriptor opened with `O_NOFOLLOW`;
+/// - their contents are still byte-for-byte identical (streamed, bounded memory, cancellable);
+/// - after the comparison neither descriptor's file changed and both names still lead to them.
+///
+/// `Ok(false)` on any difference: the caller skips that file and reports it.
+pub fn still_safe_to_remove(
+    doomed: &ScannedFile,
+    kept: Option<&ScannedFile>,
+    progress: &dyn Progress,
+) -> Result<bool, Cancelled> {
+    let check = |f: &ScannedFile, file: &File| {
+        file.metadata().is_ok_and(|m| f.unchanged(&m))
+            && fs::symlink_metadata(&f.path).is_ok_and(|m| f.unchanged(&m))
+    };
+    let Ok(mut d) = open_nofollow(&doomed.path) else {
+        return Ok(false);
+    };
+    if !check(doomed, &d) {
+        return Ok(false);
+    }
+    let Some(kept) = kept else {
+        return Ok(true); // "delete all": nothing stays to compare with
+    };
+    if kept.may_be_same_file(doomed) || kept.path == doomed.path {
+        return Ok(false);
+    }
+    let Ok(mut k) = open_nofollow(&kept.path) else {
+        return Ok(false);
+    };
+    if !check(kept, &k) {
+        return Ok(false);
+    }
+    let (mut bd, mut bk) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    loop {
+        if progress.cancelled() {
+            return Err(Cancelled);
+        }
+        let (Ok(nd), Ok(nk)) = (read_full(&mut d, &mut bd), read_full(&mut k, &mut bk)) else {
+            return Ok(false);
+        };
+        if nd != nk || bd[..nd] != bk[..nk] {
+            return Ok(false);
+        }
+        if nd == 0 {
+            break;
         }
     }
-    doomed
-        .iter()
-        .all(|d| now(&d.path).is_some_and(|id| id == d.file_id && !kept_ids.contains(&id)))
+    Ok(check(doomed, &d) && check(kept, &k))
 }
 
 // ------------------------------------------------------------ tree
@@ -973,6 +1064,7 @@ mod tests {
             modified: t(s),
             extension: String::new(),
             file_id: (1, u64::from(n.as_bytes()[0])),
+            changed: (0, 0),
         };
         let groups = vec![vec![f("a", 20), f("b", 10), f("c", 30)]];
         let names = |v: Vec<ScannedFile>| {
@@ -1023,6 +1115,7 @@ mod tests {
             modified: t(s),
             extension: String::new(),
             file_id: (7, 42),
+            changed: (0, 0),
         };
         let (a, link) = (f("a", 10, 100), f("hardlink", 10, 100));
         let (other_size, other_time) = (f("b", 11, 100), f("c", 10, 101));
@@ -1099,6 +1192,95 @@ mod tests {
             &[a.clone(), link.clone()],
             DuplicateMode::DeleteAll
         ));
+    }
+
+    /// The per-file check made right before a duplicate is removed.
+    #[test]
+    fn still_safe_to_remove_checks_identity_metadata_and_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        write(&r.join("k"), &vec![5u8; 200_000]);
+        write(&r.join("x"), &vec![5u8; 200_000]);
+        let rescan = || {
+            let s = scan(
+                &[r.to_path_buf()],
+                &ExclusionFilter::default(),
+                &EmptyFolderSettings::default(),
+                &NullProgress,
+            )
+            .unwrap();
+            let get = |n: &str| {
+                s.files
+                    .iter()
+                    .find(|f| f.path == r.join(n))
+                    .unwrap()
+                    .clone()
+            };
+            (get("k"), get("x"))
+        };
+        let (k, x) = rescan();
+        assert_ne!(x.changed, (0, 0));
+        assert_eq!(still_safe_to_remove(&x, Some(&k), &NullProgress), Ok(true));
+        assert_eq!(still_safe_to_remove(&x, None, &NullProgress), Ok(true));
+        // the same file on both sides is never "safe"
+        assert_eq!(still_safe_to_remove(&x, Some(&x), &NullProgress), Ok(false));
+        // any recorded field that no longer matches (as a reused FAT inode would show)
+        for tweak in 0..4 {
+            let mut y = x.clone();
+            match tweak {
+                0 => y.changed.1 += 1,
+                1 => y.modified += Duration::from_nanos(1),
+                2 => y.size += 1,
+                _ => y.file_id.1 += 1,
+            }
+            assert_eq!(
+                still_safe_to_remove(&y, Some(&k), &NullProgress),
+                Ok(false),
+                "{tweak}"
+            );
+            assert_eq!(
+                still_safe_to_remove(&x, Some(&y), &NullProgress),
+                Ok(false),
+                "{tweak}"
+            );
+        }
+        // contents differing in the last byte, with metadata re-recorded: refused by the comparison
+        let mut other = vec![5u8; 200_000];
+        other[199_999] = 6;
+        write(&r.join("x"), &other);
+        let (k2, x2) = rescan();
+        assert_eq!(
+            still_safe_to_remove(&x2, Some(&k2), &NullProgress),
+            Ok(false)
+        );
+        // a link where the file was: not followed, refused
+        write(&r.join("x"), &vec![5u8; 200_000]);
+        let (k3, x3) = rescan();
+        fs::remove_file(r.join("x")).unwrap();
+        std::os::unix::fs::symlink(r.join("k"), r.join("x")).unwrap();
+        assert_eq!(
+            still_safe_to_remove(&x3, Some(&k3), &NullProgress),
+            Ok(false)
+        );
+        // cancelled during the comparison
+        fs::remove_file(r.join("x")).unwrap();
+        write(&r.join("x"), &vec![5u8; 200_000]);
+        let (k4, x4) = rescan();
+        struct Stop;
+        impl Progress for Stop {
+            fn cancelled(&self) -> bool {
+                true
+            }
+        }
+        assert_eq!(still_safe_to_remove(&x4, Some(&k4), &Stop), Err(Cancelled));
+        // plan_still_holds looks at every entry, kept ones included
+        let groups = vec![vec![k4.clone(), x4.clone()]];
+        assert!(plan_still_holds(&groups, std::slice::from_ref(&x4)));
+        write(&r.join("k"), &vec![7u8; 200_000]);
+        assert!(!plan_still_holds(&groups, std::slice::from_ref(&x4)));
+        let (held, changed) = unchanged_groups(groups);
+        assert!(held.is_empty());
+        assert_eq!(changed, [r.join("k")]);
     }
 
     #[test]

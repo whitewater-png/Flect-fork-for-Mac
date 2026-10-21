@@ -254,6 +254,7 @@
  "msg.decompiling": "{0} - 逆コンパイルしています",
  "msg.deletedPermanently": "{0} を完全に削除し、{1} を解放しました。",
  "msg.deletingPermanently": "{0} を削除しています",
+ "msg.duplicateChanged": "スキャン後にこのファイルか残す側のコピーが変わったため、削除しませんでした: {0}",
  "msg.duplicatesFound": "重複グループが {0} 件見つかりました。",
  "msg.emptyDeleted": "{0} を削除しました。",
  "msg.emptyFile": "このファイルは空です。",

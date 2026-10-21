@@ -97,6 +97,7 @@
 - `msg.compressEncode`
 - `msg.compressStage`
 - `msg.decompileFailed`
+- `msg.duplicateChanged`
 - `msg.duplicatesFound`
 - `msg.duplicatesPreview`
 - `msg.emptyFound`
