@@ -145,7 +145,7 @@
 旧版と共通で使うキー（35 件）: `dialog.trim.backwards`, `msg.alreadySmall`, `msg.cannotConvertFrom`, `msg.cannotConvertTo`, `msg.comparing`, `msg.decompileEmpty`, `msg.deletedPermanently`, `msg.emptyDeleted`, `msg.emptyFile`, `msg.emptyRecycled`, `msg.hardwareFallback`, `msg.mergedInto`, `msg.merging`, `msg.noAudioTrack`, `msg.noDataRows`, `msg.noDuplicates`, `msg.noDuration`, `msg.noEmpty`, `msg.noPages`, `msg.noRootElement`, `msg.noVideoStream`, `msg.notATable`, `msg.nothingToRemove`, `msg.overTarget`, `msg.readAsSeparated`, `msg.recycled`, `msg.renameDryRun`, `msg.renamed`, `msg.scanningCount`, `msg.separator.tab`, `msg.sjisFailed`, `msg.sjisReplaced`, `msg.targetMissed`, `msg.verifying`, `msg.webpFallback`
 
 ## アプリ側の追加機能（エントリポイント・結果・元に戻す）
-- 起動経路: Finder Quick Action（`--task/--input`）に加え、Dock/Flect.app へのドロップ、File > Open…（⌘O）、サービス「Flect で処理…」。いずれも `LaunchRequest.validate`（絶対パス・4096 バイト・NUL 不可・20,000 件）を通し、エンジンのカタログにある ID だけを選択肢に出し、実行は `Planner.resolve` 経由（Quick Action と同じ）。
+- 起動経路: Finder Quick Action（`--task/--input`）に加え、Dock/Flect.app へのドロップ、File > Open…（⌘O）、サービス「Flect で処理…」。いずれも `LaunchRequest.validate`（絶対パス・4096 バイト・NUL 不可・20,000 件）を通し、エンジンのカタログにある ID だけを選択肢に出し、実行は `Planner.resolveCatalogID` 経由（Quick Action と同じ。`?` 付きのパラメーターは受け付けない）。Quick Action の `--task` はカタログ ID か `preset:<UUID>` のみ、`--input` は一時フォルダ直下の自分の `flect-sel.*`（通常ファイル・64 MiB 未満）のみ読み込み・unlink し、中身は NUL 区切り（形式 2、`flect-quick-action-format=2`）。改行区切りの旧形式は 1 件かつ改行を含まない場合だけ受け付ける。
 - 実行履歴: `<データフォルダ>/run-history.json`（最新 20 件、1 実行あたり出力 2,000 件まで、権限 0600）。
 - 元に戻す: `outputs` で報告されたパスのみが対象。記録時に「入力そのもの／入力を含むフォルダ／実行開始前から存在／シンボリックリンク／ホーム以上」を除外し、実行終了時点の指紋（サイズ・更新時刻・フォルダは内容の件数と最新更新時刻）を保存。取り消し時に再確認し、変更・置換・消失したものは触らず、ファイルごとに結果を報告。移動は `FileManager.trashItem`（ごみ箱。完全削除はしない）。
 

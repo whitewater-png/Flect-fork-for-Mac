@@ -86,7 +86,7 @@ Flect does not update itself. To learn about new versions:
 - **In the app:** settings → **Getting started** → **4. Updates** → **Check for updates**. It asks GitHub once (see below) and, if there is a newer release, shows a banner and a button that opens the download page. You can also let it check once a day when the settings window opens (off by default).
 - **From GitHub:** on the repository page choose **Watch → Custom → Releases** to get a notification (and an email, if you enabled it) for each new release. Or subscribe to the feed `https://github.com/whitewater-png/Flect-fork-for-Mac/releases.atom` in a feed reader.
 
-Then install the new version the same way as the first (drag the new app onto Applications and replace the old one); your settings are kept.
+Then install the new version the same way as the first (drag the new app onto Applications and replace the old one); your settings are kept. If the **Getting started** tab says the Quick Actions are from an older version, click **Install again** there (needed once when updating from 0.2.0 or earlier: older Quick Actions no longer start Flect with more than one item selected).
 
 ## Reporting problems
 
@@ -99,6 +99,7 @@ Bugs and questions: open an issue (**Issues** tab) with your macOS version, the 
 - Archive extraction rejects absolute and `..` paths, links, and decompression bombs.
 - Outputs are created exclusively; existing files are never overwritten. Duplicate deletion is confirmed by byte comparison.
 - A configured output folder (Settings > Output) that is a symbolic link, or lies behind one, is refused with an error (`msg.outputFolderLink`) instead of being followed; `~`, absolute and relative paths to real folders work as before.
+- Launch arguments are untrusted: `--task` may only name a menu id or `preset:<UUID>` (never engine parameters, so deleting tasks always start with their preview), and `--input` is read and removed only if it is a Quick Action's own selection file (a plain file of yours named `flect-sel.*` directly in your temporary folder, under 64 MiB). The selection is NUL-separated, so a line break in a file name cannot add an item.
 - JAR decompilation uses a pinned (SHA-256) CFR jar under `sandbox-exec` when available.
 - Network: the app makes **no connection of its own** except the update check you start (or switch on): one HTTPS request to `api.github.com` that sends nothing about you or your Mac, and whose answer is accepted only if it is a plain `vX.Y.Z` release of this repository. Nothing is downloaded or installed automatically.
 - See [`SECURITY.md`](SECURITY.md) and [`docs/mac-port/02-requirements.ja.md`](docs/mac-port/02-requirements.ja.md).

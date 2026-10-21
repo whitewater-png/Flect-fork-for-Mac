@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Reinstall the Quick Actions after updating** (Getting started → **Install again**; the tab now says when the installed ones are outdated and the settings window opens on it). Quick Actions from 0.2.0 and earlier still work for a single selected item; with more than one item Flect now refuses them and says how to reinstall.
+- Security: the selection file passed with `--input` is read and removed only when it is a Quick Action's own file (a plain file you own, named `flect-sel.*`, directly in your temporary folder, under 64 MiB), and it is removed with `unlink`. Before, `open -a Flect-for-Mac --args --task x --input <any path>` deleted that path, folders included, recursively.
+- Security: `--task` from the launch arguments may only name a menu id (what the Quick Actions pass) or `preset:<UUID>`. Engine parameters such as `folder.removeDuplicate?mode=all`, `folder.removeEmpty?confirm=1` or `folder.rename?...&dry=0` are refused instead of deleting or renaming without the preview. Every entry point (Quick Action, Dock drop, Open…, Services, pinned items, Run again) starts Remove Duplicate, Remove Empty and Rename with their preview or dialog.
+- Security: the Quick Actions now write the selection NUL-separated and the app splits on NUL only, without trimming, and requires every listed item to exist. Before, a file named `x⏎/Users/me` added `/Users/me` to the selection.
+
 ## 0.2.0 - share safely, presets, command line
 
 - Share safely (images): **Privacy Check** shows what personal data a JPEG, PNG or WebP carries (GPS location, camera and lens serial numbers, owner/author, timestamps, software, embedded thumbnails, XMP/IPTC, comments, hidden blocks) and changes nothing. **Make Safe to Share** writes a new `_safe` copy without it (lossless for JPEG/PNG/WebP unless the rotation has to be applied; optionally with a maximum long edge via **Make Safe to Share (Resize)**). The copy is re-checked before it is written and the original is never touched or overwritten. Both appear as Finder Quick Actions. HEIC, PDF and video are not covered yet.
