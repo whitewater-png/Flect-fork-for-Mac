@@ -64,10 +64,20 @@ killall Finder
 macOS leaves new Quick Actions **off**, so they do not show up until you turn them on:
 
 1. Click **Open the Finder settings** on the app's **Getting started** tab, or open **System Settings → General → Login Items & Extensions** yourself, scroll to **Extensions**, and click the (i) button next to **Finder**.
-2. Switch on every **Flect: …** item (35 of them). You can leave the others as they are.
+2. Switch on every **Flect: …** item (38 of them). You can leave the others as they are.
 3. If a Flect item is still missing, run `killall Finder`.
 
 Then right-click a file in Finder → **Quick Actions** → Flect. Open the app itself to change settings.
+
+## Other ways to start, and notifications (optional)
+
+Besides the Quick Actions, Flect can be started in these ways. Two of them need a switch in System Settings, because macOS leaves anything new **off**:
+
+- **Drag and drop / ⌘O:** drop files or folders on the Flect icon in the Dock (or on Flect.app), or choose **File → Open…** (⌘O) in the app. Both open a window where you pick what to do. Nothing needs to be switched on.
+- **Services → "Process with Flect…":** select files in Finder and choose **Finder → Services → Process with Flect…**. It does not appear until you switch it on: open **System Settings → Keyboard → Keyboard Shortcuts… → Services**, find **Process with Flect…** under **Files and Folders**, and tick it. (The **Flect: …** Quick Actions are also listed in the Services menu, so they work from there even while they are off in the Finder extension settings.)
+- **Notification when a run finishes:** open **System Settings → Notifications**, choose **Flect** and switch on **Allow notifications**. Until then Flect stays silent. Clicking the notification opens that run under **File → Recent Runs…**.
+
+If **Process with Flect…** is still missing after you tick it, quit and reopen Finder (`killall Finder`) or log out and in again.
 
 ## Updates
 
