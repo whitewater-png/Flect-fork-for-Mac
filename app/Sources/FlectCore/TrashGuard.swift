@@ -55,7 +55,11 @@ public enum TrashGuard {
     /// moved; otherwise how many of how many were moved and how many were left in place.
     public static func runSummary(_ engine: String?, tally: Tally, loc: Loc) -> String? {
         guard tally.notMoved > 0 else { return engine }
-        return loc.f("app.trashPartial", [String(tally.moved), String(tally.requested), String(tally.notMoved)])
+        // Singular forms (English only, like every `.one` key): `.one` when the only item was not moved,
+        // `.left.one` when one of several was not.
+        let suffix = tally.requested == 1 ? ".one" : tally.notMoved == 1 ? ".left.one" : ""
+        let template = suffix.isEmpty ? loc.t("app.trashPartial") : loc.t("app.trashPartial", variant: suffix)
+        return Loc.format(template, [String(tally.moved), String(tally.requested), String(tally.notMoved)])
     }
 
     /// Entries looked at inside one folder before giving up (refused as `unreadable`).

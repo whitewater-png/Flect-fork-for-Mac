@@ -75,6 +75,12 @@ public final class Loc {
     /// `{0}`, `{1}` placeholders.
     public func f(_ key: String, _ args: [String]) -> String { Loc.format(t(key), args) }
 
+    /// `key` + `suffix` (a singular form such as `.one`) when this language has it, or when it lacks `key` altogether
+    /// and English has the variant; otherwise `key` itself (a translated plain form wins over an English variant).
+    public func t(_ key: String, variant suffix: String) -> String {
+        table[key + suffix] ?? (table[key] == nil ? english[key + suffix] : nil) ?? t(key)
+    }
+
     /// Count with singular form (`key.one`).
     public func n(_ key: String, _ count: Int) -> String {
         // The English singular is only for a key this language lacks altogether; a translated plain form wins over it.

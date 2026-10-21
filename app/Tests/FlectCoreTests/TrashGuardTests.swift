@@ -202,8 +202,22 @@ final class TrashGuardTests: XCTestCase {
         XCTAssertEqual(t, .init(requested: 5, moved: 3))
         let s = TrashGuard.runSummary("Moved 5 to the Trash.", tally: t, loc: loc)
         XCTAssertEqual(s, "Moved 3 of 5 items to the Trash; 2 were left in place (see the list below).")
+        // singular forms
         XCTAssertEqual(TrashGuard.runSummary(nil, tally: .init(requested: 1, moved: 0), loc: loc),
-                       "Moved 0 of 1 items to the Trash; 1 were left in place (see the list below).")
+                       "The item was not moved to the Trash; it was left in place (see the list below).")
+        XCTAssertEqual(TrashGuard.runSummary(nil, tally: .init(requested: 4, moved: 3), loc: loc),
+                       "Moved 3 of 4 items to the Trash; 1 was left in place (see the list below).")
+        XCTAssertEqual(TrashGuard.runSummary(nil, tally: .init(requested: 2, moved: 0), loc: loc),
+                       "Moved 0 of 2 items to the Trash; 2 were left in place (see the list below).")
+        // Japanese / Chinese have one form: their plain text is used, never the English singular
+        for lang in [AppLanguage.japanese, .chinese] {
+            let l = Loc(language: lang)
+            for t in [TrashGuard.Tally(requested: 1, moved: 0), .init(requested: 4, moved: 3)] {
+                let text = TrashGuard.runSummary(nil, tally: t, loc: l) ?? ""
+                XCTAssertFalse(text.contains("Trash") || text.contains("{"), text)
+                XCTAssertTrue(text.contains(String(t.requested)), text)
+            }
+        }
         for lang in [AppLanguage.japanese, .chinese] {
             let text = TrashGuard.runSummary(nil, tally: .init(requested: 5, moved: 3), loc: Loc(language: lang)) ?? ""
             XCTAssertTrue(text.contains("3") && text.contains("5") && text.contains("2") && !text.contains("{"), text)
