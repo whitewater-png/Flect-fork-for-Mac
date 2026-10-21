@@ -52,8 +52,15 @@ public final class Loc {
         return Bundle.module
     }()
 
+    /// The main table plus `strings.ux.<code>.json` (entry points, results and notifications), kept in its own file.
     private static func load(_ code: String, bundle: Bundle) -> [String: String] {
-        guard let url = bundle.url(forResource: "strings.\(code)", withExtension: "json", subdirectory: "Resources") ?? bundle.url(forResource: "strings.\(code)", withExtension: "json"),
+        var table = read("strings.\(code)", bundle: bundle)
+        for (k, v) in read("strings.ux.\(code)", bundle: bundle) { table[k] = v }
+        return table
+    }
+
+    private static func read(_ name: String, bundle: Bundle) -> [String: String] {
+        guard let url = bundle.url(forResource: name, withExtension: "json", subdirectory: "Resources") ?? bundle.url(forResource: name, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return [:] }
         return obj

@@ -32,9 +32,21 @@ public struct LaunchRequest: Equatable {
         guard let data = FileManager.default.contents(atPath: input), data.count < 64 << 20, var text = String(data: data, encoding: .utf8) else { return .failure(.unreadable) }
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if lines.isEmpty { return .failure(.empty) }
-        if lines.count > maxPaths { return .failure(.tooMany) }
-        for l in lines where !l.hasPrefix("/") || l.utf8.count > maxPathBytes || l.contains("\0") { return .failure(.badPath(String(l.prefix(80)))) }
+        if let failure = validate(paths: lines) { return .failure(failure) }
         return .success(LaunchRequest(task: task, paths: lines))
+    }
+
+    /// One path as the engine accepts it: absolute, bounded, no NUL.
+    public static func isValidPath(_ p: String) -> Bool {
+        p.hasPrefix("/") && p.utf8.count <= maxPathBytes && !p.contains("\0")
+    }
+
+    /// The rules every selection must pass before it reaches the planner, whichever entry point it came through
+    /// (Quick Action file, Dock drop, Open panel, Services).
+    public static func validate(paths: [String]) -> Failure? {
+        if paths.isEmpty { return .empty }
+        if paths.count > maxPaths { return .tooMany }
+        for l in paths where !isValidPath(l) { return .badPath(String(l.prefix(80))) }
+        return nil
     }
 }

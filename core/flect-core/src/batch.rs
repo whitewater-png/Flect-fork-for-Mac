@@ -160,10 +160,16 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                         Some(ext),
                         &bytes,
                     ) {
-                        Ok(out) => (ctx.emit)(Event::Info {
-                            key: "msg.reportSaved".into(),
-                            args: vec![out.to_string_lossy().into_owned()],
-                        }),
+                        Ok(out) => {
+                            (ctx.emit)(Event::Data {
+                                name: "outputs".into(),
+                                data: json!({ "paths": [out.to_string_lossy()] }),
+                            });
+                            (ctx.emit)(Event::Info {
+                                key: "msg.reportSaved".into(),
+                                args: vec![out.to_string_lossy().into_owned()],
+                            });
+                        }
                         Err(e) => return fail(ctx, e.key(), String::new()),
                     }
                 }

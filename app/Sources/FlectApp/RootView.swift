@@ -21,6 +21,7 @@ import FlectCore
             case .renamePreview(let lines): RenamePreviewView(lines: lines, model: model)
             case .pdfPreview(let url): PDFPreviewView(url: url)
             case .settings: SettingsView(model: model)
+            case .pick(let selection): PickerView(selection: selection, model: model)
             }
         }
         .frame(minWidth: 480, minHeight: 300)
@@ -58,6 +59,7 @@ import FlectCore
                     .textSelection(.enabled)
             }
             .frame(minHeight: 100)
+            if model.finished, let id = model.currentRecordID { RunResultPanel(model: model, recordID: id) }
             HStack {
                 Spacer()
                 if model.finished {

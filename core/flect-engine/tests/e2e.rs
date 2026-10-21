@@ -70,6 +70,15 @@ fn runs_a_text_task_and_reports_events() {
     assert_eq!(ev.last().unwrap()["outcome"], "succeeded");
     assert!(ev.iter().any(|x| x["event"] == "step" && x["done"] == 1));
     assert!(d.path().join("a_sorted.json").exists());
+    // the files this run created are reported exactly (the app's Undo relies on it)
+    let out = ev
+        .iter()
+        .find(|x| x["event"] == "data" && x["name"] == "outputs")
+        .expect("outputs event");
+    assert_eq!(
+        out["data"]["paths"][0],
+        d.path().join("a_sorted.json").to_str().unwrap()
+    );
 }
 
 #[test]
