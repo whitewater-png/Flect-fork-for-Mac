@@ -152,7 +152,7 @@ struct ConvertImagesIntent: AppIntent {
 
 struct MakeImagesSafeToShareIntent: AppIntent {
     static let title: LocalizedStringResource = "Make Images Safe to Share with Flect"
-    static let description = IntentDescription("Removes metadata (location, camera details, comments) from images according to Flect's metadata settings and returns the cleaned copies.")
+    static let description = IntentDescription("Makes safe copies of images: removes location, camera details, comments and other hidden data, then re-checks the result and refuses to return a file that still carries any. Originals are never touched.")
 
     @Parameter(title: "Images", supportedTypeIdentifiers: ["public.image"])
     var files: [IntentFile]
@@ -160,6 +160,6 @@ struct MakeImagesSafeToShareIntent: AppIntent {
     static var parameterSummary: some ParameterSummary { Summary("Make \(\.$files) safe to share") }
 
     func perform() async throws -> some IntentResult & ReturnsValue<[IntentFile]> {
-        .result(value: try await IntentRunner.execute(files: files, spec: .stripMetadata))
+        .result(value: try await IntentRunner.execute(files: files, spec: .makeSafe))
     }
 }

@@ -37,10 +37,11 @@ Only after those three are observed should this document say the integration wor
 | Run a Flect Task on Files | Pick a task from a list built from the engine's menu, give files, get the created files back | Any catalog leaf that needs no dialog (about 60: presets, conversions, rotate, compress, strip, extract ...) |
 | Resize Images with Flect | Percent (default 50) or width and/or height in pixels, optional keep-aspect | `image.resize` |
 | Convert Images with Flect | PNG, JPEG, WebP, ICO, GIF, SVG | `image.convert` |
-| Make Images Safe to Share with Flect | Removes image metadata according to Flect's metadata settings (EXIF, GPS, comments by default) | `image.strip` |
+| Make Images Safe to Share with Flect | Makes safe copies: removes EXIF/GPS, comments, XMP/IPTC and other hidden data, then re-checks the result and fails if anything personal remains | `image.makeSafe` |
 
-"Make safe to share" is exactly the engine's "Remove Metadata" task and nothing more: it does not blur
-faces, redact visible content or touch PDFs.
+"Make safe to share" runs the engine's `image.makeSafe` task (the same as the menu entry of that name), which
+verifies its output; it is not the plainer "Remove Metadata" (`image.strip`). It does not blur faces, redact
+visible content or touch PDFs.
 
 Not offered from Shortcuts, on purpose: folder tasks (they can ask to move things to the Trash), PDF tasks and
 HEIC/background removal/OCR (they need the app's OS features and a window), tasks that need a dialog

@@ -49,7 +49,7 @@ public enum ShortcutsSpec: Equatable {
     /// Image resize by percent, or by pixels (0 = free) when width or height is given.
     case resize(percent: Int?, width: Int?, height: Int?, keepAspect: Bool)
     case convertImage(format: String)
-    case stripMetadata
+    case makeSafe
 }
 
 public struct ShortcutsPlanResult: Equatable {
@@ -117,8 +117,8 @@ public enum ShortcutsPlan {
         switch spec {
         case .catalogTask(let id):
             catalogID = id; proposed = nil
-        case .stripMetadata:
-            catalogID = "image.strip"; proposed = nil
+        case .makeSafe:
+            catalogID = "image.makeSafe"; proposed = nil
         case .convertImage(let format):
             guard imageFormats.contains(format) else { return .failure(.invalidOption("format \(format)")) }
             catalogID = "image.convert.\(format)"; proposed = nil

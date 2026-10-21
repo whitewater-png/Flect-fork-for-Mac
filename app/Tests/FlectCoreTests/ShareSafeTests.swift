@@ -10,6 +10,14 @@ final class ShareSafeTests: XCTestCase {
         return d
     }
 
+    func testShortcutsMakeSafeRunsTheVerifiedTaskNotPlainStrip() throws {
+        let entries: [[String: Any]] = [["id": "image", "children": [["id": "image.strip"], ["id": "image.makeSafe"]]]]
+        let catalog = try XCTUnwrap(MenuCatalog(menu: JSONValue(any: ["entries": entries])))
+        let plan = try ShortcutsPlan.plan(.makeSafe, catalog: catalog, settings: SettingsStore(directory: tmp())).get()
+        XCTAssertEqual(plan.catalogID, "image.makeSafe")
+        XCTAssertEqual(plan.engineTask, "image.makeSafe")
+    }
+
     func testPlannerRoutesTheShareSafeTasks() {
         let s = SettingsStore(directory: tmp())
         XCTAssertEqual(Planner.resolve("image.privacy", settings: s), .engine("image.privacy"))
