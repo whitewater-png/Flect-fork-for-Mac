@@ -336,7 +336,9 @@ pub fn extract_zip(archive: &Path, into: &Path, limits: Limits) -> Result<Report
             return Err(ArchiveError::Encrypted);
         }
         let rel = sanitize(&name)?;
-        if entry.is_dir() {
+        // Decided from the decoded name: the zip crate looks at the raw last byte, and a legacy
+        // (Shift_JIS ...) multi-byte character can end in 0x5C / 0x2F without being a separator.
+        if name.ends_with('/') || name.ends_with('\\') {
             fs::create_dir_all(into.join(&rel))?;
             continue;
         }
@@ -962,6 +964,15 @@ mod tests {
             extract_names(zip).unwrap(),
             ["plain.txt", "報告書/表.txt", "日本語.txt"]
         );
+    }
+
+    #[test]
+    fn zip_legacy_name_ending_in_a_backslash_byte_is_a_file_not_a_directory() {
+        // The whole name 報告書/表 ends with the bytes 95 5C: a file called 表, not a folder.
+        let name = encoded(encoding_rs::SHIFT_JIS, "報告書/表");
+        assert_eq!(name.last(), Some(&0x5C));
+        let zip = zip_with_raw_names(&[(&name, b"data"), (b"real_dir/", b"")]);
+        assert_eq!(extract_names(zip).unwrap(), ["報告書/表"]);
     }
 
     #[test]
