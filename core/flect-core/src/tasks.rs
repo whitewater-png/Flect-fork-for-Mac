@@ -38,7 +38,7 @@ impl TaskError {
             Self::Image(e) => e.key(),
             Self::Media(e) => e.key(),
             Self::Jar(e) => e.key(),
-            Self::Io(_) => "msg.ioError",
+            Self::Io(e) => crate::paths::io_error_key(e),
         }
     }
 }

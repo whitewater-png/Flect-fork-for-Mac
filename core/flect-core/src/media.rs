@@ -59,7 +59,7 @@ impl MediaError {
             Self::ModelMismatch(_) => "msg.whisperModelMismatch",
             Self::NoSpeech => "msg.noSpeech",
             Self::BadLanguage => "msg.subtitleLanguageInvalid",
-            Self::Io(_) => "msg.ioError",
+            Self::Io(e) => crate::paths::io_error_key(e),
         }
     }
     /// A crash (killed by a signal / abnormal exit) as opposed to a normal error exit.

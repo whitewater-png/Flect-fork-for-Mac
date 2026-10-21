@@ -42,7 +42,7 @@ impl JarError {
             Self::Empty => "msg.decompileEmpty",
             Self::Cancelled => "msg.cancelled",
             Self::Unsafe(_) => "msg.archiveUnsafePath",
-            Self::Io(_) => "msg.ioError",
+            Self::Io(e) => crate::paths::io_error_key(e),
         }
     }
 }

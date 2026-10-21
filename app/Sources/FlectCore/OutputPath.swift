@@ -28,12 +28,37 @@ public enum OutputPath {
     }
 
     /// `directory(for:folder:)`, created when missing (a file in the way is an error). Nothing is created for an unset folder.
-    public static func prepareDirectory(for source: URL, folder: String = "", fm: FileManager = .default) throws -> URL {
-        let dir = directory(for: source, folder: folder)
-        if !folder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    public static func prepareDirectory(for source: URL, folder: String = "", home: URL = FileManager.default.homeDirectoryForCurrentUser, fm: FileManager = .default) throws -> URL {
+        let dir = directory(for: source, folder: folder, home: home)
+        let setting = folder.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !setting.isEmpty {
+            // Same rule as the engine (`paths::prepare_output_dir`): a symlink in the way is refused, not followed.
+            let anchor: String? = (setting == "~" || setting.hasPrefix("~/")) ? home.path
+                : setting.hasPrefix("/") ? nil : source.deletingLastPathComponent().path
+            try refuseSymlinks(dir.path, anchor: anchor, fm: fm)
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir
+    }
+
+    /// Thrown for an output folder that is a symlink or lies behind one (message key `msg.outputFolderLink`).
+    public struct FolderIsSymlink: Error, Equatable { public let path: String }
+
+    /// The message key for an error from the writing functions here.
+    public static func errorKey(_ error: Error) -> String { error is FolderIsSymlink ? "msg.outputFolderLink" : "msg.ioError" }
+
+    /// Components at or above `anchor` are the caller's own business; for an absolute setting the macOS aliases
+    /// directly under `/` (`/tmp`, `/var`, `/etc`) are accepted. Only existing components can be links.
+    static func refuseSymlinks(_ dir: String, anchor: String?, fm: FileManager) throws {
+        let parts = dir.split(separator: "/", omittingEmptySubsequences: true)
+        var current = ""
+        for (i, part) in parts.enumerated() {
+            current += "/" + part
+            if let a = anchor, a == current || a.hasPrefix(current + "/") { continue }
+            if anchor == nil && i == 0 { continue }
+            guard let attrs = try? fm.attributesOfItem(atPath: current) else { break }   // does not exist yet
+            if (attrs[.type] as? FileAttributeType) == .typeSymbolicLink { throw FolderIsSymlink(path: current) }
+        }
     }
 
     public static func derive(source: URL, suffix: String = "", ext: String? = nil, folder: String = "", fm: FileManager = .default) -> URL {

@@ -270,6 +270,7 @@
  "msg.invalidJson": "不是有效的 JSON。",
  "msg.invalidName": "该名称无效。",
  "msg.ioError": "文件操作失败。",
+ "msg.outputFolderLink": "输出文件夹是符号链接（或位于符号链接之后），因此未使用。",
  "msg.javaMissing": "未找到 Java。请安装 JDK（例如：brew install openjdk）。",
  "msg.lookingForEmpty": "正在查找空文件夹...",
  "msg.mediaProbeFailed": "无法将此文件读取为媒体。",

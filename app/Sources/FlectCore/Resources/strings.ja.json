@@ -270,6 +270,7 @@
  "msg.invalidJson": "JSON として正しくありません。",
  "msg.invalidName": "その名前は使用できません。",
  "msg.ioError": "ファイル操作に失敗しました。",
+ "msg.outputFolderLink": "出力先フォルダがシンボリックリンク（またはその先）のため、使用しませんでした。",
  "msg.javaMissing": "Java が見つかりません。JDK を導入してください（例: brew install openjdk）。",
  "msg.lookingForEmpty": "空フォルダを探しています...",
  "msg.mediaProbeFailed": "メディアファイルとして読み取れませんでした。",

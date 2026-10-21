@@ -55,7 +55,7 @@ impl ArchiveError {
             Self::Encrypted => "msg.archiveEncrypted",
             Self::Unsupported(_) => "msg.archiveUnsupported",
             Self::Tool(_) => "msg.archiveToolFailed",
-            Self::Io(_) => "msg.ioError",
+            Self::Io(e) => crate::paths::io_error_key(e),
         }
     }
 }

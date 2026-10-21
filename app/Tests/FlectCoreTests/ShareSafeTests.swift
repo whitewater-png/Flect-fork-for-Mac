@@ -18,6 +18,21 @@ final class ShareSafeTests: XCTestCase {
         XCTAssertEqual(plan.engineTask, "image.makeSafe")
     }
 
+    func testOutputFolderThroughASymlinkIsRefusedButRealFoldersWork() throws {
+        let d = tmp()
+        let real = d.appendingPathComponent("real")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: d.appendingPathComponent("link"), withDestinationURL: real)
+        let src = d.appendingPathComponent("a.png")
+        XCTAssertThrowsError(try OutputPath.prepareDirectory(for: src, folder: "link")) { XCTAssertEqual(OutputPath.errorKey($0), "msg.outputFolderLink") }
+        XCTAssertThrowsError(try OutputPath.prepareDirectory(for: src, folder: "link/sub"))
+        XCTAssertThrowsError(try OutputPath.prepareDirectory(for: src, folder: d.appendingPathComponent("link").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: real.appendingPathComponent("sub").path))
+        XCTAssertEqual(try OutputPath.prepareDirectory(for: src, folder: "out").lastPathComponent, "out")
+        XCTAssertEqual(try OutputPath.prepareDirectory(for: src, folder: d.appendingPathComponent("abs/x").path).lastPathComponent, "x")
+        XCTAssertEqual(try OutputPath.prepareDirectory(for: src, folder: "~/out2", home: d).path, d.appendingPathComponent("out2").path)
+    }
+
     func testPlannerRoutesTheShareSafeTasks() {
         let s = SettingsStore(directory: tmp())
         XCTAssertEqual(Planner.resolve("image.privacy", settings: s), .engine("image.privacy"))

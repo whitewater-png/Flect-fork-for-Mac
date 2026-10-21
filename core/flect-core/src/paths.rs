@@ -38,10 +38,82 @@ pub fn output_dir(source: &Path, setting: &str) -> PathBuf {
     lexical_clean(&joined)
 }
 
-/// [`output_dir`], then make sure the folder exists (a file in the way is an error).
+/// Why an output folder was refused: it, or a folder on the way to it, is a symbolic link.
+#[derive(Debug)]
+struct OutputFolderLink(PathBuf);
+
+impl std::fmt::Display for OutputFolderLink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "output folder goes through a symbolic link: {}",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for OutputFolderLink {}
+
+/// Message key for an I/O error: a refused symbolic link gets its own, everything else is generic.
+pub fn io_error_key(e: &io::Error) -> &'static str {
+    if e.get_ref().is_some_and(|i| i.is::<OutputFolderLink>()) {
+        "msg.outputFolderLink"
+    } else {
+        "msg.ioError"
+    }
+}
+
+/// Refuse a folder that is a symlink, or that has a symlink among the folders below `anchor`
+/// (the folder the setting is relative to: the source's folder, the home folder, or nothing for an
+/// absolute path). Where `anchor` is nothing, the macOS aliases directly under `/` (`/tmp`,
+/// `/var`, `/etc`) are accepted. Only existing components can be links; the rest is created.
+fn refuse_symlinks(dir: &Path, anchor: Option<&Path>) -> io::Result<()> {
+    let mut cur = PathBuf::new();
+    let mut normal_depth = 0;
+    for c in dir.components() {
+        cur.push(c);
+        if let Component::Normal(_) = c {
+            normal_depth += 1;
+        } else {
+            continue;
+        }
+        if anchor.is_some_and(|a| a.starts_with(&cur)) {
+            continue;
+        }
+        if anchor.is_none() && normal_depth == 1 && cur.is_absolute() {
+            continue;
+        }
+        match cur.symlink_metadata() {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    OutputFolderLink(cur),
+                ))
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => break,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// [`output_dir`], then make sure the folder exists (a file in the way is an error). A configured
+/// folder that is, or lies behind, a symbolic link is refused instead of followed
+/// (`msg.outputFolderLink`), so a link planted in a shared folder cannot redirect results.
 pub fn prepare_output_dir(source: &Path, setting: &str) -> io::Result<PathBuf> {
     let dir = output_dir(source, setting);
-    if !setting.trim().is_empty() {
+    let trimmed = setting.trim();
+    if !trimmed.is_empty() {
+        let home = home_dir();
+        let anchor = if trimmed == "~" || trimmed.starts_with("~/") {
+            home.clone()
+        } else if Path::new(trimmed).is_absolute() {
+            None
+        } else {
+            Some(parent_of(source))
+        };
+        refuse_symlinks(&dir, anchor.as_deref())?;
         std::fs::create_dir_all(&dir)?;
     }
     Ok(dir)
@@ -151,6 +223,50 @@ fn normalize_ext(ext: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_folders_behind_symlinks_are_refused() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        symlink(&real, dir.path().join("link")).unwrap();
+        let src = dir.path().join("a.png");
+        std::fs::write(&src, b"x").unwrap();
+        let refused = |setting: &str| {
+            let e = prepare_output_dir(&src, setting).unwrap_err();
+            assert_eq!(io_error_key(&e), "msg.outputFolderLink", "{setting}");
+        };
+        refused("link"); // the folder itself
+        refused("./link/sub"); // a folder on the way
+        refused(dir.path().join("link").to_str().unwrap()); // absolute
+        refused(&format!("{}/link/x", dir.path().display()));
+        assert!(
+            !real.join("sub").exists(),
+            "nothing was created through the link"
+        );
+        // real folders keep working: relative, absolute, new and existing
+        assert_eq!(
+            prepare_output_dir(&src, "out").unwrap(),
+            dir.path().join("out")
+        );
+        assert!(dir.path().join("out").is_dir());
+        let abs = dir.path().join("abs/deeper");
+        assert_eq!(
+            prepare_output_dir(&src, abs.to_str().unwrap()).unwrap(),
+            abs
+        );
+        assert_eq!(prepare_output_dir(&src, "real").unwrap(), real);
+        // a source folder that is itself reached through a link is the user's own choice
+        let via = dir.path().join("link");
+        let src2 = via.join("b.png");
+        assert_eq!(prepare_output_dir(&src2, "o2").unwrap(), via.join("o2"));
+        // unrelated errors keep the generic key
+        assert_eq!(
+            io_error_key(&io::Error::from(io::ErrorKind::NotFound)),
+            "msg.ioError"
+        );
+    }
 
     #[test]
     fn numbers_taken_names() {

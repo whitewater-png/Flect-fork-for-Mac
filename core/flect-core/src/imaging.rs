@@ -33,7 +33,7 @@ impl ImageError {
             Self::TooLarge => "msg.imageTooLarge",
             Self::Decode(_) => "msg.imageDecodeFailed",
             Self::Encode(_) => "msg.imageEncodeFailed",
-            Self::Io(_) => "msg.ioError",
+            Self::Io(e) => crate::paths::io_error_key(e),
         }
     }
 }

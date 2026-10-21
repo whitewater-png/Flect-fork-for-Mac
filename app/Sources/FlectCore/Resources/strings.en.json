@@ -278,6 +278,7 @@
  "msg.invalidJson": "The file is not valid JSON.",
  "msg.invalidName": "That name is not valid.",
  "msg.ioError": "A file operation failed.",
+ "msg.outputFolderLink": "The output folder is a symbolic link (or behind one), so it was not used.",
  "msg.javaMissing": "Java was not found. Install a JDK (for example: brew install openjdk).",
  "msg.lookingForEmpty": "Looking for empty folders",
  "msg.mediaProbeFailed": "This file could not be read as media.",

@@ -64,7 +64,7 @@ enum NativeWorker {
         CGImageDestinationAddImageFromSource(dest, src, 0, opts as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r }
         do { let o = try OutputPath.writeNew(out as Data, source: url, ext: "heic", folder: folder); r.outputs.append(o.path); r.add(.info, o.lastPathComponent) }
-        catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
+        catch { r.add(.error, loc.f(OutputPath.errorKey(error), [url.lastPathComponent])) }
         return r
     }
 
@@ -134,7 +134,7 @@ enum NativeWorker {
             CGImageDestinationAddImage(dest, image, jpg ? [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary : nil)
             guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); continue }
             do { r.outputs.append(try OutputPath.writeNew(data as Data, source: url, suffix: "_p\(i + 1)", ext: jpg ? "jpg" : "png", folder: folder).path) }
-            catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
+            catch { r.add(.error, loc.f(OutputPath.errorKey(error), [url.lastPathComponent])) }
         }
         return r
     }
@@ -145,7 +145,7 @@ enum NativeWorker {
         let text = (doc.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { r.add(.warn, loc.f("msg.noTextFound", [url.lastPathComponent])); return r }
         do { r.outputs.append(try OutputPath.writeNew(Data(text.utf8), source: url, ext: "txt", folder: folder).path) }
-        catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
+        catch { r.add(.error, loc.f(OutputPath.errorKey(error), [url.lastPathComponent])) }
         return r
     }
 
@@ -165,7 +165,7 @@ enum NativeWorker {
         }
         guard let data = merged.dataRepresentation() else { r.add(.error, loc.t("msg.ioError")); return r }
         do { let o = try OutputPath.writeNew(data, source: urls[0], suffix: "_merged", ext: "pdf", folder: folder); r.outputs.append(o.path); r.add(.info, o.lastPathComponent) }
-        catch { r.add(.error, loc.t("msg.ioError")) }
+        catch { r.add(.error, loc.t(OutputPath.errorKey(error))) }
         return r
     }
 
@@ -256,7 +256,7 @@ extension AppModel {
                     case "ShowOnly": combined.append(text)
                     default:
                         do { tracker.add(paths: [try OutputPath.writeNew(Data(("\u{FEFF}" + text).utf8), source: url, ext: "txt", folder: ocrFolder).path]) }
-                        catch { log.append(LogLine(kind: .error, text: loc.f("msg.ioError", [url.lastPathComponent]))); problems = true }
+                        catch { log.append(LogLine(kind: .error, text: loc.f(OutputPath.errorKey(error), [url.lastPathComponent]))); problems = true }
                     }
                 }
             }
