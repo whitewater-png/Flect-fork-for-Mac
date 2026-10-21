@@ -41,6 +41,8 @@ pub struct Job<'a> {
     pub settings: &'a Settings,
     pub progress: &'a dyn Progress,
     hw_disabled: Cell<bool>,
+    /// Output folder setting of the running task (empty = beside the original).
+    folder: RefCell<String>,
     warnings: RefCell<Vec<(&'static str, Vec<String>)>>,
     infos: RefCell<Vec<(&'static str, Vec<String>)>>,
 }
@@ -52,6 +54,7 @@ impl<'a> Job<'a> {
             settings,
             progress,
             hw_disabled: Cell::new(false),
+            folder: RefCell::default(),
             warnings: RefCell::default(),
             infos: RefCell::default(),
         }
@@ -157,15 +160,18 @@ fn with_audio_fallback(
     }
 }
 
-/// Move a finished staged file next to `source` under a fresh name.
+/// Move a finished staged file under a fresh name: next to `source`, or in the output
+/// folder configured for the running task (created if missing).
 fn publish(
+    job: &Job<'_>,
     staged: &Path,
     source: &Path,
     suffix: &str,
     ext: Option<&str>,
 ) -> Result<PathBuf, MediaError> {
+    let dir = paths::prepare_output_dir(source, &job.folder.borrow())?;
     for _ in 0..16 {
-        let target = paths::derive(source, suffix, ext);
+        let target = paths::derive_in(&dir, source, suffix, ext);
         match commit_new(staged, &target) {
             Ok(()) => return Ok(target),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -273,7 +279,7 @@ fn filter_task(
         },
         &ext,
     )?;
-    publish(&staged, input, suffix, None)
+    publish(job, &staged, input, suffix, None)
 }
 
 fn gif_chain(job: &Job<'_>) -> String {
@@ -319,7 +325,7 @@ fn to_gif(job: &Job<'_>, input: &Path, info: &MediaInfo) -> Result<PathBuf, Medi
     ]));
     a.push(media::file_arg(&staged)?);
     job.ffmpeg(&a, info.duration_seconds)?;
-    publish(&staged, input, "", Some("gif"))
+    publish(job, &staged, input, "", Some("gif"))
 }
 
 fn convert(job: &Job<'_>, input: &Path, target: &str) -> Result<PathBuf, MediaError> {
@@ -339,7 +345,7 @@ fn convert(job: &Job<'_>, input: &Path, target: &str) -> Result<PathBuf, MediaEr
         s(&["-c", "copy"])
     };
     match job.ffmpeg(&command(input, copy, &staged)?, info.duration_seconds) {
-        Ok(()) => return publish(&staged, input, "", Some(&ext)),
+        Ok(()) => return publish(job, &staged, input, "", Some(&ext)),
         Err(MediaError::Ffmpeg { .. }) => safe_delete(&staged),
         Err(e) => return Err(e),
     }
@@ -360,7 +366,7 @@ fn convert(job: &Job<'_>, input: &Path, target: &str) -> Result<PathBuf, MediaEr
             command(input, mid, &staged)
         })?;
     }
-    publish(&staged, input, "", Some(&ext))
+    publish(job, &staged, input, "", Some(&ext))
 }
 
 fn trim(
@@ -416,7 +422,7 @@ fn trim(
             seek(mid)
         })?;
     }
-    publish(&staged, input, "_trimmed", None)
+    publish(job, &staged, input, "_trimmed", None)
 }
 
 fn thumbnail(
@@ -460,7 +466,7 @@ fn thumbnail(
     }
     a.push(media::file_arg(&staged)?);
     job.ffmpeg(&a, 0.0)?;
-    publish(&staged, input, "_thumbnail", Some(ext))
+    publish(job, &staged, input, "_thumbnail", Some(ext))
 }
 
 /// Transcribe the audio with ffmpeg's whisper filter and write `name.srt` / `.vtt` / `.txt` next to the source.
@@ -530,7 +536,7 @@ fn subtitles(job: &Job<'_>, input: &Path) -> Result<PathBuf, MediaError> {
     };
     let staged = scratch.path_for(&format!("final.{ext}"));
     fs::write(&staged, body)?;
-    publish(&staged, input, "", Some(ext))
+    publish(job, &staged, input, "", Some(ext))
 }
 
 fn file_name(p: &Path) -> String {
@@ -584,7 +590,7 @@ fn audio_out(
             &command(input, s(&["-vn", "-c:a", "copy"]), &staged)?,
             info.duration_seconds,
         ) {
-            Ok(()) => return publish(&staged, input, "", Some(&ext)),
+            Ok(()) => return publish(job, &staged, input, "", Some(&ext)),
             Err(MediaError::Ffmpeg { .. }) => safe_delete(&staged),
             Err(e) => return Err(e),
         }
@@ -592,7 +598,7 @@ fn audio_out(
     let mut mid = s(&["-vn"]);
     mid.extend(audio_encoder(target));
     job.ffmpeg(&command(input, mid, &staged)?, info.duration_seconds)?;
-    publish(&staged, input, "", Some(&ext))
+    publish(job, &staged, input, "", Some(&ext))
 }
 
 // ------------------------------------------------------------------ compression planning
@@ -1140,7 +1146,7 @@ fn compress(
     } else {
         ".m4a"
     };
-    let output = publish(&outcome.path, input, "_compressed", Some(ext))?;
+    let output = publish(job, &outcome.path, input, "_compressed", Some(ext))?;
     if !outcome.reached || outcome.bytes > target {
         job.warn(
             "msg.overTarget",
@@ -1166,6 +1172,7 @@ pub fn run(
     job: &Job<'_>,
 ) -> Result<Done, MediaError> {
     job.check()?;
+    *job.folder.borrow_mut() = job.settings.output.for_task(name).to_owned();
     let video = &job.settings.video;
     let output = match name {
         "video.resize" => filter_task(job, input, "_resized", &scale_filter(params))?,

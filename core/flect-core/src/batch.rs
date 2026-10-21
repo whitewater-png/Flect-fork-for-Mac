@@ -153,7 +153,13 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                 if params.get("save").is_some_and(|v| v == "1") {
                     let ext = ft::report_extension(f.analyze.save_format);
                     let bytes = ft::render_report(&report, f.analyze.save_format);
-                    match tasks::write_result(&roots[0], "_analysis", Some(ext), &bytes) {
+                    match tasks::write_result(
+                        &roots[0],
+                        &ctx.settings.output.report,
+                        "_analysis",
+                        Some(ext),
+                        &bytes,
+                    ) {
                         Ok(out) => (ctx.emit)(Event::Info {
                             key: "msg.reportSaved".into(),
                             args: vec![out.to_string_lossy().into_owned()],

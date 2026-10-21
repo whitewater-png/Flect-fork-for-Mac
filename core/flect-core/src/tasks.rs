@@ -157,15 +157,18 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, TaskError> {
     Ok(bytes)
 }
 
-/// Write `bytes` beside `source` under a derived, never-overwriting name.
+/// Write `bytes` under a derived, never-overwriting name: beside `source`, or in the
+/// folder `folder` (the feature's output setting) names, which is created if missing.
 pub(crate) fn write_result(
     source: &Path,
+    folder: &str,
     suffix: &str,
     extension: Option<&str>,
     bytes: &[u8],
 ) -> Result<PathBuf, TaskError> {
+    let dir = paths::prepare_output_dir(source, folder)?;
     for _ in 0..16 {
-        let target = paths::derive(source, suffix, extension);
+        let target = paths::derive_in(&dir, source, suffix, extension);
         let temp = paths::scratch(&target, extension.unwrap_or(""));
         let mut guard = WorkingFile::new(temp.clone());
         let mut file = fs::OpenOptions::new()
@@ -221,7 +224,7 @@ pub fn run_text(
             if encoded.replaced {
                 warnings.push(("msg.sjisReplaced", vec![file_name]));
             }
-            write_result(input, suffix, None, &encoded.bytes)?
+            write_result(input, &settings.output.text, suffix, None, &encoded.bytes)?
         }
         "text.lineEndings" => {
             let decoded = text::decode(&bytes);
@@ -233,6 +236,7 @@ pub fn run_text(
             let converted = text::convert_line_endings(&decoded.text, ending);
             write_result(
                 input,
+                &settings.output.text,
                 suffix,
                 None,
                 &text::encode_as_detected(&converted, decoded.encoding),
@@ -249,6 +253,7 @@ pub fn run_text(
             };
             write_result(
                 input,
+                &settings.output.text,
                 if sort { "_sorted" } else { "_pretty" },
                 None,
                 text::pretty_json(&value).as_bytes(),
@@ -281,7 +286,13 @@ pub fn run_text(
             } else {
                 converted.into_bytes()
             };
-            write_result(input, "", Some(&target.to_lowercase()), &bytes)?
+            write_result(
+                input,
+                &settings.output.text,
+                "",
+                Some(&target.to_lowercase()),
+                &bytes,
+            )?
         }
         _ => return Err(TaskError::Unsupported),
     };
@@ -321,7 +332,12 @@ pub fn run_archive(
     use crate::settings::ArchiveCompressFormat as F;
     match name {
         "archive.extract" => {
-            let x = archive::extract(input, archive::Limits::default(), seven_zip)?;
+            let x = archive::extract_to(
+                input,
+                archive::Limits::default(),
+                seven_zip,
+                &settings.output.archive_extract,
+            )?;
             Ok(archive_done(x.destination, x.report))
         }
         "folder.compress" => {
@@ -331,7 +347,12 @@ pub fn run_archive(
                 F::Tar => Format::Tar,
                 F::TarGz => Format::TarGz,
             };
-            let (out, report) = archive::compress_folder(input, format, seven_zip)?;
+            let (out, report) = archive::compress_folder_to(
+                input,
+                format,
+                seven_zip,
+                &settings.output.archive_compress,
+            )?;
             Ok(archive_done(out, report))
         }
         _ => Err(archive::ArchiveError::Unsupported(name.to_owned())),
@@ -395,7 +416,13 @@ pub fn run_image(
             let data = match out {
                 im::Stripped::Lossless(d) | im::Stripped::Reencoded(d) => d,
             };
-            write_result(input, "_clean", Some(format.extension()), &data)?
+            write_result(
+                input,
+                &settings.output.image,
+                "_clean",
+                Some(format.extension()),
+                &data,
+            )?
         }
         "image.compress" => {
             let target = params
@@ -438,7 +465,13 @@ pub fn run_image(
                     vec![file_name, target.to_string(), sq.data.len().to_string()],
                 ));
             }
-            write_result(input, "_compressed", Some(sq.format.extension()), &sq.data)?
+            write_result(
+                input,
+                &settings.output.image,
+                "_compressed",
+                Some(sq.format.extension()),
+                &sq.data,
+            )?
         }
         _ => {
             let loaded = im::load(input)?;
@@ -527,7 +560,13 @@ pub fn run_image(
             };
             let quality = lossy_quality(format, settings);
             let data = im::encode_frames(&frames, format, quality)?;
-            write_result(input, suffix, Some(format.extension()), &data)?
+            write_result(
+                input,
+                &settings.output.image,
+                suffix,
+                Some(format.extension()),
+                &data,
+            )?
         }
     };
     Ok(Done {
@@ -664,6 +703,103 @@ mod tests {
         assert_eq!(fs::read(&src).unwrap(), "日本語のメモ\r\n".as_bytes()); // original untouched
                                                                             // no scratch leftovers
         assert_eq!(fs::read_dir(d.path()).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn output_folder_setting_redirects_results_and_never_overwrites() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("memo.txt");
+        fs::write(&src, "abc\r\n").unwrap();
+        let mut s = Settings::default();
+        s.output.text = "./Converted".into();
+        let params = parse_task("text.lineEndings?to=LF").1;
+        let a = run_text("text.lineEndings", &params, &src, &s).unwrap();
+        assert_eq!(a.output, d.path().join("Converted/memo_lf.txt"));
+        // a file already there is kept; the new one is numbered
+        let b = run_text("text.lineEndings", &params, &src, &s).unwrap();
+        assert_eq!(b.output, d.path().join("Converted/memo_lf (2).txt"));
+        assert_eq!(fs::read(&a.output).unwrap(), b"abc\n");
+        // a feature left unset still writes beside the original
+        s.output.text.clear();
+        let c = run_text("text.lineEndings", &params, &src, &s).unwrap();
+        assert_eq!(c.output, d.path().join("memo_lf.txt"));
+        // no scratch leftovers in either folder
+        assert_eq!(fs::read_dir(d.path().join("Converted")).unwrap().count(), 2);
+        assert_eq!(fs::read_dir(d.path()).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn output_folder_that_is_a_file_fails_without_touching_it() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("memo.txt");
+        fs::write(&src, "abc").unwrap();
+        fs::write(d.path().join("Out"), "precious").unwrap();
+        let mut s = Settings::default();
+        s.output.text = "Out".into();
+        let params = parse_task("text.lineEndings?to=LF").1;
+        assert!(run_text("text.lineEndings", &params, &src, &s).is_err());
+        assert_eq!(fs::read(d.path().join("Out")).unwrap(), b"precious");
+    }
+
+    #[test]
+    fn archive_tasks_honour_their_output_folders() {
+        let d = tempfile::tempdir().unwrap();
+        let folder = d.path().join("docs");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("a.txt"), "hello").unwrap();
+        let mut s = Settings::default();
+        s.output.archive_compress = "./Zips".into();
+        s.output.archive_extract = d.path().join("Unpacked").to_string_lossy().into_owned();
+        let packed = run_archive("folder.compress", &folder, &s, None).unwrap();
+        assert_eq!(packed.output, d.path().join("Zips/docs.zip"));
+        let again = run_archive("folder.compress", &folder, &s, None).unwrap();
+        assert_eq!(again.output, d.path().join("Zips/docs (2).zip"));
+        let x = run_archive("archive.extract", &packed.output, &s, None).unwrap();
+        assert_eq!(x.output, d.path().join("Unpacked/docs"));
+        assert_eq!(fs::read(x.output.join("docs/a.txt")).unwrap(), b"hello");
+        let x2 = run_archive("archive.extract", &packed.output, &s, None).unwrap();
+        assert_eq!(x2.output, d.path().join("Unpacked/docs (2)"));
+        // no hidden scratch folders left behind
+        for dir in [
+            d.path().join("Zips"),
+            d.path().join("Unpacked"),
+            d.path().into(),
+        ] {
+            let hidden = fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+                .count();
+            assert_eq!(hidden, 0);
+        }
+    }
+
+    #[test]
+    fn compressing_into_the_folder_being_packed_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let folder = d.path().join("docs");
+        fs::create_dir(&folder).unwrap();
+        let mut s = Settings::default();
+        s.output.archive_compress = folder.join("out").to_string_lossy().into_owned();
+        assert!(run_archive("folder.compress", &folder, &s, None).is_err());
+        assert!(!folder.join("out").exists());
+    }
+
+    #[test]
+    fn output_setting_per_task() {
+        let o = crate::settings::OutputSettings {
+            image: "i".into(),
+            video: "v".into(),
+            audio: "a".into(),
+            ocr: "o".into(),
+            ..Default::default()
+        };
+        assert_eq!(o.for_task("image.resize"), "i");
+        assert_eq!(o.for_task("image.ocr"), "o");
+        assert_eq!(o.for_task("video.compress"), "v");
+        assert_eq!(o.for_task("video.extractAudio"), "a");
+        assert_eq!(o.for_task("audio.convert"), "a");
+        assert_eq!(o.for_task("folder.rename"), "");
     }
 
     #[test]

@@ -1,6 +1,8 @@
-//! Output path derivation: results land next to the source and never overwrite
-//! anything. A taken name gets a ` (2)`, ` (3)` ... suffix, like Finder does.
-use std::path::{Path, PathBuf};
+//! Output path derivation: results land next to the source (or in the folder a
+//! setting names) and never overwrite anything. A taken name gets a ` (2)`,
+//! ` (3)` ... suffix, like Finder does.
+use std::io;
+use std::path::{Component, Path, PathBuf};
 
 use crate::workspace::BRAND;
 
@@ -16,9 +18,71 @@ fn parent_of(source: &Path) -> PathBuf {
     }
 }
 
+/// Where results go for `source`, given the "output folder" setting of its feature.
+/// Empty: beside the source. `~` / `~/x`: the home folder. Relative (`./Compressed`,
+/// `../out`): from the source's folder. Absolute: as written. `.` and `..` are resolved
+/// textually and never climb above the root. Pure: nothing is created here.
+pub fn output_dir(source: &Path, setting: &str) -> PathBuf {
+    let setting = setting.trim();
+    if setting.is_empty() {
+        return parent_of(source);
+    }
+    let joined = match setting.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => match home_dir() {
+            Some(home) => home.join(rest.trim_start_matches('/')),
+            None => parent_of(source).join(setting),
+        },
+        _ if Path::new(setting).is_absolute() => PathBuf::from(setting),
+        _ => parent_of(source).join(setting),
+    };
+    lexical_clean(&joined)
+}
+
+/// [`output_dir`], then make sure the folder exists (a file in the way is an error).
+pub fn prepare_output_dir(source: &Path, setting: &str) -> io::Result<PathBuf> {
+    let dir = output_dir(source, setting);
+    if !setting.trim().is_empty() {
+        std::fs::create_dir_all(&dir)?;
+    }
+    Ok(dir)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|h| h.is_absolute())
+}
+
+/// Drop `.` and fold `..` into the component before it. A leading `..` with nothing to
+/// cancel (relative path) is kept; at the root it is dropped.
+fn lexical_clean(path: &Path) -> PathBuf {
+    let mut out: Vec<Component> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => out.push(c),
+            },
+            _ => out.push(c),
+        }
+    }
+    if out.is_empty() {
+        return PathBuf::from(".");
+    }
+    out.iter().collect()
+}
+
 /// `report.pdf` + `_ocr` + `.txt` -> `report_ocr.txt`, or `report_ocr (2).txt`.
 pub fn derive(source: &Path, suffix: &str, extension: Option<&str>) -> PathBuf {
-    let dir = parent_of(source);
+    derive_in(&parent_of(source), source, suffix, extension)
+}
+
+/// Same as [`derive`], but in `dir`.
+pub fn derive_in(dir: &Path, source: &Path, suffix: &str, extension: Option<&str>) -> PathBuf {
     let stem = format!(
         "{}{}",
         source
@@ -45,7 +109,11 @@ pub fn derive(source: &Path, suffix: &str, extension: Option<&str>) -> PathBuf {
 
 /// Same numbering for output folders.
 pub fn derive_directory(source: &Path, stem: Option<&str>, suffix: &str) -> PathBuf {
-    let dir = parent_of(source);
+    derive_directory_in(&parent_of(source), source, stem, suffix)
+}
+
+/// Same as [`derive_directory`], but inside `dir`.
+pub fn derive_directory_in(dir: &Path, source: &Path, stem: Option<&str>, suffix: &str) -> PathBuf {
     let base = format!(
         "{}{}",
         stem.map(str::to_owned).unwrap_or_else(|| source
@@ -127,6 +195,87 @@ mod tests {
         assert_eq!(
             derive_directory(&src, None, ""),
             dir.path().join("pack (2)")
+        );
+    }
+
+    #[test]
+    fn unset_folder_means_beside_the_source() {
+        let src = Path::new("/data/photos/a.png");
+        assert_eq!(output_dir(src, ""), Path::new("/data/photos"));
+        assert_eq!(output_dir(src, "   "), Path::new("/data/photos"));
+        assert_eq!(output_dir(Path::new("a.png"), ""), Path::new("."));
+    }
+
+    #[test]
+    fn relative_folders_start_from_the_source_folder() {
+        let src = Path::new("/data/photos/a.png");
+        assert_eq!(
+            output_dir(src, "./Compressed"),
+            Path::new("/data/photos/Compressed")
+        );
+        assert_eq!(
+            output_dir(src, "Compressed/small"),
+            Path::new("/data/photos/Compressed/small")
+        );
+        assert_eq!(output_dir(src, "../out"), Path::new("/data/out"));
+        assert_eq!(output_dir(src, "./a/../b/."), Path::new("/data/photos/b"));
+        assert_eq!(output_dir(src, "../../../../x"), Path::new("/x"));
+    }
+
+    #[test]
+    fn absolute_and_home_folders() {
+        let src = Path::new("/data/photos/a.png");
+        assert_eq!(
+            output_dir(src, "/srv/out/../results"),
+            Path::new("/srv/results")
+        );
+        assert_eq!(output_dir(src, " /srv/out "), Path::new("/srv/out"));
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+        assert_eq!(output_dir(src, "~"), home);
+        assert_eq!(output_dir(src, "~/Flect/out"), home.join("Flect/out"));
+        // `~name` is not expanded: it is an ordinary relative folder.
+        assert_eq!(output_dir(src, "~other"), Path::new("/data/photos/~other"));
+    }
+
+    #[test]
+    fn folder_is_created_and_names_stay_unique() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.png");
+        std::fs::write(&src, b"x").unwrap();
+        let out = prepare_output_dir(&src, "./Compressed/deep").unwrap();
+        assert_eq!(out, dir.path().join("Compressed/deep"));
+        assert!(out.is_dir());
+        assert_eq!(
+            derive_in(&out, &src, "_c", Some("jpg")),
+            out.join("a_c.jpg")
+        );
+        std::fs::write(out.join("a_c.jpg"), b"x").unwrap();
+        assert_eq!(
+            derive_in(&out, &src, "_c", Some("jpg")),
+            out.join("a_c (2).jpg")
+        );
+        // Unset: nothing is created and the source's folder is returned.
+        assert_eq!(prepare_output_dir(&src, "").unwrap(), dir.path());
+    }
+
+    #[test]
+    fn a_file_in_the_way_is_an_error_not_an_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.png");
+        std::fs::write(dir.path().join("Out"), b"keep").unwrap();
+        assert!(prepare_output_dir(&src, "Out").is_err());
+        assert_eq!(std::fs::read(dir.path().join("Out")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn directories_are_numbered_in_a_chosen_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pack.zip");
+        let out = dir.path().join("Extracted");
+        std::fs::create_dir_all(out.join("pack")).unwrap();
+        assert_eq!(
+            derive_directory_in(&out, &src, Some("pack"), ""),
+            out.join("pack (2)")
         );
     }
 

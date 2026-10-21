@@ -64,9 +64,35 @@ pub fn safe_delete(path: &Path) {
 
 /// Publish `temp` as `target` without ever replacing an existing entry.
 /// Uses a hard link (fails with `AlreadyExists`), then drops the temp name.
+/// Where a link is impossible (another volume, or a file system without hard links, as
+/// with an output folder on an external drive) the bytes are copied into a file created
+/// exclusively at `target`, so an existing entry still cannot be replaced.
 pub fn commit_new(temp: &Path, target: &Path) -> io::Result<()> {
-    fs::hard_link(temp, target)?;
-    fs::remove_file(temp)
+    match fs::hard_link(temp, target) {
+        Ok(()) => fs::remove_file(temp),
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
+            ) =>
+        {
+            Err(e)
+        }
+        Err(_) => {
+            let mut src = fs::File::open(temp)?;
+            let mut dst = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(target)?;
+            let copied = io::copy(&mut src, &mut dst).and_then(|_| dst.sync_all());
+            drop(dst);
+            if let Err(e) = copied {
+                let _ = fs::remove_file(target);
+                return Err(e);
+            }
+            fs::remove_file(temp)
+        }
+    }
 }
 
 /// Hidden working directory beside a destination; deleted on drop.

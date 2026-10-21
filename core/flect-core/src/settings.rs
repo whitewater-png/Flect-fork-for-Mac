@@ -206,6 +206,42 @@ section!(CodeSettings {
     decompile: DecompileSettings = DecompileSettings::default()
 });
 
+// Not in the Windows app: one output folder per feature. Empty = beside the original; a
+// relative path starts from the original's folder; `~` and absolute paths work. Windows
+// files simply lack the section, which loads as all-empty.
+section!(OutputSettings {
+    image: String = String::new(),
+    video: String = String::new(),
+    audio: String = String::new(),
+    text: String = String::new(),
+    pdf: String = String::new(),
+    ocr: String = String::new(),
+    archive_extract: String = String::new(),
+    archive_compress: String = String::new(),
+    report: String = String::new(),
+});
+
+impl OutputSettings {
+    /// The folder setting for a task id such as `image.resize` or `video.extractAudio`.
+    pub fn for_task(&self, task: &str) -> &str {
+        match task {
+            "video.extractAudio" => &self.audio,
+            "archive.extract" => &self.archive_extract,
+            "folder.compress" => &self.archive_compress,
+            "folder.analyze" => &self.report,
+            "image.ocr" => &self.ocr,
+            t => match t.split_once('.').map_or(t, |(group, _)| group) {
+                "image" => &self.image,
+                "video" => &self.video,
+                "audio" => &self.audio,
+                "text" => &self.text,
+                "pdf" => &self.pdf,
+                _ => "",
+            },
+        }
+    }
+}
+
 pub const SCHEMA_VERSION: i32 = 1;
 
 section!(Settings {
@@ -217,6 +253,7 @@ section!(Settings {
     text: TextSettings = TextSettings::default(),
     ocr: OcrSettings = OcrSettings::default(),
     code: CodeSettings = CodeSettings::default(),
+    output: OutputSettings = OutputSettings::default(),
 });
 
 impl Settings {

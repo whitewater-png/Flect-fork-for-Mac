@@ -254,16 +254,84 @@ pub fn stem_of(path: &Path) -> String {
         .unwrap_or(name)
 }
 
+/// Zips made by Windows tools in a Japanese/Chinese locale store names in CP932 (Shift_JIS)
+/// or GBK without setting the UTF-8 flag. A name that is valid UTF-8 (every ASCII name,
+/// and anything flagged) is taken as is. For the rest, the first of Shift_JIS and GBK that
+/// decodes all of them cleanly is used for the whole archive, so one archive never mixes
+/// two guesses. GBK wins when Shift_JIS could only read the names as half-width katakana,
+/// which is what Chinese text looks like through the wrong decoder. Nothing fits: None,
+/// and the zip crate's own CP437 reading stays.
+fn legacy_name_encoding(raw_names: &[&[u8]]) -> Option<&'static encoding_rs::Encoding> {
+    use encoding_rs::{GBK, SHIFT_JIS};
+    let legacy: Vec<&[u8]> = raw_names
+        .iter()
+        .copied()
+        .filter(|n| std::str::from_utf8(n).is_err())
+        .collect();
+    if legacy.is_empty() {
+        return None;
+    }
+    let decodes = |enc: &'static encoding_rs::Encoding| -> Option<Vec<String>> {
+        legacy
+            .iter()
+            .map(|n| {
+                enc.decode_without_bom_handling_and_without_replacement(n)
+                    .map(|c| c.into_owned())
+            })
+            .collect()
+    };
+    let half_width_kana = |c: char| ('\u{FF61}'..='\u{FF9F}').contains(&c);
+    match (decodes(SHIFT_JIS), decodes(GBK)) {
+        (Some(sjis), gbk) => {
+            let kana_only = sjis.iter().any(|n| n.chars().any(half_width_kana));
+            if kana_only && gbk.is_some() {
+                Some(GBK)
+            } else {
+                Some(SHIFT_JIS)
+            }
+        }
+        (None, Some(_)) => Some(GBK),
+        (None, None) => None,
+    }
+}
+
+/// Entry name for extraction: UTF-8 if it is, else decoded with the archive's legacy
+/// encoding; `fallback` (the zip crate's reading) when no encoding fits.
+fn zip_entry_name(
+    raw: &[u8],
+    legacy: Option<&'static encoding_rs::Encoding>,
+    fallback: impl FnOnce() -> Result<String, ArchiveError>,
+) -> Result<String, ArchiveError> {
+    if let Ok(utf8) = std::str::from_utf8(raw) {
+        return Ok(utf8.to_owned());
+    }
+    legacy
+        .and_then(|enc| enc.decode_without_bom_handling_and_without_replacement(raw))
+        .map(|c| c.into_owned())
+        .map_or_else(fallback, Ok)
+}
+
 pub fn extract_zip(archive: &Path, into: &Path, limits: Limits) -> Result<Report, ArchiveError> {
     let file = File::open(archive)?;
     let size = file.metadata()?.len();
     let mut zip = zip::ZipArchive::new(file)?;
+    let legacy = {
+        let mut raw_names: Vec<Vec<u8>> = Vec::with_capacity(zip.len().min(4096));
+        for i in 0..zip.len() {
+            // Headers only: nothing is decompressed or decrypted here.
+            let raw = zip.by_index_raw(i)?.name_raw().to_vec();
+            if std::str::from_utf8(&raw).is_err() {
+                raw_names.push(raw);
+            }
+        }
+        legacy_name_encoding(&raw_names.iter().map(Vec::as_slice).collect::<Vec<_>>())
+    };
     let mut budget = Budget::new(limits, size);
     let mut report = Report::default();
     for i in 0..zip.len() {
         budget.entry()?;
         let mut entry = zip.by_index(i)?;
-        let name = entry.name()?.into_owned();
+        let name = zip_entry_name(entry.name_raw(), legacy, || Ok(entry.name()?.into_owned()))?;
         if entry.encrypted() {
             return Err(ArchiveError::Encrypted);
         }
@@ -554,9 +622,21 @@ pub fn extract(
     limits: Limits,
     seven_zip: Option<&Path>,
 ) -> Result<Extracted, ArchiveError> {
+    extract_to(archive, limits, seven_zip, "")
+}
+
+/// [`extract`] into the output folder `folder` names (see `paths::output_dir`); empty = beside.
+pub fn extract_to(
+    archive: &Path,
+    limits: Limits,
+    seven_zip: Option<&Path>,
+    folder: &str,
+) -> Result<Extracted, ArchiveError> {
     let kind = kind_of(archive)
         .ok_or_else(|| ArchiveError::Unsupported(archive.to_string_lossy().into_owned()))?;
-    let scratch = ScratchDirectory::new(archive)?;
+    let out_dir = paths::prepare_output_dir(archive, folder)?;
+    // Staged inside the destination folder so the final rename stays on one volume.
+    let scratch = ScratchDirectory::new(&out_dir.join(stem_of(archive)))?;
     let staging = scratch.path_for("out");
     fs::create_dir(&staging)?;
     let report = match kind {
@@ -577,7 +657,7 @@ pub fn extract(
     };
     // Claim a free visible name, then move the finished tree onto it.
     for _ in 0..16 {
-        let dest = paths::derive_directory(archive, Some(&stem_of(archive)), "");
+        let dest = paths::derive_directory_in(&out_dir, archive, Some(&stem_of(archive)), "");
         match fs::create_dir(&dest) {
             Ok(()) => {
                 fs::rename(&staging, &dest)?;
@@ -743,16 +823,35 @@ pub fn compress_folder(
     format: Format,
     seven_zip: Option<&Path>,
 ) -> Result<(PathBuf, Report), ArchiveError> {
+    compress_folder_to(folder, format, seven_zip, "")
+}
+
+/// [`compress_folder`] into the output folder `into` names (see `paths::output_dir`;
+/// relative paths start from the folder's parent); empty = beside the folder.
+pub fn compress_folder_to(
+    folder: &Path,
+    format: Format,
+    seven_zip: Option<&Path>,
+    into: &str,
+) -> Result<(PathBuf, Report), ArchiveError> {
     if !fs::symlink_metadata(folder)?.is_dir() {
         return Err(ArchiveError::Unsupported("not a folder".into()));
     }
+    let out_dir = paths::output_dir(folder, into);
+    // An archive written inside the folder it packs would swallow itself.
+    if out_dir.starts_with(folder) {
+        return Err(ArchiveError::Unsupported(
+            "output folder is inside the folder being compressed".into(),
+        ));
+    }
+    paths::prepare_output_dir(folder, into)?;
     let scratch = ScratchDirectory::new(folder)?;
     let ext = format.extension();
     let staged = scratch.path_for(&format!("out{ext}"));
     let mut guard = WorkingFile::new(staged.clone());
     let report = create(folder, format, &staged, seven_zip)?;
     for _ in 0..16 {
-        let target = paths::derive(folder, "", Some(ext));
+        let target = paths::derive_in(&out_dir, folder, "", Some(ext));
         match crate::workspace::commit_new(&staged, &target) {
             Ok(()) => {
                 guard.keep();
@@ -783,6 +882,133 @@ mod tests {
             w.write_all(data).unwrap();
         }
         w.finish().unwrap().into_inner()
+    }
+
+    /// A zip whose entry names are raw bytes with no UTF-8 flag, like Windows tools write.
+    /// Each name is written as an ASCII placeholder of the same length, then patched in
+    /// (the CRC covers data only, so the archive stays valid).
+    fn zip_with_raw_names(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let placeholders: Vec<String> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| format!("{:0>width$}", format!("~{i}~"), width = name.len()))
+            .collect();
+        let named: Vec<(&str, &[u8])> = placeholders
+            .iter()
+            .zip(entries)
+            .map(|(p, (_, data))| (p.as_str(), *data))
+            .collect();
+        let mut bytes = zip_bytes(&named);
+        for (p, (raw, _)) in placeholders.iter().zip(entries) {
+            let at: Vec<usize> = bytes
+                .windows(p.len())
+                .enumerate()
+                .filter(|(_, w)| *w == p.as_bytes())
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(at.len(), 2, "local + central header");
+            for i in at {
+                bytes[i..i + raw.len()].copy_from_slice(raw);
+            }
+        }
+        bytes
+    }
+
+    fn encoded(enc: &'static encoding_rs::Encoding, text: &str) -> Vec<u8> {
+        let (bytes, _, lossy) = enc.encode(text);
+        assert!(!lossy, "{text} is not representable");
+        bytes.into_owned()
+    }
+
+    fn extract_names(zip: Vec<u8>) -> Result<Vec<String>, ArchiveError> {
+        let d = tempfile::tempdir().unwrap();
+        let zp = d.path().join("a.zip");
+        let out = d.path().join("out");
+        fs::create_dir(&out).unwrap();
+        fs::write(&zp, zip).unwrap();
+        extract_zip(&zp, &out, Limits::default())?;
+        let mut names = Vec::new();
+        let mut stack = vec![out.clone()];
+        while let Some(dir) = stack.pop() {
+            for e in fs::read_dir(dir).unwrap().flatten() {
+                if e.file_type().unwrap().is_dir() {
+                    stack.push(e.path());
+                } else {
+                    names.push(
+                        e.path()
+                            .strip_prefix(&out)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    #[test]
+    fn zip_shift_jis_names_are_decoded() {
+        // 表 ends in 0x5C (a backslash byte): it must not be read as a path separator.
+        let dir = encoded(encoding_rs::SHIFT_JIS, "報告書/表.txt");
+        assert!(dir.contains(&0x5C));
+        let zip = zip_with_raw_names(&[
+            (&dir, b"1"),
+            (&encoded(encoding_rs::SHIFT_JIS, "日本語.txt"), b"2"),
+            (b"plain.txt", b"3"),
+        ]);
+        assert_eq!(
+            extract_names(zip).unwrap(),
+            ["plain.txt", "報告書/表.txt", "日本語.txt"]
+        );
+    }
+
+    #[test]
+    fn zip_gbk_names_are_decoded() {
+        let zip = zip_with_raw_names(&[
+            (&encoded(encoding_rs::GBK, "中文/说明.txt"), b"1"),
+            (&encoded(encoding_rs::GBK, "资料.txt"), b"2"),
+        ]);
+        assert_eq!(extract_names(zip).unwrap(), ["中文/说明.txt", "资料.txt"]);
+    }
+
+    #[test]
+    fn zip_utf8_names_are_untouched_next_to_legacy_ones() {
+        let zip = zip_with_raw_names(&[
+            ("日本語.txt".as_bytes(), b"1"),
+            (&encoded(encoding_rs::SHIFT_JIS, "資料.txt"), b"2"),
+        ]);
+        assert_eq!(extract_names(zip).unwrap(), ["日本語.txt", "資料.txt"]);
+    }
+
+    #[test]
+    fn zip_names_no_encoding_fits_fall_back_without_failing() {
+        // 0xFF is not a lead byte in Shift_JIS or GBK: the zip crate's CP437 reading is kept.
+        let zip = zip_with_raw_names(&[(b"a\xFF\xFFb.txt", b"1")]);
+        let names = extract_names(zip).unwrap();
+        assert_eq!(names.len(), 1);
+        assert!(names[0].starts_with('a') && names[0].ends_with("b.txt"));
+    }
+
+    #[test]
+    fn zip_legacy_names_keep_the_safety_checks() {
+        for bad in ["../報告.txt", "..\\報告.txt", "/報告.txt", "C:\\報告.txt"] {
+            let zip = zip_with_raw_names(&[(&encoded(encoding_rs::SHIFT_JIS, bad), b"x")]);
+            let err = extract_names(zip).unwrap_err();
+            assert_eq!(err.key(), "msg.archiveUnsafePath", "{bad}");
+        }
+    }
+
+    #[test]
+    fn legacy_encoding_choice() {
+        use encoding_rs::{GBK, SHIFT_JIS};
+        let sjis = encoded(SHIFT_JIS, "日本語のファイル");
+        let gbk = encoded(GBK, "中文文件说明");
+        assert_eq!(legacy_name_encoding(&[b"ascii", "ü".as_bytes()]), None);
+        assert_eq!(legacy_name_encoding(&[&sjis]), Some(SHIFT_JIS));
+        assert_eq!(legacy_name_encoding(&[&gbk]), Some(GBK));
+        assert_eq!(legacy_name_encoding(&[b"\xFF\xFF"]), None);
     }
 
     fn tar_with(entries: &[(&str, tar::EntryType, &[u8], &str)]) -> Vec<u8> {
