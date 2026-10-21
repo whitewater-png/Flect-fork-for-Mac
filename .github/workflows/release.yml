@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the ad-hoc signed .app on a tag (v*) and attaches it, with its SHA-256, to a GitHub release.
+# Builds the ad-hoc signed .app on a tag (v*) and attaches it (as a .dmg and a .zip, each with its SHA-256) to a GitHub release.
 # Ad-hoc signed means Gatekeeper will warn on first launch; see "Download" in the README.
 on:
   push:
@@ -30,12 +30,19 @@ jobs:
           cd dist
           ditto -c -k --keepParent Flect-for-Mac.app Flect-for-Mac-macos-arm64.zip
           shasum -a 256 Flect-for-Mac-macos-arm64.zip | tee Flect-for-Mac-macos-arm64.zip.sha256
+      - name: Disk image (drag-to-install, with the first-launch guide)
+        run: |
+          scripts/make-dmg.sh dist/Flect-for-Mac.app dist/Flect-for-Mac-macos-arm64.dmg
+          cd dist
+          shasum -a 256 Flect-for-Mac-macos-arm64.dmg | tee Flect-for-Mac-macos-arm64.dmg.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: Flect-for-Mac-macos-arm64
           path: |
             dist/Flect-for-Mac-macos-arm64.zip
             dist/Flect-for-Mac-macos-arm64.zip.sha256
+            dist/Flect-for-Mac-macos-arm64.dmg
+            dist/Flect-for-Mac-macos-arm64.dmg.sha256
       - name: Attach to the release
         if: github.ref_type == 'tag'
         env:
@@ -44,4 +51,4 @@ jobs:
           notes="docs/release/${GITHUB_REF_NAME}.md"
           if [ -f "$notes" ]; then notes_args=(--notes-file "$notes"); else notes_args=(--notes "Ad-hoc signed build for Apple Silicon (macOS 14+). Verify with the .sha256 file. See the README for first-launch steps."); fi
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" "${notes_args[@]}"
-          gh release upload "$GITHUB_REF_NAME" dist/Flect-for-Mac-macos-arm64.zip dist/Flect-for-Mac-macos-arm64.zip.sha256 --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/Flect-for-Mac-macos-arm64.dmg dist/Flect-for-Mac-macos-arm64.dmg.sha256 dist/Flect-for-Mac-macos-arm64.zip dist/Flect-for-Mac-macos-arm64.zip.sha256 --clobber

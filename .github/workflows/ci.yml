@@ -84,6 +84,16 @@ jobs:
           plutil -lint "$APP/Contents/Info.plist"
           echo '{"op":"export-menu"}' | "$APP/Contents/Resources/flect-engine" | head -c 300; echo
           codesign -dv "$APP" 2>&1 | head -5
+      - name: Build the disk image and check its contents
+        run: |
+          scripts/make-dmg.sh dist/Flect-for-Mac.app "$RUNNER_TEMP/Flect-for-Mac.dmg"
+          hdiutil attach "$RUNNER_TEMP/Flect-for-Mac.dmg" -readonly -nobrowse -noverify -mountpoint "$RUNNER_TEMP/dmgvol"
+          ls -la "$RUNNER_TEMP/dmgvol"
+          test -d "$RUNNER_TEMP/dmgvol/Flect-for-Mac.app"
+          test -L "$RUNNER_TEMP/dmgvol/Applications"
+          ls "$RUNNER_TEMP/dmgvol" | grep -q '\.txt$'
+          codesign --verify --deep --strict "$RUNNER_TEMP/dmgvol/Flect-for-Mac.app"
+          hdiutil detach "$RUNNER_TEMP/dmgvol"
       - name: Launch the relocated app (a missing resource bundle crashes it at startup)
         run: |
           # SwiftPM's Bundle.module falls back to the absolute build path; remove it so that fallback cannot hide a problem.
