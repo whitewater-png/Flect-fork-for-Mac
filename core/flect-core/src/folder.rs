@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -126,6 +127,8 @@ pub struct ScannedFile {
     pub size: u64,
     pub modified: SystemTime,
     pub extension: String,
+    /// (device, inode): the file itself, whatever name it was reached by.
+    pub file_id: (u64, u64),
 }
 
 #[derive(Debug, Default)]
@@ -133,6 +136,8 @@ pub struct TreeScan {
     pub files: Vec<ScannedFile>,
     pub empty_directories: Vec<PathBuf>,
     pub directory_count: usize,
+    /// Files already listed, so a hard link (a second name for the same inode) is listed once.
+    seen: HashSet<(u64, u64)>,
 }
 
 impl TreeScan {
@@ -167,6 +172,29 @@ pub fn extension_of(name: &str) -> String {
     }
 }
 
+/// The selection without repeats and without folders that lie inside another selected folder
+/// (compared after resolving the path, so `/var/x` and `/private/var/x` are the same folder).
+/// Order is kept; of two spellings of one folder the first wins. Scanning a folder twice would list
+/// every file in it twice, and the duplicate finder would then offer a file as its own copy.
+pub fn distinct_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let canon: Vec<PathBuf> = roots
+        .iter()
+        .map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone()))
+        .collect();
+    roots
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            !canon.iter().enumerate().any(|(j, other)| {
+                j != *i && canon[*i].starts_with(other) && (canon[*i] != *other || j < *i)
+            })
+        })
+        .map(|(_, r)| r.clone())
+        .collect()
+}
+
+/// Walk the (de-duplicated, see [`distinct_roots`]) selection. Every file is listed once: a file
+/// reached under two names (hard links) is one file, listed under the first name met.
 pub fn scan(
     roots: &[PathBuf],
     excl: &ExclusionFilter,
@@ -174,7 +202,7 @@ pub fn scan(
     progress: &dyn Progress,
 ) -> Result<TreeScan, Cancelled> {
     let mut out = TreeScan::default();
-    for root in roots {
+    for root in &distinct_roots(roots) {
         if progress.cancelled() {
             return Err(Cancelled);
         }
@@ -223,11 +251,16 @@ fn walk(
             if excl.excludes_file(&name) {
                 continue;
             }
+            let file_id = (meta.dev(), meta.ino());
+            if !out.seen.insert(file_id) {
+                continue; // another name for a file already listed
+            }
             out.files.push(ScannedFile {
                 path: entry.path(),
                 size: meta.len(),
                 modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                 extension: extension_of(&name),
+                file_id,
             });
             if out.files.len().is_multiple_of(4096) {
                 progress.status("msg.scanningCount", &[out.files.len().to_string()]);
@@ -443,7 +476,26 @@ pub fn find_duplicates(
     Ok(sorted(final_groups))
 }
 
-fn sorted(mut groups: Vec<Vec<ScannedFile>>) -> Vec<Vec<ScannedFile>> {
+/// Whether a group lists one file twice (same path, or same inode under another name).
+fn repeats_a_file(g: &[ScannedFile]) -> bool {
+    let mut paths = HashSet::new();
+    let mut ids = HashSet::new();
+    g.iter()
+        .any(|f| !paths.insert(f.path.as_path()) || !ids.insert(f.file_id))
+}
+
+fn sorted(groups: Vec<Vec<ScannedFile>>) -> Vec<Vec<ScannedFile>> {
+    // Defence in depth (the scan already lists each file once): a group only ever holds distinct
+    // files, and one that would shrink below two members is not a duplicate group at all.
+    let mut groups: Vec<Vec<ScannedFile>> = groups
+        .into_iter()
+        .map(|mut g| {
+            let (mut paths, mut ids) = (HashSet::new(), HashSet::new());
+            g.retain(|f| paths.insert(f.path.clone()) & ids.insert(f.file_id));
+            g
+        })
+        .filter(|g| g.len() > 1)
+        .collect();
     for g in &mut groups {
         g.sort_by(|a, b| a.path.cmp(&b.path));
     }
@@ -458,9 +510,14 @@ pub enum DuplicateMode {
     DeleteAll,
 }
 
+/// What goes for each group under `mode`. A group that lists one file twice (by path or inode) is
+/// never acted on, and the copy that stays is never also in the list of copies that go.
 pub fn to_delete(groups: &[Vec<ScannedFile>], mode: DuplicateMode) -> Vec<ScannedFile> {
     let mut doomed = Vec::new();
     for g in groups {
+        if g.len() < 2 || repeats_a_file(g) {
+            continue;
+        }
         match mode {
             DuplicateMode::DeleteAll => doomed.extend(g.iter().cloned()),
             DuplicateMode::KeepOldest | DuplicateMode::KeepNewest => {
@@ -472,11 +529,13 @@ pub fn to_delete(groups: &[Vec<ScannedFile>], mode: DuplicateMode) -> Vec<Scanne
                         .enumerate()
                         .max_by_key(|(i, f)| (f.modified, std::cmp::Reverse(*i)))
                 };
-                if let Some((k, _)) = keep {
+                if let Some((k, kept)) = keep {
                     doomed.extend(
                         g.iter()
                             .enumerate()
-                            .filter(|(i, _)| *i != k)
+                            .filter(|(i, f)| {
+                                *i != k && f.path != kept.path && f.file_id != kept.file_id
+                            })
                             .map(|(_, f)| f.clone()),
                     );
                 }
@@ -484,6 +543,33 @@ pub fn to_delete(groups: &[Vec<ScannedFile>], mode: DuplicateMode) -> Vec<Scanne
         }
     }
     doomed
+}
+
+/// The last check before a duplicate plan is shown or carried out: no file is listed for removal
+/// twice, and in a keep mode every group still keeps a copy that is not itself listed for removal
+/// (by path or by inode).
+pub fn plan_is_consistent(
+    groups: &[Vec<ScannedFile>],
+    doomed: &[ScannedFile],
+    mode: DuplicateMode,
+) -> bool {
+    let (mut paths, mut ids) = (HashSet::new(), HashSet::new());
+    if !doomed
+        .iter()
+        .all(|d| paths.insert(d.path.as_path()) & ids.insert(d.file_id))
+    {
+        return false;
+    }
+    mode == DuplicateMode::DeleteAll
+        || groups.iter().all(|g| {
+            let gone = g
+                .iter()
+                .filter(|f| paths.contains(f.path.as_path()) || ids.contains(&f.file_id))
+                .count();
+            gone == 0
+                || g.iter()
+                    .any(|f| !paths.contains(f.path.as_path()) && !ids.contains(&f.file_id))
+        })
 }
 
 // ------------------------------------------------------------ tree
@@ -752,6 +838,7 @@ mod tests {
             size: 1,
             modified: t(s),
             extension: String::new(),
+            file_id: (1, u64::from(n.as_bytes()[0])),
         };
         let groups = vec![vec![f("a", 20), f("b", 10), f("c", 30)]];
         let names = |v: Vec<ScannedFile>| {
@@ -771,6 +858,49 @@ mod tests {
         let ties = vec![vec![f("a", 5), f("b", 5)]];
         assert_eq!(names(to_delete(&ties, DuplicateMode::KeepOldest)), ["b"]);
         assert_eq!(names(to_delete(&ties, DuplicateMode::KeepNewest)), ["b"]);
+        // A group that names one file twice (same path, or same inode under another name) is
+        // never acted on in any mode: removing "the other copy" would remove the only one.
+        let same_path = vec![vec![f("a", 5), f("a", 6)]];
+        let mut alias = f("z", 9);
+        alias.file_id = f("a", 5).file_id;
+        let same_inode = vec![vec![f("a", 5), alias]];
+        for g in [&same_path, &same_inode] {
+            for m in [
+                DuplicateMode::KeepOldest,
+                DuplicateMode::KeepNewest,
+                DuplicateMode::DeleteAll,
+            ] {
+                assert!(to_delete(g, m).is_empty(), "{m:?} {g:?}");
+            }
+        }
+        assert!(sorted(same_path.clone()).is_empty() && sorted(same_inode.clone()).is_empty());
+    }
+
+    #[test]
+    fn nested_and_repeated_roots_are_scanned_once() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a"), d.path().join("ab"));
+        write(&a.join("in/x.txt"), b"x");
+        write(&b.join("y.txt"), b"y");
+        fs::hard_link(a.join("in/x.txt"), a.join("x_link.txt")).unwrap();
+        let canon = fs::canonicalize(&a).unwrap();
+        assert_eq!(
+            distinct_roots(&[a.clone(), a.join("in"), canon.clone(), b.clone()]),
+            [a.clone(), b.clone()],
+            "`ab` is not inside `a`; `in` and the resolved spelling of `a` are"
+        );
+        assert_eq!(
+            distinct_roots(&[a.join("in"), a.clone()]),
+            std::slice::from_ref(&a)
+        );
+        let s = scan(
+            &[a.join("in"), a.clone(), canon],
+            &ExclusionFilter::default(),
+            &EmptyFolderSettings::default(),
+            &NullProgress,
+        )
+        .unwrap();
+        assert_eq!(s.files.len(), 1, "one file, three ways to reach it: {s:?}");
     }
 
     #[test]

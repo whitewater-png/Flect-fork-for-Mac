@@ -65,12 +65,17 @@ fn fail(ctx: &Ctx<'_>, key: &str, arg: String) {
     done(ctx, Outcome::Failed, None, vec![]);
 }
 
-/// Selected items that are folders (symlinks are not followed).
+/// Selected items that are folders (symlinks are not followed), each once: the same folder
+/// selected twice (or under two spellings, such as `/var/x` and `/private/var/x`) counts once.
+/// Folders inside another selected folder are kept here (rename works per folder) and collapsed by
+/// the recursive scans themselves (`folder::scan`).
 fn folders(paths: &[String]) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
     paths
         .iter()
         .map(PathBuf::from)
         .filter(|p| p.symlink_metadata().map(|m| m.is_dir()).unwrap_or(false))
+        .filter(|p| seen.insert(std::fs::canonicalize(p).unwrap_or_else(|_| p.clone())))
         .collect()
 }
 
@@ -246,6 +251,10 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
             };
             let _ = plan;
             let doomed = folder::to_delete(&groups, mode);
+            if !folder::plan_is_consistent(&groups, &doomed, mode) {
+                // Never expected (the scan lists each file once); refuse rather than risk the only copy.
+                return fail(ctx, "msg.ioError", "inconsistent duplicate plan".into());
+            }
             if doomed.is_empty() {
                 return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
             }
@@ -564,6 +573,73 @@ mod tests {
             find(&run("folder.removeDuplicate", &[d.path()], &s), "done").unwrap()["summary_key"],
             "msg.noDuplicates"
         );
+    }
+
+    /// Selecting a folder together with a folder inside it (or the same folder twice, or the same
+    /// folder under another spelling) once listed every file twice in one "duplicate" group, so a
+    /// real run trashed / deleted the only copy. Hard links (two names, one inode) are one file too.
+    #[test]
+    fn overlapping_roots_and_hard_links_never_make_a_file_its_own_duplicate() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("A");
+        let sub = a.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let precious = sub.join("precious.txt");
+        fs::write(&precious, "the only copy").unwrap();
+        fs::hard_link(&precious, a.join("alias.txt")).unwrap();
+        let canon_sub = fs::canonicalize(&sub).unwrap(); // /var/... -> /private/var/... on macOS
+        let selections: Vec<Vec<&Path>> = vec![
+            vec![&a, &sub],
+            vec![&sub, &a],
+            vec![&a, &a],
+            vec![&a, &canon_sub],
+            vec![&a],
+        ];
+        let mut permanent = Settings::default();
+        permanent.folder.delete_method = DeleteMethod::Permanent;
+        for roots in &selections {
+            for mode in ["oldest", "newest", "all"] {
+                let ev = run(
+                    &format!("folder.removeDuplicate?mode={mode}&dry=1"),
+                    roots,
+                    &Settings::default(),
+                );
+                assert!(find(&ev, "data").is_none(), "{roots:?} {mode}: {ev:?}");
+                assert_eq!(
+                    find(&ev, "done").unwrap()["summary_key"],
+                    "msg.noDuplicates",
+                    "{roots:?} {mode}"
+                );
+                let ev = run(
+                    &format!("folder.removeDuplicate?mode={mode}"),
+                    roots,
+                    &Settings::default(),
+                );
+                assert!(find(&ev, "needs").is_none(), "{roots:?} {mode}: {ev:?}");
+                run(
+                    &format!("folder.removeDuplicate?mode={mode}"),
+                    roots,
+                    &permanent,
+                );
+                assert!(precious.exists(), "{roots:?} {mode}: the only copy is gone");
+                assert!(a.join("alias.txt").exists(), "{roots:?} {mode}");
+            }
+            // Ask mode lists no group either
+            let ev = run("folder.removeDuplicate", roots, &Settings::default());
+            assert!(find(&ev, "data").is_none(), "{roots:?}: {ev:?}");
+        }
+        // A real duplicate next to the overlap is still found exactly once.
+        fs::write(a.join("copy.txt"), "the only copy").unwrap();
+        let ev = run(
+            "folder.removeDuplicate?mode=oldest&dry=1",
+            &[&a, &sub],
+            &Settings::default(),
+        );
+        let p = &find(&ev, "data").unwrap()["data"];
+        assert_eq!(p["groups"].as_array().unwrap().len(), 1, "{p}");
+        assert_eq!(p["removeCount"], 1, "{p}");
+        let g = &p["groups"][0];
+        assert_ne!(g["keep"]["path"], g["remove"][0]["path"]);
     }
 
     #[test]

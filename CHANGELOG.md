@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed (data loss): **Remove Duplicate** could offer a file as a duplicate of itself when the selection contained a folder and a folder inside it (or the same folder twice, or the same folder under another spelling such as `/var/…` and `/private/var/…`), so confirming removed the only copy. Each file is now scanned once; hard links (two names for one file) count as one file and are never offered as a pair. The preview and the real run refuse any group that names one file twice.
+
 ## 0.2.0 - share safely, presets, command line
 
 - Share safely (images): **Privacy Check** shows what personal data a JPEG, PNG or WebP carries (GPS location, camera and lens serial numbers, owner/author, timestamps, software, embedded thumbnails, XMP/IPTC, comments, hidden blocks) and changes nothing. **Make Safe to Share** writes a new `_safe` copy without it (lossless for JPEG/PNG/WebP unless the rotation has to be applied; optionally with a maximum long edge via **Make Safe to Share (Resize)**). The copy is re-checked before it is written and the original is never touched or overwritten. Both appear as Finder Quick Actions. HEIC, PDF and video are not covered yet.

@@ -46,7 +46,7 @@
 ## 対話が必要なタスクの流れ（エンジンは質問しない。アプリが聞いて再実行する）
 | タスク | 1 回目 | アプリが尋ねる | 2 回目 |
 | --- | --- | --- | --- |
-| `folder.removeDuplicate`（プレビュー付き） | `folder.removeDuplicate?dry=1` → `data:duplicates`（Ask）または `data:duplicates_preview`（設定の Keep ルール） | どれを残すか → 実行内容の一覧を見せて**確認** | `mode=oldest\|newest\|all&dry=1` → `data:duplicates_preview` → 確認後 `mode=...`（`dry` なし）→ `needs:trash`。プレビューは何も変更せず、確認時に再スキャンして実行する（その間にファイルが変わっていれば実行時の内容が優先） |
+| `folder.removeDuplicate`（プレビュー付き） | `folder.removeDuplicate?dry=1` → `data:duplicates`（Ask）または `data:duplicates_preview`（設定の Keep ルール） | どれを残すか → 実行内容の一覧を見せて**確認** | `mode=oldest\|newest\|all&dry=1` → `data:duplicates_preview` → 確認後 `mode=...`（`dry` なし）→ `needs:trash`。プレビューは何も変更せず、確認時に再スキャンして実行する（その間にファイルが変わっていれば実行時の内容が優先）。選択の重複・入れ子（`A` と `A/sub`、同じフォルダの別表記）は 1 回だけ走査し、同じ inode（ハードリンク）は 1 ファイルとして扱う。同じファイルを 2 回含むグループは提示も削除もしない |
 | `folder.removeEmpty` | `data:empty_folders` + `done(msg.emptyFound)` | 削除してよいか | `folder.removeEmpty?confirm=1` → `needs:trash` |
 | `folder.rename` | （アプリがダイアログで接頭辞/名前/接尾辞を取得） | — | `folder.rename?prefix=..&name=..&suffix=..&numbered=1&dry=0\|1` |
 | `pdf.merge` | （アプリが順序ダイアログで並べ替え） | — | `paths` を結合したい順で渡す（2 件以上） |
