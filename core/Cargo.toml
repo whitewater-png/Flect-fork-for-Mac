@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["flect-core", "flect-engine", "flect-tools"]
+members = ["flect-core", "flect-engine", "flect-tools", "flect-cli"]
 
 [workspace.package]
 version = "0.1.0"

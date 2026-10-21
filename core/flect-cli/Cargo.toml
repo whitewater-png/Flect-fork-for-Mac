@@ -1,0 +1,22 @@
+[package]
+name = "flect-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "flect"
+path = "src/main.rs"
+
+[dependencies]
+flect-core = { path = "../flect-core" }
+serde_json.workspace = true
+# SIGINT/SIGTERM handling (turns Ctrl-C into a protocol `cancel`) without any `unsafe` in our code.
+signal-hook = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
