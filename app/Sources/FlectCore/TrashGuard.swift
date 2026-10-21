@@ -20,8 +20,26 @@ public enum TrashGuard {
 
     public enum Refusal: String, Error, Equatable, CaseIterable {
         case invalidPath, outsideSelection, isSelected, missing, symlink, unexpectedType, notEmpty, unreadable
+        /// The request came from a run that is not the current one.
+        case staleRun
         /// The localized reason (`strings.ux.*.json`).
         public var key: String { "app.trashWhy.\(rawValue)" }
+    }
+
+    /// What one run's Trash requests may touch: that run's selected items and task kind, under its own id. Requests
+    /// are checked against the scope of the run whose event stream produced them, and only while that run is the
+    /// current one.
+    public struct Scope: Equatable {
+        public let run: UUID
+        public let inputs: [String]
+        public let kind: Kind
+        public init(run: UUID = UUID(), inputs: [String], kind: Kind) { self.run = run; self.inputs = inputs; self.kind = kind }
+    }
+
+    /// `check` for a request of the run `scope` belongs to; `.staleRun` when that run is not `currentRun`.
+    public static func check(_ path: String, scope: Scope, currentRun: UUID?, litter: LitterRules = LitterRules()) -> Refusal? {
+        guard scope.run == currentRun else { return .staleRun }
+        return check(path, inputs: scope.inputs, kind: scope.kind, litter: litter)
     }
 
     /// What a run's Trash requests came to.

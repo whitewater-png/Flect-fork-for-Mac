@@ -185,6 +185,25 @@ final class TrashGuardTests: XCTestCase {
         }
     }
 
+    /// Trash requests are tied to the run that produced them: a request from an earlier run (its events still arriving
+    /// after a new run started) or after the run ended is refused, whatever the path.
+    func testRequestsOnlyFromTheCurrentRun() {
+        let sel = scratch(), other = scratch()
+        let target = sel.appendingPathComponent("dup.txt"), otherTarget = other.appendingPathComponent("dup.txt")
+        file(target); file(otherTarget)
+        let first = TrashGuard.Scope(inputs: [sel.path], kind: .files)
+        let second = TrashGuard.Scope(inputs: [other.path], kind: .files)
+        XCTAssertNotEqual(first.run, second.run)
+        XCTAssertNil(TrashGuard.check(target.path, scope: first, currentRun: first.run))
+        // a new run started: the first run's requests are refused, the second's are checked against its own inputs
+        XCTAssertEqual(TrashGuard.check(target.path, scope: first, currentRun: second.run), .staleRun)
+        XCTAssertNil(TrashGuard.check(otherTarget.path, scope: second, currentRun: second.run))
+        XCTAssertEqual(TrashGuard.check(target.path, scope: second, currentRun: second.run), .outsideSelection)
+        // no run current
+        XCTAssertEqual(TrashGuard.check(otherTarget.path, scope: second, currentRun: nil), .staleRun)
+        XCTAssertEqual(TrashGuard.kind(task: "folder.removeEmpty?confirm=1", steps: nil), TrashGuard.Scope(inputs: [], kind: .emptyFolders).kind)
+    }
+
     func testRefusalMessagesExistInEveryLanguage() throws {
         for code in ["en", "ja", "zh"] {
             let url = try XCTUnwrap(Bundle.module.url(forResource: "strings.ux.\(code)", withExtension: "json", subdirectory: "Resources"))

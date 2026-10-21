@@ -6,6 +6,7 @@
  "app.trashWhy.missing": "it no longer exists",
  "app.trashWhy.notEmpty": "it is no longer empty",
  "app.trashWhy.outsideSelection": "it is not inside the selected folders",
+ "app.trashWhy.staleRun": "it was asked for by a run that is no longer the current one",
  "app.trashWhy.symlink": "it is a symbolic link",
  "app.trashWhy.unexpectedType": "it is not the kind of item this task removes",
  "app.trashWhy.unreadable": "it could not be checked",

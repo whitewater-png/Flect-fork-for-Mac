@@ -6,6 +6,7 @@
  "app.trashWhy.missing": "已不存在",
  "app.trashWhy.notEmpty": "已不再为空",
  "app.trashWhy.outsideSelection": "不在所选文件夹内",
+ "app.trashWhy.staleRun": "由已不是当前运行的任务请求",
  "app.trashWhy.symlink": "它是符号链接",
  "app.trashWhy.unexpectedType": "不是此任务要删除的项目类型",
  "app.trashWhy.unreadable": "无法检查",

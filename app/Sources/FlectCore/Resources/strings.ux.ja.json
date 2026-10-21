@@ -6,6 +6,7 @@
  "app.trashWhy.missing": "すでに存在しません",
  "app.trashWhy.notEmpty": "空ではなくなっています",
  "app.trashWhy.outsideSelection": "選択したフォルダの中にありません",
+ "app.trashWhy.staleRun": "現在の実行ではない実行から要求されました",
  "app.trashWhy.symlink": "シンボリックリンクです",
  "app.trashWhy.unexpectedType": "この処理で削除する種類の項目ではありません",
  "app.trashWhy.unreadable": "確認できませんでした",

@@ -184,7 +184,8 @@ final class AppModel: ObservableObject {
         screen = .running
         pendingData = []
         tracker.begin(task: label ?? task, inputs: runPaths)
-        trashScope = (inputs: runPaths, kind: TrashGuard.kind(task: task, steps: steps))
+        let scope = TrashGuard.Scope(inputs: runPaths, kind: TrashGuard.kind(task: task, steps: steps))
+        currentRun = scope.run
         remember(task: task, as: remembering)
         let events = steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
         Task {
@@ -202,7 +203,7 @@ final class AppModel: ObservableObject {
                 case .error(let k, let a): log.append(LogLine(kind: .error, text: loc.f(k, a))); sawProblem = true
                 case .needs(let what, let ps):
                     if what == "trash" {
-                        trashed.add(trash(ps))
+                        trashed.add(trash(ps, scope: scope))
                         if trashed.notMoved > 0 { sawProblem = true }
                     }
                 case .data(let n, let d):
@@ -216,6 +217,7 @@ final class AppModel: ObservableObject {
                     sawProblem = true
                 }
             }
+            if currentRun == scope.run { currentRun = nil }
             finishRun(outcome: outcome, summary: TrashGuard.runSummary(summary, tally: trashed, loc: loc), sawProblem: sawProblem)
         }
     }
@@ -296,18 +298,18 @@ final class AppModel: ObservableObject {
 
     // MARK: trash (the engine never deletes on its own in Recycle mode)
 
-    /// The current run's selected items and what its trash requests may contain (see `TrashGuard`).
-    private var trashScope: (inputs: [String], kind: TrashGuard.Kind) = ([], .files)
+    /// The run whose Trash requests are accepted (see `TrashGuard.Scope`); nil between runs.
+    private var currentRun: UUID?
 
     /// Every path is checked by `TrashGuard` right before it is moved (inside the run's selection, not a link, and for
     /// Remove Empty still nothing but OS litter); one that fails is skipped and reported. Returns how many were asked
     /// for and how many were moved, so the run is marked as having a problem and its summary does not claim more.
-    private func trash(_ ps: [String]) -> TrashGuard.Tally {
+    private func trash(_ ps: [String], scope: TrashGuard.Scope) -> TrashGuard.Tally {
         let litter = TrashGuard.LitterRules(settings: settings)
         var tally = TrashGuard.Tally()
         for p in ps {
             tally.requested += 1
-            if let why = TrashGuard.check(p, inputs: trashScope.inputs, kind: trashScope.kind, litter: litter) {
+            if let why = TrashGuard.check(p, scope: scope, currentRun: currentRun, litter: litter) {
                 log.append(LogLine(kind: .warn, text: loc.f("app.trashRefused", [p, loc.t(why.key)])))
                 continue
             }
