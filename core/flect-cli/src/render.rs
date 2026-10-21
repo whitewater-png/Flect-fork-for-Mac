@@ -60,6 +60,8 @@ pub struct Tally {
     pub errors: u32,
     pub done: u64,
     pub total: u64,
+    /// Items the engine asked the app to move to the Trash (the CLI never does).
+    pub trash: u64,
 }
 
 /// One entry of `flect list`.

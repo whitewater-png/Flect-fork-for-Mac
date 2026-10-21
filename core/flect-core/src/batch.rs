@@ -339,6 +339,7 @@ fn remove_duplicates_with(
             total: doomed.len() as u64,
         });
     }
+    removal_counts(ctx, handed.len(), skipped);
     if handed.is_empty() {
         // Say when there was something to remove but every one of them was left alone.
         let (key, args) = if skipped > 0 {
@@ -359,6 +360,16 @@ fn remove_duplicates_with(
         args.push(skipped.to_string());
     }
     done(ctx, Outcome::Succeeded, Some(key), args);
+}
+
+/// What a deleting run did, in items (files, or planned folders with everything in them), the
+/// same way in Trash and permanent mode: removed or handed to the Trash, and left alone. For the
+/// app's run history.
+fn removal_counts(ctx: &Ctx<'_>, items: usize, left_alone: usize) {
+    (ctx.emit)(Event::Data {
+        name: "removal".into(),
+        data: json!({"items": items, "leftAlone": left_alone}),
+    });
 }
 
 /// Ask the app to move one checked item to the Trash (undoable; the engine never does it itself).
@@ -415,6 +426,7 @@ fn remove_empty(ctx: &Ctx<'_>, plan: &ft::DeletePlan, roots: &[PathBuf]) {
                     skipped_event(p, why.as_deref());
                 }
                 let skipped = out.skipped.len();
+                removal_counts(ctx, out.removed_items, skipped);
                 match (out.removed, skipped) {
                     (0, 0) => done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]),
                     (0, s) => done(
@@ -475,6 +487,7 @@ fn remove_empty(ctx: &Ctx<'_>, plan: &ft::DeletePlan, roots: &[PathBuf]) {
                 }
             }
         }
+        removal_counts(ctx, handed, skipped);
         let (key, args) = match (handed, skipped) {
             (0, 0) => ("msg.noEmpty", vec![]),
             (0, s) => ("msg.emptyNoneRemoved", vec![s.to_string()]),
@@ -1921,6 +1934,32 @@ mod tests {
         fs::rename(r.join("e.old"), r.join("e")).unwrap();
         let ev = run("folder.removeEmpty?confirm=1", &[&r], &Settings::default());
         assert_eq!(trash_paths(&ev), [r.join("e").to_string_lossy()]);
+    }
+
+    /// Both deleting tasks report what they did in items, the same way in both modes.
+    #[test]
+    fn removal_counts_are_items_in_both_modes() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        for settings in [&Settings::default(), &perm] {
+            let d = tempfile::tempdir().unwrap();
+            fs::create_dir_all(d.path().join("e/f/g")).unwrap();
+            fs::create_dir_all(d.path().join("h")).unwrap();
+            let ev = run("folder.removeEmpty?confirm=1", &[d.path()], settings);
+            let data = ev
+                .iter()
+                .find(|e| e["event"] == "data" && e["name"] == "removal")
+                .unwrap();
+            assert_eq!(data["data"], json!({"items": 2, "leftAlone": 0}), "{ev:?}");
+            fs::write(d.path().join("a"), "x").unwrap();
+            fs::write(d.path().join("b"), "x").unwrap();
+            let ev = run("folder.removeDuplicate?mode=oldest", &[d.path()], settings);
+            let data = ev
+                .iter()
+                .find(|e| e["event"] == "data" && e["name"] == "removal")
+                .unwrap();
+            assert_eq!(data["data"], json!({"items": 1, "leftAlone": 0}), "{ev:?}");
+        }
     }
 
     /// The plan is looked at again right before it is carried out.

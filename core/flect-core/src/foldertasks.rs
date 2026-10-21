@@ -814,6 +814,8 @@ fn remove_empty_tree(
 pub struct EmptyRemoval {
     /// Folders removed (nested ones included).
     pub removed: usize,
+    /// Planned folders removed (each with everything in it): what the app counts as items.
+    pub removed_items: usize,
     /// Planned folders left alone: `None` when no longer empty, otherwise why the removal failed.
     pub skipped: Vec<(PathBuf, Option<String>)>,
 }
@@ -847,7 +849,10 @@ pub fn delete_empty_permanently(
             continue;
         }
         match remove_empty_tree(path, plan, roots, &excl, &f.empty) {
-            Ok(n) => out.removed += n,
+            Ok(n) => {
+                out.removed += n;
+                out.removed_items += 1;
+            }
             Err(e) => out.skipped.push((path.clone(), Some(e.to_string()))),
         }
     }

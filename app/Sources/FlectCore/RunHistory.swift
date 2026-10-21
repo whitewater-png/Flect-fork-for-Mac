@@ -248,9 +248,12 @@ public enum DeletionCounts {
         return name == "folder.removeDuplicate" || name == "folder.removeEmpty"
     }
 
-    /// Items removed: in Trash mode those the app moved; in permanent mode the count the engine's summary gives.
-    public static func removed(summaryKey: String?, args: [String], trash: TrashGuard.Tally) -> Int {
+    /// Items removed (files, or planned folders with everything in them), the same in both modes: in Trash mode those
+    /// the app moved; in permanent mode the engine's `removal` count (`items`), or, from an engine that does not send
+    /// it, the count its summary gives.
+    public static func removed(summaryKey: String?, args: [String], trash: TrashGuard.Tally, items: Int? = nil) -> Int {
         if trash.requested > 0 { return trash.moved }
+        if let n = items { return n }
         let permanent: Set<String> = ["msg.deletedPermanently", "msg.deletedPermanentlyPartial", "msg.emptyDeleted",
                                       "msg.emptyDeletedPartial", "msg.cancelledAfterDeleting"]
         guard let k = summaryKey, permanent.contains(k) else { return 0 }

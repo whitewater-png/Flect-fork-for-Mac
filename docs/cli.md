@@ -76,7 +76,13 @@ stdout. Parse the last line (`done`) for the outcome.
 
 Tasks that need the app's OS services (`needs: trash`, used when removal is confirmed with the
 Trash setting) are reported but not performed; the CLI never moves anything to the Trash. The
-only deletion the CLI can perform is permanent deletion, which needs `--apply --permanent`.
+engine sends one `needs` event per item (with its fingerprint, and for a duplicate the copy that
+stays); the CLI does not ask the engine to wait for answers (`trashAck`), so it gets them all at
+once. In human mode it prints one note with the number of items and ends with "nothing changed"
+instead of the engine's "moved to the Trash" summary; with `--json` each `needs` line is passed on
+as it is. The deleting tasks also send a `data` event named `removal` (`items`, `leftAlone`) for
+the app's history; human mode does not print it. The only deletion the CLI can perform is
+permanent deletion, which needs `--apply --permanent`.
 
 ## Exit status
 

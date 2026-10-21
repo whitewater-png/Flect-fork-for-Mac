@@ -193,7 +193,7 @@ final class AppModel: ObservableObject {
             var summary: String?
             var sawProblem = false
             var trashed = TrashGuard.Tally()
-            var leftAlone = 0, doneKey: String?, doneArgs: [String] = []
+            var leftAlone = 0, doneKey: String?, doneArgs: [String] = [], removedItems: Int?
             for await event in events {
                 switch event {
                 case .status(let k, let a): status = loc.f(k, a)
@@ -212,6 +212,7 @@ final class AppModel: ObservableObject {
                         if trashed.notMoved > 0 { sawProblem = true }
                     }
                 case .data(let n, let d):
+                    if n == "removal" { removedItems = d["items"]?.int; continue }
                     if n == "outputs" { tracker.add(paths: (d["paths"]?.array ?? []).compactMap { $0.string }) } else { pendingData.append((n, d)) }
                 case .menu: break
                 case .done(let o, let key, let args):
@@ -226,7 +227,8 @@ final class AppModel: ObservableObject {
             if currentRun == scope.run { currentRun = nil }
             let notDone = leftAlone + trashed.notMoved
             let counts = DeletionCounts.isDeletingTask(task)
-                ? (removed: DeletionCounts.removed(summaryKey: doneKey, args: doneArgs, trash: trashed), leftAlone: notDone) : nil
+                ? (removed: DeletionCounts.removed(summaryKey: doneKey, args: doneArgs, trash: trashed, items: removedItems),
+                   leftAlone: notDone) : nil
             finishRun(outcome: outcome, summary: TrashGuard.runSummary(summary, tally: trashed, loc: loc), sawProblem: sawProblem,
                       partial: notDone > 0, counts: counts)
         }

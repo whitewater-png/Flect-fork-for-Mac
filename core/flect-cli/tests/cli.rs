@@ -484,3 +484,30 @@ fn ctrl_c_cancels_with_130_and_keeps_originals() {
         "cancel should stop before the end"
     );
 }
+
+/// With the Trash setting, the CLI says once how many items the app would move, and does not
+/// claim anything was moved.
+#[test]
+fn trash_requests_are_summarised_once() {
+    let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for i in 0..3 {
+        fs::write(work.path().join(format!("a{i}")), format!("{i}")).unwrap();
+        fs::write(work.path().join(format!("b{i}")), format!("{i}")).unwrap();
+    }
+    let out = run(
+        home.path(),
+        &[
+            "run",
+            "folder.removeDuplicate?mode=oldest",
+            "--apply",
+            work.path().to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert_eq!(err.matches("would move").count(), 1, "{err}");
+    assert!(err.contains("would move 3 item(s) to the Trash"), "{err}");
+    assert!(err.contains("nothing changed"), "{err}");
+    assert!(!err.contains("msg.recycled"), "{err}");
+    assert_eq!(names(work.path()).len(), 6, "nothing was moved");
+}

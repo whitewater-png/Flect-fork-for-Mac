@@ -304,13 +304,26 @@ fn handle_event(v: &Value, json_output: bool, tally: &mut render::Tally) -> Opti
         };
         if !json_output {
             let outcome = v["outcome"].as_str().unwrap_or("failed");
-            let summary = v["summary_key"].as_str().map(|key| {
-                let args: Vec<&str> = v["summary_args"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(Value::as_str).collect())
-                    .unwrap_or_default();
-                render::plain(key, &args)
-            });
+            if tally.trash > 0 {
+                say(&format!(
+                    "note: the app would move {} item(s) to the Trash; the CLI does not, so nothing was changed",
+                    tally.trash
+                ));
+            }
+            let summary = if tally.trash > 0 {
+                Some(format!(
+                    "nothing changed; {} item(s) would go to the Trash in the app",
+                    tally.trash
+                ))
+            } else {
+                v["summary_key"].as_str().map(|key| {
+                    let args: Vec<&str> = v["summary_args"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(Value::as_str).collect())
+                        .unwrap_or_default();
+                    render::plain(key, &args)
+                })
+            };
             say(&format!(
                 "{}: {}/{} file(s), {} error(s){}",
                 render::safe(outcome),
@@ -332,20 +345,11 @@ fn handle_event(v: &Value, json_output: bool, tally: &mut render::Tally) -> Opti
         "warn" => say(&format!("warn: {}", render::message(v))),
         "error" => say(&format!("error: {}", render::message(v))),
         "needs" => {
-            let paths: Vec<&str> = v["paths"]
-                .as_array()
-                .map(|a| a.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default();
-            say(&format!(
-                "warn: the app would now do '{}' for the paths below; the CLI does not, so nothing was changed:\n  {}",
-                render::safe(v["what"].as_str().unwrap_or("?")),
-                paths
-                    .iter()
-                    .map(|p| render::safe(p))
-                    .collect::<Vec<_>>()
-                    .join("\n  ")
-            ));
+            // Counted, and reported once at the end (one item per event).
+            tally.trash += v["paths"].as_array().map_or(0, |a| a.len() as u64);
         }
+        // the deleting tasks' counts for the app's history; the summary line already says it
+        "data" if v["name"] == "removal" => {}
         "data" => {
             // Results go to stdout so `flect run folder.tree dir > tree.txt` works.
             let text = match (v["name"].as_str(), v["data"]["text"].as_str()) {

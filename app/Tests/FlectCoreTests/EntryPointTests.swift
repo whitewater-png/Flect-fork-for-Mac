@@ -405,6 +405,9 @@ final class EntryPointTests: XCTestCase {
         XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.cancelledAfterDeleting", args: ["3", "30"], trash: .init()), 3)
         XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.recycled", args: ["5", "50"], trash: .init(requested: 5, moved: 4)), 4)
         XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.duplicatesAllChanged", args: ["3"], trash: .init()), 0)
+        // permanent Remove Empty: the engine's item count (planned folders), not the nested-folder count of its summary
+        XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.emptyDeleted", args: ["5"], trash: .init(), items: 2), 2)
+        XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.emptyRecycled", args: ["5"], trash: .init(requested: 2, moved: 2), items: 2), 2)
         XCTAssertTrue(DeletionCounts.leftAloneKeys.isSuperset(of: ["msg.duplicateChanged", "msg.emptyRemoveFailed", "msg.emptySkipped"]))
         var counted = rec
         counted.removed = 7; counted.leftAlone = 2

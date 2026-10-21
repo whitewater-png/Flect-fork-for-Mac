@@ -30,6 +30,7 @@
 | `needs` | `what`, `paths[]`, `items[]`（省略可） | アプリに OS 操作を依頼。現在は `what:"trash"` のみ（`paths` をごみ箱へ移動。エンジンは移動後の応答を待たない）。`trash` では項目ごとに確認した直後に 1 件ずつ送り、`items` に `{path, fingerprint}` を付ける。`fingerprint` はファイルなら `f:dev:ino:size:mtime秒.ナノ秒:ctime秒.ナノ秒`、フォルダなら `d:dev:ino`（lstat、リンクは辿らない）。アプリは移動の直前に lstat し、完全一致したものだけ移動する（フォルダはさらに OS のゴミだけかを再確認）。`items` の無い要求・一致しない項目は移動しない（`items` が無いのはアプリより古いエンジン）。重複の項目には `kept: {path, fingerprint}`（残す側のコピー）も付き、アプリは移動の直前にこちらも完全一致を確認する。run で `options.trashAck` を指定したときだけ `ack:true` が付き、エンジンはその項目への `trash-ack` を待ってから次の項目を確認する（アプリ側に溜まる要求は最大 1 件）。指定しないとき（古いアプリ・CLI）は待たずに送る。`items`・`kept`・`ack` は追加フィールドなので、知らない受け手は無視できる。FAT/exFAT の更新時刻は 2 秒単位のため、その間に同じサイズで書き換えられた場合はフィンガープリントでは検出できない（中身の再比較はエンジンが渡す前に行う） |
 | `data` | `name`, `data` | 結果の提示用データ（下表） |
 | `menu` | `menu` | `export-menu` の応答 |
+| `data`（`name:"removal"`） | `data: {items, leftAlone}` | 削除系タスク（Remove Duplicate / Remove Empty）が終わる直前に 1 回。`items` は削除した・ごみ箱へ渡した項目数（ファイル、または中身ごとの計画フォルダ。ゴミ箱でも完全削除でも同じ数え方）、`leftAlone` はそのまま残した項目数。アプリの履歴用 |
 | `done` | `outcome` (`succeeded`/`failed`/`cancelled`), `summary_key`, `summary_args[]` | 1 つの `run` の終わり。必ず 1 回届く |
 
 ### `data` の種類
