@@ -12,3 +12,4 @@ attribution notices are preserved. See NOTICES.md for third-party components.
 
 New code in this repository (core/, app/, scripts/, docs/mac-port/) is also licensed under the
 Apache License, Version 2.0. The project name and bundle identifier are still to be decided.
+The app icon (assets/icon/) was created for this project and is licensed under the same terms.

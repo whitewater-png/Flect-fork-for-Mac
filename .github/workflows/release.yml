@@ -41,5 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Ad-hoc signed build for Apple Silicon (macOS 14+). Verify with the .sha256 file. See the README for first-launch steps."
+          notes="docs/release/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then notes_args=(--notes-file "$notes"); else notes_args=(--notes "Ad-hoc signed build for Apple Silicon (macOS 14+). Verify with the .sha256 file. See the README for first-launch steps."); fi
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" "${notes_args[@]}"
           gh release upload "$GITHUB_REF_NAME" dist/Flect-for-Mac-macos-arm64.zip dist/Flect-for-Mac-macos-arm64.zip.sha256 --clobber
