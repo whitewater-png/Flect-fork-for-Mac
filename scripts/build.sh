@@ -76,8 +76,31 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>ja</string><string>zh-Hans</string></array>
+  <!-- Files / folders dropped on the Dock icon or on Flect.app (or opened with it) open the action picker.
+       Rank "None": Flect shows up under Open With but never becomes anyone's default app. -->
+  <key>CFBundleDocumentTypes</key><array><dict>
+    <key>CFBundleTypeName</key><string>Files and folders</string>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+    <key>LSHandlerRank</key><string>None</string>
+    <key>LSItemContentTypes</key><array><string>public.item</string><string>public.folder</string></array>
+  </dict></array>
+  <!-- Services menu entry "Process with Flect…" (title localized by */ServicesMenu.strings, handler: ServicesProvider.processWithFlect) -->
+  <key>NSServices</key><array><dict>
+    <key>NSMenuItem</key><dict><key>default</key><string>Process with Flect…</string></dict>
+    <key>NSMessage</key><string>processWithFlect</string>
+    <key>NSPortName</key><string>Flect-for-Mac</string>
+    <key>NSSendFileTypes</key><array><string>public.item</string></array>
+  </dict></array>
 </dict></plist>
 PLIST
+
+# Localized Services menu title
+for lp in assets/services/*.lproj; do
+  mkdir -p "$APP/Contents/Resources/$(basename "$lp")"
+  cp "$lp/ServicesMenu.strings" "$APP/Contents/Resources/$(basename "$lp")/"
+done
 
 echo "== Ad-hoc signature"
 codesign --force --sign - "$APP/Contents/Resources/flect-engine"

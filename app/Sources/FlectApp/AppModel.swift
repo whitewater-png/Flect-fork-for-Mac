@@ -15,6 +15,7 @@ enum Screen {
     case renamePreview([String])
     case pdfPreview(URL)
     case settings
+    case pick(PickerSelection)
 }
 
 struct DuplicateFile: Identifiable {
@@ -45,11 +46,20 @@ final class AppModel: ObservableObject {
 
     var settings = SettingsStore()
     var loc: Loc { Loc.shared }
-    private(set) var paths: [String] = []
+    var paths: [String] = []
     var engine: EngineClient?
-    private var catalog: MenuCatalog?
+    var catalog: MenuCatalog?
     private var pendingData: [(String, JSONValue)] = []
     private var renameFields: (String, String, String, Bool)?
+    // Entry points (Dock drop, Open..., Services), results and undo: see EntryPoints.swift / RunResults.swift
+    let tracker = RunTracker()
+    let historyStore = RunHistoryStore()
+    @Published var history: [RunRecord] = []
+    @Published var currentRecordID: UUID?
+    @Published var historyFocus: UUID?
+    var startedInSettings = false
+    var returnScreen: Screen?
+    var autoClose: DispatchWorkItem?
 
     // MARK: start
 
@@ -57,6 +67,8 @@ final class AppModel: ObservableObject {
         settings = SettingsStore()
         Loc.shared.use(settings.language)
         engine = EngineClient.locate().map { EngineClient(executable: $0) }
+        history = historyStore.load()
+        startedInSettings = !arguments.contains("--task")
         guard arguments.contains("--task") else { screen = .settings; return }
         switch LaunchRequest.parse(arguments: arguments) {
         case .failure:
@@ -105,6 +117,7 @@ final class AppModel: ObservableObject {
         resetProgress()
         screen = .running
         pendingData = []
+        tracker.begin(task: task, inputs: runPaths)
         Task {
             var outcome = Outcome.failed
             var summary: String?
@@ -118,7 +131,8 @@ final class AppModel: ObservableObject {
                 case .warn(let k, let a): log.append(LogLine(kind: .warn, text: loc.f(k, a))); sawProblem = true
                 case .error(let k, let a): log.append(LogLine(kind: .error, text: loc.f(k, a))); sawProblem = true
                 case .needs(let what, let ps): if what == "trash" { trash(ps) }
-                case .data(let n, let d): pendingData.append((n, d))
+                case .data(let n, let d):
+                    if n == "outputs" { tracker.add(paths: (d["paths"]?.array ?? []).compactMap { $0.string }) } else { pendingData.append((n, d)) }
                 case .menu: break
                 case .done(let o, let key, let args):
                     outcome = o
@@ -134,6 +148,7 @@ final class AppModel: ObservableObject {
 
     func finishRun(outcome: Outcome, summary: String?, sawProblem: Bool) {
         cancelling = false
+        recordFinished(outcome: outcome, summary: summary)
         if let (name, data) = pendingData.first, outcome == .succeeded, showResult(name: name, data: data) { return }
         finished = true
         switch outcome {
@@ -149,7 +164,10 @@ final class AppModel: ObservableObject {
         case .failed: close = settings.closeOnFailure
         }
         if close {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { NSApp.terminate(nil) }
+            // Leave time to use "Undo" when the run created files; any use of the results window cancels the close.
+            let work = DispatchWorkItem { [weak self] in self?.close() }
+            autoClose = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + (currentRecordID == nil ? 1.0 : 8.0), execute: work)
         }
     }
 
@@ -213,7 +231,11 @@ final class AppModel: ObservableObject {
         runNative(.pdfMerge)
     }
 
-    func close() { NSApp.terminate(nil) }
+    func close() {
+        // An instance opened as the settings window goes back to it after a run started from Open.../a drop.
+        if startedInSettings, !isSettingsScreen { screen = .settings; return }
+        NSApp.terminate(nil)
+    }
 
     func showInFinder(_ path: String) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
 

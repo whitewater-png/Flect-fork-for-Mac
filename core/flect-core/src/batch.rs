@@ -154,10 +154,16 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                     let ext = ft::report_extension(f.analyze.save_format);
                     let bytes = ft::render_report(&report, f.analyze.save_format);
                     match tasks::write_result(&roots[0], "_analysis", Some(ext), &bytes) {
-                        Ok(out) => (ctx.emit)(Event::Info {
-                            key: "msg.reportSaved".into(),
-                            args: vec![out.to_string_lossy().into_owned()],
-                        }),
+                        Ok(out) => {
+                            (ctx.emit)(Event::Data {
+                                name: "outputs".into(),
+                                data: json!({ "paths": [out.to_string_lossy()] }),
+                            });
+                            (ctx.emit)(Event::Info {
+                                key: "msg.reportSaved".into(),
+                                args: vec![out.to_string_lossy().into_owned()],
+                            });
+                        }
                         Err(e) => return fail(ctx, e.key(), String::new()),
                     }
                 }

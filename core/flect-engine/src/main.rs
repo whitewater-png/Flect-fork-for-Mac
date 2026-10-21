@@ -214,6 +214,16 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
         )?;
         match tasks::run(task, Path::new(p), &ctx) {
             Ok(done) => {
+                // Tell the app exactly what this run created (it powers "Undo"); a task that left the input as is reports nothing.
+                if done.output != Path::new(p) {
+                    emit(
+                        out,
+                        &Event::Data {
+                            name: "outputs".into(),
+                            data: serde_json::json!({ "paths": [done.output.to_string_lossy()] }),
+                        },
+                    )?;
+                }
                 for (key, args) in done.infos {
                     emit(
                         out,

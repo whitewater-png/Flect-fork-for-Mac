@@ -1,0 +1,2 @@
+/* 显示在“服务”菜单中。键为 Info.plist (NSServices) 中的英文标题。 */
+"Process with Flect…" = "用 Flect 处理…";

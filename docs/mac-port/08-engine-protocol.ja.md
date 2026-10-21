@@ -36,6 +36,7 @@
 | `duplicates` | `{groups:[[{path,size,modified}...]...], scanSeconds}` | `folder.removeDuplicate`（`mode` 未指定かつ設定が Ask） |
 | `empty_folders` | `{total, targets[], permanent}` | `folder.removeEmpty`（`confirm=1` なし） |
 | `rename_preview` | `{lines[]}` | `folder.rename`（ドライラン） |
+| `outputs` | `{paths:[絶対パス...]}` | ファイルタスクが**実際に作成した**出力（ファイル 1 件ごとに 1 回）と `folder.analyze?save=1` のレポート。入力をそのまま返した場合（例 `msg.alreadySmall`）は送らない。アプリは結果ウィンドウと「元に戻す（ごみ箱へ）」にだけ使い、画面表示用ではない（`Info` の `msg.*` とは別。後方互換の追加で、知らないアプリは無視してよい） |
 
 ## 対話が必要なタスクの流れ（エンジンは質問しない。アプリが聞いて再実行する）
 | タスク | 1 回目 | アプリが尋ねる | 2 回目 |
@@ -122,3 +123,8 @@
 - `task.unknown`
 
 旧版と共通で使うキー（35 件）: `dialog.trim.backwards`, `msg.alreadySmall`, `msg.cannotConvertFrom`, `msg.cannotConvertTo`, `msg.comparing`, `msg.decompileEmpty`, `msg.deletedPermanently`, `msg.emptyDeleted`, `msg.emptyFile`, `msg.emptyRecycled`, `msg.hardwareFallback`, `msg.mergedInto`, `msg.merging`, `msg.noAudioTrack`, `msg.noDataRows`, `msg.noDuplicates`, `msg.noDuration`, `msg.noEmpty`, `msg.noPages`, `msg.noRootElement`, `msg.noVideoStream`, `msg.notATable`, `msg.nothingToRemove`, `msg.overTarget`, `msg.readAsSeparated`, `msg.recycled`, `msg.renameDryRun`, `msg.renamed`, `msg.scanningCount`, `msg.separator.tab`, `msg.sjisFailed`, `msg.sjisReplaced`, `msg.targetMissed`, `msg.verifying`, `msg.webpFallback`
+
+## アプリ側の追加機能（エントリポイント・結果・元に戻す）
+- 起動経路: Finder Quick Action（`--task/--input`）に加え、Dock/Flect.app へのドロップ、File > Open…（⌘O）、サービス「Flect で処理…」。いずれも `LaunchRequest.validate`（絶対パス・4096 バイト・NUL 不可・20,000 件）を通し、エンジンのカタログにある ID だけを選択肢に出し、実行は `Planner.resolve` 経由（Quick Action と同じ）。
+- 実行履歴: `<データフォルダ>/run-history.json`（最新 20 件、1 実行あたり出力 2,000 件まで、権限 0600）。
+- 元に戻す: `outputs` で報告されたパスのみが対象。記録時に「入力そのもの／入力を含むフォルダ／実行開始前から存在／シンボリックリンク／ホーム以上」を除外し、実行終了時点の指紋（サイズ・更新時刻・フォルダは内容の件数と最新更新時刻）を保存。取り消し時に再確認し、変更・置換・消失したものは触らず、ファイルごとに結果を報告。移動は `FileManager.trashItem`（ごみ箱。完全削除はしない）。

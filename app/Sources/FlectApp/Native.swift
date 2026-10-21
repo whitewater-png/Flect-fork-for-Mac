@@ -10,6 +10,8 @@ import FlectCore
 struct NativeReport {
     var lines: [(LogLine.Kind, String)] = []
     var ocrText: String?
+    /// Files this work created (exact paths, for the results window and Undo).
+    var outputs: [String] = []
     var problems = false
     mutating func add(_ kind: LogLine.Kind, _ text: String) {
         lines.append((kind, text))
@@ -61,7 +63,7 @@ enum NativeWorker {
         let opts: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.9]
         CGImageDestinationAddImageFromSource(dest, src, 0, opts as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r }
-        do { let o = try OutputPath.writeNew(out as Data, source: url, ext: "heic"); r.add(.info, o.lastPathComponent) }
+        do { let o = try OutputPath.writeNew(out as Data, source: url, ext: "heic"); r.outputs.append(o.path); r.add(.info, o.lastPathComponent) }
         catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
         return r
     }
@@ -90,6 +92,7 @@ enum NativeWorker {
             CGImageDestinationAddImage(dest, cg, nil)
             guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); return r }
             let o = try OutputPath.writeNew(data as Data, source: url, suffix: "_nobg", ext: "png")
+            r.outputs.append(o.path)
             r.add(.info, o.lastPathComponent)
         } catch {
             r.add(.error, loc.f("msg.imageDecodeFailed", [url.lastPathComponent]))
@@ -130,7 +133,7 @@ enum NativeWorker {
             guard let dest = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else { continue }
             CGImageDestinationAddImage(dest, image, jpg ? [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary : nil)
             guard CGImageDestinationFinalize(dest) else { r.add(.error, loc.f("msg.imageEncodeFailed", [url.lastPathComponent])); continue }
-            do { _ = try OutputPath.writeNew(data as Data, source: url, suffix: "_p\(i + 1)", ext: jpg ? "jpg" : "png") }
+            do { r.outputs.append(try OutputPath.writeNew(data as Data, source: url, suffix: "_p\(i + 1)", ext: jpg ? "jpg" : "png").path) }
             catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
         }
         return r
@@ -141,7 +144,7 @@ enum NativeWorker {
         guard let doc = openPdf(url, loc: loc, report: &r) else { return r }
         let text = (doc.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { r.add(.warn, loc.f("msg.noTextFound", [url.lastPathComponent])); return r }
-        do { _ = try OutputPath.writeNew(Data(text.utf8), source: url, ext: "txt") }
+        do { r.outputs.append(try OutputPath.writeNew(Data(text.utf8), source: url, ext: "txt").path) }
         catch { r.add(.error, loc.f("msg.ioError", [url.lastPathComponent])) }
         return r
     }
@@ -161,7 +164,7 @@ enum NativeWorker {
             }
         }
         guard let data = merged.dataRepresentation() else { r.add(.error, loc.t("msg.ioError")); return r }
-        do { let o = try OutputPath.writeNew(data, source: urls[0], suffix: "_merged", ext: "pdf"); r.add(.info, o.lastPathComponent) }
+        do { let o = try OutputPath.writeNew(data, source: urls[0], suffix: "_merged", ext: "pdf"); r.outputs.append(o.path); r.add(.info, o.lastPathComponent) }
         catch { r.add(.error, loc.t("msg.ioError")) }
         return r
     }
@@ -203,6 +206,7 @@ extension AppModel {
         }
         resetProgress()
         screen = .running
+        tracker.begin(task: Self.nativeName(task), inputs: paths)
         let urls = paths.map { URL(fileURLWithPath: $0) }
         let loc = self.loc
         if case .pdfMerge = task {
@@ -210,6 +214,7 @@ extension AppModel {
             Task {
                 let report = await Task.detached(priority: .userInitiated) { NativeWorker.pdfMerge(urls: urls, loc: loc) }.value
                 for (k, t) in report.lines { log.append(LogLine(kind: k, text: t)) }
+                tracker.add(paths: report.outputs)
                 done = 1
                 finishRun(outcome: report.problems ? .failed : .succeeded, summary: nil, sawProblem: report.problems)
             }
@@ -234,6 +239,7 @@ extension AppModel {
                     case .pdfPreview, .pdfMerge: return NativeReport()
                     }
                 }.value
+                tracker.add(paths: report.outputs)
                 if case .removeBackground(let fallback) = task, fallback, report.problems {
                     // The AI step failed for this file: the engine's colour key takes over for it.
                     fallbackPaths.append(url.path)
@@ -248,13 +254,14 @@ extension AppModel {
                         log.append(LogLine(kind: .info, text: loc.t("msg.ocrCopied")))
                     case "ShowOnly": combined.append(text)
                     default:
-                        do { _ = try OutputPath.writeNew(Data(("\u{FEFF}" + text).utf8), source: url, ext: "txt") }
+                        do { tracker.add(paths: [try OutputPath.writeNew(Data(("\u{FEFF}" + text).utf8), source: url, ext: "txt").path]) }
                         catch { log.append(LogLine(kind: .error, text: loc.f("msg.ioError", [url.lastPathComponent]))); problems = true }
                     }
                 }
             }
             done = urls.count
             if !fallbackPaths.isEmpty && !problems {
+                tracker.carryOver = true // keep what the AI step already created for the other files
                 runEngine("image.chromakey", paths: fallbackPaths)
                 return
             }
