@@ -220,6 +220,10 @@ fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
 }
 
 pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
+    if tasks::check_task(task).is_err() {
+        // Malformed or repeated option names: refuse the task rather than guess what was meant.
+        return fail(ctx, "task.badOption", task.to_owned());
+    }
     let (name, params) = parse_task(task);
     let roots = folders(paths);
     if roots.is_empty() {
@@ -746,6 +750,39 @@ mod tests {
         assert!(lib.exists(), "excluded content was deleted: {ev:?}");
         assert!(r.join("zero/marker").exists() && locked.exists());
         assert!(!r.join("B/hollow").exists() && !r.join("litter").exists());
+    }
+
+    /// Option names are never percent-decoded: `%63onfirm` is not `confirm` (the CLI guard matched
+    /// the raw name, the engine the decoded one). A malformed name rejects the whole task.
+    #[test]
+    fn encoded_option_names_are_rejected_not_decoded() {
+        let d = setup();
+        let mut s = Settings::default();
+        s.folder.delete_method = DeleteMethod::Permanent;
+        for task in [
+            "folder.removeEmpty?%63onfirm=1",
+            "folder.removeEmpty?confirm%3D1",
+            "folder.removeEmpty?+confirm=1",
+            "folder.removeEmpty?1confirm=1",
+            "folder.removeEmpty?confirm=1&confirm=1",
+            "folder.removeDuplicate?mode=all&%64ry=0",
+        ] {
+            let ev = run(task, &[d.path()], &s);
+            assert!(d.path().join("hollow").is_dir(), "{task}: {ev:?}");
+            assert!(d.path().join("a/one.bin").exists() && d.path().join("b/two.bin").exists());
+            assert_eq!(
+                find(&ev, "error").unwrap()["key"],
+                "task.badOption",
+                "{task}"
+            );
+            assert_eq!(find(&ev, "done").unwrap()["outcome"], "failed", "{task}");
+        }
+        // plain names and encoded values still work
+        let ev = run("folder.removeEmpty?confirm=%31", &[d.path()], &s);
+        assert_eq!(
+            find(&ev, "done").unwrap()["summary_key"],
+            "msg.emptyDeleted"
+        );
     }
 
     #[test]

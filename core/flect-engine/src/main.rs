@@ -556,7 +556,11 @@ fn main() -> io::Result<()> {
             }
         };
         let name = task.split('?').next().unwrap_or("");
-        if batch::is_batch_task(name) {
+        if tasks::check_task(&task).is_err() {
+            // Option names are taken literally and must be well-formed and unique; anything else
+            // is refused before a task runs (a guard that reads the names sees what runs).
+            failed(&out, "task.badOption", vec![task])?;
+        } else if batch::is_batch_task(name) {
             run_batch(&out, &cancel, &task, &paths)?;
         } else if tasks::is_file_task(name) {
             run_files(&out, &cancel, &task, &paths, jobs)?;

@@ -17,6 +17,8 @@ pub const MAX_TEXT_BYTES: u64 = 256 * 1024 * 1024;
 #[derive(Debug)]
 pub enum TaskError {
     Unsupported,
+    /// A malformed or repeated option name (see [`check_task`]).
+    BadOption,
     NotAFile,
     TooLarge,
     Text(TextError),
@@ -31,6 +33,7 @@ impl TaskError {
     pub fn key(&self) -> &'static str {
         match self {
             Self::Unsupported => "task.unimplemented",
+            Self::BadOption => "task.badOption",
             Self::NotAFile => "msg.notAFile",
             Self::TooLarge => "msg.fileTooLarge",
             Self::Text(e) => e.key(),
@@ -86,19 +89,50 @@ impl From<TextError> for TaskError {
     }
 }
 
-/// `text.encode?to=SJIS` -> (`text.encode`, {to: SJIS})
-pub fn parse_task(task: &str) -> (String, HashMap<String, String>) {
-    let (name, query) = task.split_once('?').unwrap_or((task, ""));
-    let params = query
+/// An option name as the engine accepts it: `^[A-Za-z][A-Za-z0-9_]*$`, taken literally. Names are
+/// never percent-decoded, so `%63onfirm` is not `confirm` (only values are decoded).
+pub fn option_name_ok(k: &str) -> bool {
+    let mut b = k.bytes();
+    b.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && b.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+/// The task's option names, literally, in order (empty parts are skipped).
+fn option_names(query: &str) -> impl Iterator<Item = &str> {
+    query
         .split('&')
         .filter(|p| !p.is_empty())
-        .map(|p| {
-            p.split_once('=')
-                .map_or((percent_decode(p), String::new()), |(k, v)| {
-                    (percent_decode(k), percent_decode(v))
-                })
-        })
-        .collect();
+        .map(|p| p.split_once('=').map_or(p, |(k, _)| k))
+}
+
+/// Reject a task whose options cannot be read unambiguously: a malformed name (encoded, spaces,
+/// `+`, leading digit...) or the same name twice (no "last one wins"). Checked by the engine before
+/// it runs anything, so a guard that inspects the names (the CLI's) sees what the engine sees.
+pub fn check_task(task: &str) -> Result<(), TaskError> {
+    let query = task.split_once('?').map_or("", |(_, q)| q);
+    let mut seen = std::collections::HashSet::new();
+    for k in option_names(query) {
+        if !option_name_ok(k) || !seen.insert(k) {
+            return Err(TaskError::BadOption);
+        }
+    }
+    Ok(())
+}
+
+/// `text.encode?to=SJIS` -> (`text.encode`, {to: SJIS}). Values are percent-decoded, names are
+/// not; options with a malformed name are dropped here (callers reject such a task with
+/// [`check_task`] first). Repeated names keep the first value.
+pub fn parse_task(task: &str) -> (String, HashMap<String, String>) {
+    let (name, query) = task.split_once('?').unwrap_or((task, ""));
+    let mut params = HashMap::new();
+    for p in query.split('&').filter(|p| !p.is_empty()) {
+        let (k, v) = p.split_once('=').unwrap_or((p, ""));
+        if option_name_ok(k) {
+            params
+                .entry(k.to_owned())
+                .or_insert_with(|| percent_decode(v));
+        }
+    }
     (name.to_owned(), params)
 }
 
@@ -613,6 +647,7 @@ pub fn is_file_task(name: &str) -> bool {
 
 /// Run one single-file task.
 pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
+    check_task(task)?;
     let (name, params) = parse_task(task);
     if is_text_task(&name) {
         run_text(&name, &params, input, ctx.settings)
@@ -698,6 +733,66 @@ mod tests {
             parse_task("folder.rename?prefix=%E6%97%85_&name=a%26b").1["name"],
             "a&b"
         );
+    }
+
+    #[test]
+    fn option_names_are_literal_and_strict() {
+        for bad in [
+            "folder.removeEmpty?%63onfirm=1",
+            "folder.removeEmpty?%43ONFIRM=1",
+            "folder.removeEmpty?confirm%3D1",
+            "folder.removeEmpty?+confirm=1",
+            "folder.removeEmpty?%20confirm=1",
+            "folder.removeEmpty?confirm =1",
+            "folder.removeEmpty?1confirm=1",
+            "folder.removeEmpty?_confirm=1",
+            "folder.removeEmpty?=1",
+            "folder.removeEmpty?confirm=1&confirm=1",
+            "folder.removeDuplicate?dry=1&dry=0",
+            "folder.removeDuplicate?mode=all&%64ry=0",
+            "folder.removeDuplicate?d%72y=0",
+        ] {
+            assert!(check_task(bad).is_err(), "{bad}");
+            assert!(
+                !parse_task(bad).1.contains_key("confirm") || bad.contains("confirm=1&confirm=1"),
+                "{bad}"
+            );
+        }
+        // what parse_task does with a task check_task refused: never decodes a name, first value wins
+        assert!(parse_task("x?%63onfirm=1").1.is_empty());
+        assert_eq!(parse_task("x?dry=1&dry=0").1["dry"], "1");
+        for good in [
+            "folder.removeEmpty?confirm=1",
+            "folder.removeEmpty?confirm=%31",
+            "folder.rename?prefix=%E6%97%85_&name=a%26b&dry=0",
+            "image.resize?scale=custom&w=1&h=2&keep=1",
+            "video.trim?start=1.000&end=2.000",
+            "text.encode?to=SJIS&x",
+            "json.sort",
+            "json.sort?",
+            "a?b_2=",
+        ] {
+            assert!(check_task(good).is_ok(), "{good}");
+        }
+        assert_eq!(
+            parse_task("folder.removeEmpty?confirm=%31").1["confirm"],
+            "1"
+        );
+        assert!(matches!(
+            run(
+                "text.encode?%74o=SJIS",
+                Path::new("/nonexistent"),
+                &Ctx {
+                    settings: &Settings::default(),
+                    seven_zip: None,
+                    progress: &crate::folder::NullProgress,
+                    media: None,
+                    java: None,
+                    cfr: None,
+                }
+            ),
+            Err(TaskError::BadOption)
+        ));
     }
 
     #[test]

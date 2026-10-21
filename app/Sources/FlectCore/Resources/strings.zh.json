@@ -579,6 +579,7 @@
  "settings.video.trim.exact": "精确到所选位置 - 需要重新编码",
  "settings.video.trim.hint": "直接复制流无法在帧中间切断，因此片段会从标记之前的关键帧开始，最多可能提前几秒。重新编码可精确到指定帧，但耗时与普通编码相同，且画质略有下降。",
  "settings.video.trim.keyframe": "最近的关键帧 - 瞬间完成，无画质损失",
+ "task.badOption": "命令中的选项名称无效：{0}",
  "task.unimplemented": "此功能暂不可用。",
  "task.unknown": "未知命令：{0}"
 }

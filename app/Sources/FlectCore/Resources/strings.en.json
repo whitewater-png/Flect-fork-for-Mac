@@ -587,6 +587,7 @@
  "settings.video.trim.exact": "Exactly where you asked - Re-encodes the video",
  "settings.video.trim.hint": "Copying the streams cannot cut mid-frame, so the clip starts at the keyframe before your mark - up to a few seconds early. Re-encoding lands on the exact frame but takes as long as any other encode and loses a little quality.",
  "settings.video.trim.keyframe": "On the nearest keyframe - Instant, no quality loss",
+ "task.badOption": "Invalid option name in command: {0}",
  "task.unimplemented": "This feature is not available yet.",
  "task.unknown": "Unknown command: {0}"
 }

@@ -50,7 +50,7 @@ Results are written next to the originals under new names; existing files are ne
 
 A terminal has no confirmation dialog, so these tasks **never delete by default**. Without
 `--apply` the CLI forces the preview form (duplicates: `dry=1`; empty folders: no `confirm=1`),
-prints what would be removed, and deletes nothing; `dry` / `confirm` given with `-o` are ignored.
+prints what would be removed, and deletes nothing; `dry` / `confirm` given with `-o` are ignored. Option names in the task are compared after percent-decoding and without regard to case, so every spelling of `dry` / `confirm` is dropped; a name that is not plain `[A-Za-z][A-Za-z0-9_]*` is a usage error (exit 2), and the engine itself refuses encoded or repeated option names.
 
 - `--apply` makes the task really delete. With the default setting (Trash) the engine only asks
   the app to move the files to the Trash, which the CLI cannot do, so nothing is removed.

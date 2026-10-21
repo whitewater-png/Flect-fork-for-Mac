@@ -332,6 +332,56 @@ fn deleting_tasks_preview_unless_apply_and_permanent() {
     assert!(!empty.exists());
 }
 
+/// The guard stripped `dry` / `confirm` by their raw spelling while the engine percent-decoded
+/// option names, so `folder.removeEmpty?%63onfirm=1` deleted permanently without `--apply`.
+#[test]
+fn encoded_or_disguised_option_names_cannot_bypass_apply() {
+    use flect_core::settings::{DeleteMethod, Settings, Store};
+    let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut s = Settings::default();
+    s.folder.delete_method = DeleteMethod::Permanent;
+    s.folder.duplicates.keep = flect_core::settings::DuplicateKeep::Oldest;
+    Store::new(home.path().to_path_buf()).save(&s).unwrap();
+    let empty = work.path().join("hollow");
+    fs::create_dir(&empty).unwrap();
+    fs::write(work.path().join("a.txt"), "same").unwrap();
+    fs::write(work.path().join("b.txt"), "same").unwrap();
+    let root = work.path().to_str().unwrap();
+    let intact = || {
+        empty.is_dir() && work.path().join("a.txt").exists() && work.path().join("b.txt").exists()
+    };
+    for task in [
+        "folder.removeEmpty?%63onfirm=1",
+        "folder.removeEmpty?%63%6F%6E%66%69%72%6D=1",
+        "folder.removeEmpty?%43onfirm=1",
+        "folder.removeEmpty?%63onfirm=%31",
+        "folder.removeEmpty?Confirm=1",
+        "folder.removeEmpty?CONFIRM=1",
+        "folder.removeEmpty?confirm=1&confirm=1",
+        "folder.removeEmpty?confirm=0&confirm=1",
+        "folder.removeEmpty?+confirm=1",
+        "folder.removeEmpty?%20confirm=1",
+        "folder.removeEmpty?confirm%20=1",
+        "folder.removeEmpty? confirm=1",
+        "folder.removeDuplicate?mode=all&%64ry=0",
+        "folder.removeDuplicate?mode=all&%44RY=0",
+        "folder.removeDuplicate?mode=all&dry=1&dry=0",
+        "folder.removeDuplicate?mode=all&dry=0&%64ry=0",
+        "folder.removeDuplicate?mode=all&DRY=0",
+        "folder.removeDuplicate?mode=all&+dry=0",
+    ] {
+        let out = run(home.path(), &["run", task, root]);
+        assert!(
+            intact(),
+            "{task}: deleted without --apply (exit {:?}): {}{}",
+            out.status.code(),
+            text(&out.stdout),
+            text(&out.stderr)
+        );
+        assert_ne!(out.status.code(), Some(130), "{task}");
+    }
+}
+
 #[test]
 fn ctrl_c_cancels_with_130_and_keeps_originals() {
     let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
