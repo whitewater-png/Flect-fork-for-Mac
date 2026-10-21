@@ -414,9 +414,15 @@ fn remove_empty(ctx: &Ctx<'_>, plan: &ft::DeletePlan, roots: &[PathBuf]) {
         // One folder at a time: checked, then handed on with its (device, inode) right away.
         let (mut handed, mut total, mut skipped) = (0usize, 0usize, 0usize);
         for p in planned {
+            // The folder must be the one scanned before and after the emptiness check, so the
+            // fingerprint handed on describes the folder that was checked.
+            let want = plan.folder_ids.get(p).copied();
+            let before = folder::dir_id(p);
             let (keep, n, _) = ft::recheck_empty(std::slice::from_ref(p), f);
             crate::fsat::seam("T1", p);
-            match (keep.first(), folder::dir_id(p)) {
+            let after = folder::dir_id(p);
+            let same = want.is_some() && before == want && after == want;
+            match (keep.first(), want.filter(|_| same)) {
                 (Some(_), Some(id)) => {
                     trash_one(ctx, p, crate::fsat::dir_fingerprint(id));
                     handed += 1;
@@ -1670,6 +1676,39 @@ mod tests {
             run("folder.removeEmpty?confirm=1", &[&d, &ld], settings);
             assert!(d.join("E").is_dir());
         }
+    }
+
+    /// rev021e T1: in Trash mode the planned folder is swapped for another (empty) folder right
+    /// after its emptiness check. Its identity is compared with the scan before and after the check,
+    /// so the swapped-in folder is never handed on with a fingerprint.
+    #[test]
+    fn trash_mode_remove_empty_checks_the_folder_identity_around_the_recheck() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().to_path_buf();
+        fs::create_dir_all(r.join("e")).unwrap();
+        fs::write(r.join("e/.DS_Store"), "litter").unwrap();
+        let (rr, once) = (r.clone(), std::rc::Rc::new(std::cell::Cell::new(false)));
+        let flag = once.clone();
+        let ev = crate::fsat::with_seam(
+            move |p, _| {
+                if p == "T1" && !flag.replace(true) {
+                    fs::rename(rr.join("e"), rr.join("e.old")).unwrap();
+                    fs::create_dir(rr.join("e")).unwrap();
+                }
+            },
+            || run("folder.removeEmpty?confirm=1", &[&r], &Settings::default()),
+        );
+        assert!(once.get());
+        assert!(trash_paths(&ev).is_empty(), "{ev:?}");
+        assert_eq!(
+            find(&ev, "done").unwrap()["summary_key"],
+            "msg.emptyNoneRemoved"
+        );
+        // undisturbed, the same folder is handed on
+        fs::remove_dir(r.join("e")).unwrap();
+        fs::rename(r.join("e.old"), r.join("e")).unwrap();
+        let ev = run("folder.removeEmpty?confirm=1", &[&r], &Settings::default());
+        assert_eq!(trash_paths(&ev), [r.join("e").to_string_lossy()]);
     }
 
     /// The plan is looked at again right before it is carried out.
