@@ -32,6 +32,11 @@ public final class EngineClient {
         send(request: ["op": "run", "task": task, "paths": paths], environment: environment)
     }
 
+    /// Chain `steps` on each path (`op: pipeline`); only the final files are written and reported as outputs.
+    public func pipeline(steps: [String], paths: [String], environment: [String: String] = [:]) -> AsyncStream<EngineEvent> {
+        send(request: ["op": "pipeline", "steps": steps, "paths": paths], environment: environment)
+    }
+
     public func fetchMenu() async -> JSONValue? {
         for await event in send(request: ["op": "export-menu"], environment: [:], finishOn: { if case .menu = $0 { return true }; return false }) {
             if case .menu(let m) = event { return m }
