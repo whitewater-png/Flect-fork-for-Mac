@@ -58,7 +58,7 @@ HEIC/background removal/OCR (they need the app's OS features and a window), task
   length, NUL, exists, symlinks not followed), and every file must be of a kind the chosen task applies to
   (the same decision as the action picker). One bad file fails the whole run with a message.
 - A file given as data only (no path) is written to a fresh private folder under the system temporary folder
-  with a sanitised name, and results land beside it. That folder is left for the system to clear.
+  with a sanitised name, and results land beside it. That folder is removed when the action finishes; results written inside it are returned as data.
 - Output follows the engine's rules: new names beside the original (or in the configured output folder),
   never overwriting. The action returns only paths the engine reported in its `outputs` event, after
   `RunRecorder` checks that each is a file created by this run and not an input or a folder above one.

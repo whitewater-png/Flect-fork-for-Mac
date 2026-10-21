@@ -264,6 +264,7 @@ extension AppModel {
             if !fallbackPaths.isEmpty && !problems {
                 tracker.carryOver = true // keep what the AI step already created for the other files
                 runEngine("image.chromakey", paths: fallbackPaths)
+                tracker.carryOver = false // begin() has used it by now; never let it leak into an unrelated run
                 return
             }
             if !combined.isEmpty { screen = .tree(combined.joined(separator: "\n\n")); return }

@@ -152,7 +152,7 @@ final class AppModel: ObservableObject {
     /// `steps`: run them as one pipeline instead of `task`. `label`: what the run history shows (a preset's name).
     /// `remembering`: what "Run again" should repeat, when it is not `task` itself (a preset).
     func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil, remembering: PickerRef? = nil) {
-        guard let engine = engine else { screen = .message(loc.t("app.engineMissing")); return }
+        guard let engine = engine else { tracker.carryOver = false; screen = .message(loc.t("app.engineMissing")); return }
         resetProgress()
         screen = .running
         pendingData = []

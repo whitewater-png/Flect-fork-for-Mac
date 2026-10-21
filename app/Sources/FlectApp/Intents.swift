@@ -23,7 +23,12 @@ enum IntentRunner {
         let staging = FileManager.default.temporaryDirectory.appendingPathComponent("FlectShortcuts-\(UUID().uuidString)", isDirectory: true)
         var urls: [URL] = []
         var scoped: [URL] = []
-        defer { for u in scoped { u.stopAccessingSecurityScopedResource() } }
+        defer {
+            for u in scoped { u.stopAccessingSecurityScopedResource() }
+            // The staging folder holds inputs that arrived as data, and the results written beside them; those
+            // results are read into memory below before this runs.
+            try? FileManager.default.removeItem(at: staging)
+        }
         for (i, file) in files.enumerated() {
             if let url = file.fileURL {
                 if url.startAccessingSecurityScopedResource() { scoped.append(url) }
@@ -41,7 +46,13 @@ enum IntentRunner {
         case .cancelled: throw ShortcutsError.cancelled
         case .failed: throw ShortcutsError.engineFailed(result.summary)
         }
-        return result.outputs.map { IntentFile(fileURL: URL(fileURLWithPath: $0), filename: nil, type: nil) }
+        let stagingPath = staging.standardizedFileURL.path + "/"
+        return try result.outputs.map { path in
+            let url = URL(fileURLWithPath: path)
+            guard url.standardizedFileURL.path.hasPrefix(stagingPath) else { return IntentFile(fileURL: url, filename: nil, type: nil) }
+            // Inside the staging folder, which is removed when this function returns: hand over the bytes instead.
+            return IntentFile(data: try Data(contentsOf: url), filename: url.lastPathComponent)
+        }
     }
 }
 

@@ -320,6 +320,26 @@ final class EntryPointTests: XCTestCase {
         XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    func testLoadingRevalidatesOutputsSoATamperedFileCannotAimUndoAtOtherFiles() throws {
+        let run = try makeRun()
+        var rec = run.record
+        let home = tmp().appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        // edited history: an extra "output" that is the run's own input, the home folder itself, one relative path
+        let bogus = [run.input.path, home.path, "relative/x"].compactMap { path -> RunOutput? in
+            guard let fp = OutputFingerprint.of(path) else { return RunOutput(path: path, fingerprint: rec.outputs[0].fingerprint, status: nil, detail: nil) }
+            return RunOutput(path: path, fingerprint: fp, status: nil, detail: nil)
+        }
+        let genuine = rec.outputs.count
+        rec.outputs += bogus
+        let store = RunHistoryStore(url: tmp().appendingPathComponent("h.json"))
+        store.upsert(rec)
+        let loaded = store.load(home: home.path).first
+        XCTAssertEqual(loaded?.outputs.count, genuine)
+        XCTAssertFalse(loaded?.outputs.contains { $0.path == run.input.path } ?? true)
+        XCTAssertFalse(loaded?.outputs.contains { $0.path == home.path } ?? true)
+    }
+
     func testHistoryUpsertReplacesByIdAndCappingHelperHandlesSmallLimits() {
         let url = tmp().appendingPathComponent("h.json")
         let store = RunHistoryStore(url: url)

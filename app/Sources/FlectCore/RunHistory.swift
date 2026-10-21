@@ -73,6 +73,9 @@ public struct RunRecord: Codable, Equatable, Identifiable {
     /// Outputs the engine reported that were not tracked (failed a safety check, or over the cap).
     public var untracked: Int
     public var undoneAt: Date?
+    /// The (standardized) input paths of the run, so `RunHistoryStore.load` can re-check that no output is an input.
+    /// Absent in records written by older versions.
+    public var inputs: [String]? = nil
 
     /// Outputs that undo can still act on.
     public var undoableCount: Int { outputs.filter { $0.status != .trashed }.count }
@@ -118,7 +121,8 @@ public enum RunRecorder {
             outputs.append(RunOutput(path: std, fingerprint: fp, status: nil, detail: nil))
         }
         return RunRecord(id: UUID(), task: task, outcome: outcome, startedAt: startedAt, finishedAt: finishedAt, inputCount: inputs.count,
-                         summary: summary, outputs: outputs, untracked: untracked, undoneAt: nil)
+                         summary: summary, outputs: outputs, untracked: untracked, undoneAt: nil,
+                         inputs: Array(inputSet.sorted().prefix(maxOutputsPerRun)))
     }
 }
 
@@ -184,10 +188,25 @@ public final class RunHistoryStore {
     private struct File: Codable { var version = 1; var runs: [RunRecord] }
 
     /// Newest first. A missing, oversized or damaged file reads as an empty history.
-    public func load() -> [RunRecord] {
+    /// The file is editable by anyone with the user's rights, so what Undo may later trash is re-checked here with
+    /// the recording rules (absolute, not shallow, not the home folder or above, not an input of the run, not older
+    /// than the run). An output that is merely gone stays: undo reports it as missing.
+    public func load(home: String = FileManager.default.homeDirectoryForCurrentUser.path, fm: FileManager = .default) -> [RunRecord] {
         guard let data = try? Data(contentsOf: url), data.count < 32 << 20,
               let file = try? JSONDecoder().decode(File.self, from: data) else { return [] }
-        return Self.capped(file.runs)
+        return Self.capped(file.runs.map { Self.revalidated($0, home: home, fm: fm) })
+    }
+
+    static func revalidated(_ record: RunRecord, home: String, fm: FileManager) -> RunRecord {
+        var r = record
+        let inputSet = Set((record.inputs ?? []).map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        r.outputs = record.outputs.filter { out in
+            guard URL(fileURLWithPath: out.path).standardizedFileURL.path == out.path else { return false }
+            let why = RunRecorder.rejection(of: out.path, inputs: inputSet, startedAt: record.startedAt, home: home, fm: fm)
+            return why == nil || why == .unreadable
+        }
+        r.untracked += record.outputs.count - r.outputs.count
+        return r
     }
 
     public static func capped(_ runs: [RunRecord], limit: Int = maxRuns) -> [RunRecord] {
