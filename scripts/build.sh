@@ -41,6 +41,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(cd app && swift build -c release --show-bin-path)/Flect-for-Mac" "$APP/Contents/MacOS/Flect-for-Mac"
 cp core/target/release/flect-engine "$APP/Contents/Resources/flect-engine"
 cp core/target/release/flect-tools "$APP/Contents/Resources/flect-tools"
+cp core/target/release/flect "$APP/Contents/Resources/flect"
 # SwiftPM resource bundle for FlectCore (string tables)
 BIN="$(cd app && swift build -c release --show-bin-path)"
 for b in "$BIN"/*.bundle; do [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"; done
@@ -82,6 +83,7 @@ PLIST
 echo "== Ad-hoc signature"
 codesign --force --sign - "$APP/Contents/Resources/flect-engine"
 codesign --force --sign - "$APP/Contents/Resources/flect-tools"
+codesign --force --sign - "$APP/Contents/Resources/flect"
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 echo "built: $APP"
