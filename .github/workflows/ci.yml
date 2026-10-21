@@ -79,6 +79,7 @@ jobs:
           APP=dist/Flect-for-Mac.app
           test -x "$APP/Contents/MacOS/Flect-for-Mac"
           test -x "$APP/Contents/Resources/flect-engine"
+          test -f "$APP/Contents/Resources/AppIcon.icns"
           ls "$APP/Contents/Resources"
           plutil -lint "$APP/Contents/Info.plist"
           echo '{"op":"export-menu"}' | "$APP/Contents/Resources/flect-engine" | head -c 300; echo

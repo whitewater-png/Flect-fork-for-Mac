@@ -44,6 +44,17 @@ cp core/target/release/flect-tools "$APP/Contents/Resources/flect-tools"
 BIN="$(cd app && swift build -c release --show-bin-path)"
 for b in "$BIN"/*.bundle; do [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"; done
 
+# App icon: assets/icon/AppIcon-1024.png (rendered from AppIcon.svg) -> AppIcon.icns
+ICON_KEY=""
+if [ -f assets/icon/AppIcon-1024.png ] && command -v iconutil >/dev/null && command -v sips >/dev/null; then
+  iconset="$(mktemp -d)/AppIcon.iconset"; mkdir -p "$iconset"
+  for size in 16 32 128 256 512; do
+    sips -z $size $size assets/icon/AppIcon-1024.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    sips -z $((size*2)) $((size*2)) assets/icon/AppIcon-1024.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$iconset" -o "$APP/Contents/Resources/AppIcon.icns" && ICON_KEY="<key>CFBundleIconFile</key><string>AppIcon</string>"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -52,6 +63,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Flect</string>
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleExecutable</key><string>Flect-for-Mac</string>
+  ${ICON_KEY}
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
