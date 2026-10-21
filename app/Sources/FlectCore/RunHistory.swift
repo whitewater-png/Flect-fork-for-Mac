@@ -64,7 +64,7 @@ public struct RunOutput: Codable, Equatable {
 public struct RunRecord: Codable, Equatable, Identifiable {
     public var id: UUID
     public var task: String
-    public var outcome: String          // succeeded / failed / cancelled
+    public var outcome: String          // succeeded / partial / failed / cancelled
     public var startedAt: Date
     public var finishedAt: Date
     public var inputCount: Int
@@ -233,12 +233,22 @@ public final class RunHistoryStore {
 
 // MARK: notification text
 
+/// The outcome a finished run is recorded and announced with.
+public enum RecordedOutcome {
+    /// `partial`: the engine succeeded, but the app could not carry out all of it (items it was asked to move to the
+    /// Trash were refused or could not be moved). Everything else is the engine's outcome as it is.
+    public static func string(_ outcome: String, problems: Bool) -> String {
+        outcome == "succeeded" && problems ? "partial" : outcome
+    }
+}
+
 public enum NotificationText {
     /// Localized title and body for the "run finished" notification.
     public static func make(outcome: String, summary: String?, outputCount: Int, loc: Loc) -> (title: String, body: String) {
         let title: String
         switch outcome {
         case "succeeded": title = loc.t("ux.notify.succeeded")
+        case "partial": title = loc.t("ux.notify.failed") // finished with problems
         case "cancelled": title = loc.t("ux.notify.cancelled")
         default: title = loc.t("ux.notify.failed")
         }

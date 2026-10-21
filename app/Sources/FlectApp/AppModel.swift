@@ -218,13 +218,16 @@ final class AppModel: ObservableObject {
                 }
             }
             if currentRun == scope.run { currentRun = nil }
-            finishRun(outcome: outcome, summary: TrashGuard.runSummary(summary, tally: trashed, loc: loc), sawProblem: sawProblem)
+            finishRun(outcome: outcome, summary: TrashGuard.runSummary(summary, tally: trashed, loc: loc), sawProblem: sawProblem,
+                      partial: trashed.notMoved > 0)
         }
     }
 
-    func finishRun(outcome: Outcome, summary: String?, sawProblem: Bool) {
+    /// `partial`: the app could not carry out all of a successful run (Trash items refused or not moved); it is then
+    /// recorded and announced as finished with problems.
+    func finishRun(outcome: Outcome, summary: String?, sawProblem: Bool, partial: Bool = false) {
         cancelling = false
-        recordFinished(outcome: outcome, summary: summary)
+        recordFinished(outcome: outcome, summary: summary, partial: partial)
         // A privacy check with one unreadable file ends as failed, but the other reports are still worth showing.
         if let (name, data) = pendingData.first, outcome == .succeeded || name == "privacy_report", showResult(name: name, data: data) { return }
         finished = true

@@ -384,6 +384,18 @@ final class EntryPointTests: XCTestCase {
         XCTAssertEqual(NotificationText.make(outcome: "succeeded", summary: nil, outputCount: 1, loc: en).body, "1 file created")
         XCTAssertEqual(NotificationText.make(outcome: "cancelled", summary: nil, outputCount: 0, loc: en).title, "Flect: cancelled")
         XCTAssertEqual(NotificationText.make(outcome: "failed", summary: nil, outputCount: 0, loc: en).body, en.t("progress.failed"))
+        // a run whose Trash requests were not all carried out is recorded and announced as having problems
+        XCTAssertEqual(RecordedOutcome.string("succeeded", problems: true), "partial")
+        XCTAssertEqual(RecordedOutcome.string("succeeded", problems: false), "succeeded")
+        XCTAssertEqual(RecordedOutcome.string("failed", problems: true), "failed")
+        XCTAssertEqual(RecordedOutcome.string("cancelled", problems: true), "cancelled")
+        let p = NotificationText.make(outcome: "partial", summary: "Moved 1 of 2 items to the Trash; 1 was left in place.", outputCount: 0, loc: en)
+        XCTAssertEqual(p.title, "Flect: finished with problems")
+        XCTAssertEqual(p.body, "Moved 1 of 2 items to the Trash; 1 was left in place.")
+        XCTAssertEqual(NotificationText.make(outcome: "partial", summary: nil, outputCount: 0, loc: en).body, en.t("progress.failed"))
+        let rec = RunRecorder.record(task: "folder.removeDuplicate?mode=oldest", outcome: RecordedOutcome.string("succeeded", problems: true),
+                                     startedAt: Date(), finishedAt: Date(), inputs: [], reportedOutputs: [], summary: nil)
+        XCTAssertEqual(rec.outcome, "partial")
         let j = NotificationText.make(outcome: "succeeded", summary: nil, outputCount: 2, loc: ja)
         XCTAssertEqual(j.title, "Flect: 完了しました")
         XCTAssertEqual(j.body, "2 個のファイルを作成")

@@ -40,8 +40,9 @@ extension AppModel {
     var isSettingsScreen: Bool { if case .settings = screen { return true }; return false }
 
     /// Called once per finished run: remembers what it created, then tells the user (notification).
-    func recordFinished(outcome: Outcome, summary: String?) {
-        let record = RunRecorder.record(task: tracker.task, outcome: outcome.rawValue, startedAt: tracker.startedAt, finishedAt: Date(),
+    func recordFinished(outcome: Outcome, summary: String?, partial: Bool = false) {
+        let recorded = RecordedOutcome.string(outcome.rawValue, problems: partial)
+        let record = RunRecorder.record(task: tracker.task, outcome: recorded, startedAt: tracker.startedAt, finishedAt: Date(),
                                         inputs: tracker.inputs, reportedOutputs: tracker.outputs, summary: summary)
         if record.outputs.isEmpty {
             currentRecordID = nil
@@ -49,7 +50,7 @@ extension AppModel {
             history = historyStore.upsert(record)
             currentRecordID = record.id
         }
-        let text = NotificationText.make(outcome: outcome.rawValue, summary: summary, outputCount: record.outputs.count, loc: loc)
+        let text = NotificationText.make(outcome: recorded, summary: summary, outputCount: record.outputs.count, loc: loc)
         Notifier.shared.post(title: text.title, body: text.body, recordID: record.outputs.isEmpty ? nil : record.id)
     }
 
