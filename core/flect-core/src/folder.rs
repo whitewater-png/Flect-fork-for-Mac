@@ -127,25 +127,29 @@ pub struct ScannedFile {
     pub size: u64,
     pub modified: SystemTime,
     pub extension: String,
-    /// (device, inode) as reported by the file system. Not proof of identity on its own: see
-    /// [`ScannedFile::same_file_key`].
+    /// (device, inode) as reported by the file system. Two different files on some file systems
+    /// can report the same pair, so listing uses [`ScannedFile::same_file_key`]; but whatever decides
+    /// what to delete treats a matching pair alone as one file ([`ScannedFile::may_be_same_file`]).
     pub file_id: (u64, u64),
 }
 
-/// What two entries must share to be taken for one file reached under two names.
+/// What two entries must share to be listed once (see [`TreeScan`]).
 pub type SameFileKey = (u64, u64, u64, SystemTime);
 
 impl ScannedFile {
-    /// Device, inode, size and modification time. Hard links share all four; two different files
-    /// on a file system that reports the same inode number for both (some network and FUSE file
-    /// systems do) almost never do, so they are kept apart instead of one hiding the other.
+    /// Device, inode, size and modification time: the key for *listing* only. Hard links share all
+    /// four; two different files on a file system that reports the same inode number for both
+    /// almost never do, so neither hides the other in the scan or the counts.
     pub fn same_file_key(&self) -> SameFileKey {
         (self.file_id.0, self.file_id.1, self.size, self.modified)
     }
 
-    /// Whether `self` and `other` are one file (see [`ScannedFile::same_file_key`]).
-    pub fn is_same_file(&self, other: &ScannedFile) -> bool {
-        self.same_file_key() == other.same_file_key()
+    /// Whether the two entries may be one file: same (device, inode), whatever their size or time.
+    /// One file reached twice can differ in those (a firmlink spelling such as
+    /// `/System/Volumes/Data/Users/...` visited again after the file was touched), so deciding
+    /// what to delete uses this: of such a pair, neither name is ever removed.
+    pub fn may_be_same_file(&self, other: &ScannedFile) -> bool {
+        self.file_id == other.file_id
     }
 }
 
@@ -236,6 +240,37 @@ pub fn distinct_roots(
         keep[*i] = true;
         last = Some(path);
     }
+    // The same folder can have spellings that resolving does not unify: a firmlink
+    // (`/System/Volumes/Data/Users/x` is `/Users/x`). Compare the folders themselves by
+    // (device, inode): a root goes when it is a root already kept, or lies inside one.
+    let mut kept_ids: HashMap<(u64, u64), usize> = HashMap::new();
+    for (i, r) in roots.iter().enumerate() {
+        if keep[i] {
+            if let Some(d) = dir_id(r) {
+                kept_ids.entry(d).or_insert(i);
+            }
+        }
+    }
+    for (n, (path, i)) in canon.iter().enumerate() {
+        if n % 256 == 0 && progress.cancelled() {
+            return Err(Cancelled);
+        }
+        if !keep[*i] {
+            continue;
+        }
+        let covered = path.ancestors().enumerate().any(|(depth, a)| {
+            dir_id(a).and_then(|d| kept_ids.get(&d)).is_some_and(|&j| {
+                if depth == 0 {
+                    j < *i
+                } else {
+                    j != *i
+                }
+            })
+        });
+        if covered {
+            keep[*i] = false;
+        }
+    }
     if progress.cancelled() {
         return Err(Cancelled);
     }
@@ -245,6 +280,14 @@ pub fn distinct_roots(
         .filter(|(_, k)| *k)
         .map(|(r, _)| r.clone())
         .collect())
+}
+
+/// (device, inode) of a folder, links not followed.
+fn dir_id(p: &Path) -> Option<(u64, u64)> {
+    fs::symlink_metadata(p)
+        .ok()
+        .filter(|m| m.is_dir())
+        .map(|m| (m.dev(), m.ino()))
 }
 
 /// Walk the (de-duplicated, see [`distinct_roots`]) selection. Every file is listed once: a file
@@ -538,12 +581,13 @@ pub fn find_duplicates(
     Ok(sorted(final_groups))
 }
 
-/// Whether a group lists one file twice (same path, or the same file under another name).
+/// Whether a group may list one file twice (same path, or same device and inode under another
+/// name, whatever the size or time).
 fn repeats_a_file(g: &[ScannedFile]) -> bool {
     let mut paths = HashSet::new();
     let mut ids = HashSet::new();
     g.iter()
-        .any(|f| !paths.insert(f.path.as_path()) || !ids.insert(f.same_file_key()))
+        .any(|f| !paths.insert(f.path.as_path()) || !ids.insert(f.file_id))
 }
 
 fn sorted(groups: Vec<Vec<ScannedFile>>) -> Vec<Vec<ScannedFile>> {
@@ -553,7 +597,7 @@ fn sorted(groups: Vec<Vec<ScannedFile>>) -> Vec<Vec<ScannedFile>> {
         .into_iter()
         .map(|mut g| {
             let (mut paths, mut ids) = (HashSet::new(), HashSet::new());
-            g.retain(|f| paths.insert(f.path.clone()) & ids.insert(f.same_file_key()));
+            g.retain(|f| paths.insert(f.path.clone()) & ids.insert(f.file_id));
             g
         })
         .filter(|g| g.len() > 1)
@@ -596,7 +640,7 @@ pub fn to_delete(groups: &[Vec<ScannedFile>], mode: DuplicateMode) -> Vec<Scanne
                         g.iter()
                             .enumerate()
                             .filter(|(i, f)| {
-                                *i != k && f.path != kept.path && !f.is_same_file(kept)
+                                *i != k && f.path != kept.path && !f.may_be_same_file(kept)
                             })
                             .map(|(_, f)| f.clone()),
                     );
@@ -608,8 +652,8 @@ pub fn to_delete(groups: &[Vec<ScannedFile>], mode: DuplicateMode) -> Vec<Scanne
 }
 
 /// The last check before a duplicate plan is shown or carried out: no file is listed for removal
-/// twice, and in a keep mode every group still keeps a copy that is not itself listed for removal
-/// (by path or by inode).
+/// twice (by path, or by device and inode), nothing listed for removal shares its device and inode
+/// with anything that stays (in any group), and in a keep mode every group still keeps a copy.
 pub fn plan_is_consistent(
     groups: &[Vec<ScannedFile>],
     doomed: &[ScannedFile],
@@ -618,20 +662,48 @@ pub fn plan_is_consistent(
     let (mut paths, mut ids) = (HashSet::new(), HashSet::new());
     if !doomed
         .iter()
-        .all(|d| paths.insert(d.path.as_path()) & ids.insert(d.same_file_key()))
+        .all(|d| paths.insert(d.path.as_path()) & ids.insert(d.file_id))
     {
         return false;
     }
-    mode == DuplicateMode::DeleteAll
-        || groups.iter().all(|g| {
-            let gone = g
-                .iter()
-                .filter(|f| paths.contains(f.path.as_path()) || ids.contains(&f.same_file_key()))
-                .count();
-            gone == 0
-                || g.iter()
-                    .any(|f| !paths.contains(f.path.as_path()) && !ids.contains(&f.same_file_key()))
-        })
+    let stays = |f: &ScannedFile| !paths.contains(f.path.as_path());
+    if groups
+        .iter()
+        .flatten()
+        .any(|f| stays(f) && ids.contains(&f.file_id))
+    {
+        return false; // one name of a file would go while another name of it stays
+    }
+    mode == DuplicateMode::DeleteAll || groups.iter().all(|g| g.is_empty() || g.iter().any(stays))
+}
+
+/// Right before a duplicate plan is shown or carried out, look again (without following links):
+/// every copy that stays still exists, every copy that goes is still a regular file with the device
+/// and inode the scan saw, and no copy that goes is now the same (device, inode) as one that stays.
+pub fn plan_still_holds(groups: &[Vec<ScannedFile>], doomed: &[ScannedFile]) -> bool {
+    let now = |p: &Path| {
+        fs::symlink_metadata(p)
+            .ok()
+            .filter(|m| m.is_file())
+            .map(|m| (m.dev(), m.ino()))
+    };
+    let gone: HashSet<&Path> = doomed.iter().map(|d| d.path.as_path()).collect();
+    let mut kept_ids = HashSet::new();
+    for f in groups
+        .iter()
+        .flatten()
+        .filter(|f| !gone.contains(f.path.as_path()))
+    {
+        match now(&f.path) {
+            Some(id) => {
+                kept_ids.insert(id);
+            }
+            None => return false,
+        }
+    }
+    doomed
+        .iter()
+        .all(|d| now(&d.path).is_some_and(|id| id == d.file_id && !kept_ids.contains(&id)))
 }
 
 // ------------------------------------------------------------ tree
@@ -938,10 +1010,12 @@ mod tests {
         assert!(sorted(same_path.clone()).is_empty() && sorted(same_inode.clone()).is_empty());
     }
 
-    /// Some file systems report one inode number for different files. Two entries are one file only
-    /// when device, inode, size and modification time all agree (as for hard links).
+    /// Some file systems report one inode number for different files: listing keeps them apart
+    /// unless device, inode, size and time all agree (hard links). Deciding what to delete never
+    /// separates a matching (device, inode): one file seen twice through a firmlink can differ in
+    /// time (touched between the two visits), and removing "the other copy" removed the only one.
     #[test]
-    fn same_inode_alone_does_not_make_two_entries_one_file() {
+    fn same_inode_lists_apart_but_is_never_deleted_apart() {
         let t = |s| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
         let f = |n: &str, size, s| ScannedFile {
             path: n.into(),
@@ -952,11 +1026,14 @@ mod tests {
         };
         let (a, link) = (f("a", 10, 100), f("hardlink", 10, 100));
         let (other_size, other_time) = (f("b", 11, 100), f("c", 10, 101));
-        assert!(a.is_same_file(&link));
-        assert!(!a.is_same_file(&other_size) && !a.is_same_file(&other_time));
+        assert!(a.same_file_key() == link.same_file_key() && a.may_be_same_file(&other_time));
+        assert!(
+            a.same_file_key() != other_size.same_file_key()
+                && a.same_file_key() != other_time.same_file_key()
+        );
         let mut other_dev = f("d", 10, 100);
         other_dev.file_id = (8, 42);
-        assert!(!a.is_same_file(&other_dev));
+        assert!(a.same_file_key() != other_dev.same_file_key() && !a.may_be_same_file(&other_dev));
 
         // scan: the hard link is dropped, the inode-sharing strangers are all listed
         let mut scan = TreeScan::default();
@@ -970,20 +1047,44 @@ mod tests {
             .collect();
         assert_eq!(listed, ["a", "b", "c", "d"]);
 
-        // duplicate plans: a group of inode-sharing strangers is acted on like any other group
+        // the firmlink case: same (device, inode), another time; neither name ever goes
         let g = |x: &ScannedFile, y: &ScannedFile| vec![vec![x.clone(), y.clone()]];
-        let strangers = g(&f("p", 10, 100), &f("q", 10, 200));
-        assert!(!repeats_a_file(&strangers[0]));
-        assert_eq!(sorted(strangers.clone()).len(), 1);
-        let doomed = to_delete(&strangers, DuplicateMode::KeepOldest);
-        assert_eq!(doomed.len(), 1);
-        assert_eq!(doomed[0].path, PathBuf::from("q"));
-        assert!(plan_is_consistent(
-            &strangers,
-            &doomed,
-            DuplicateMode::KeepOldest
+        let (data, short) = (f("/System/Volumes/Data/T/x", 10, 100), f("/T/x", 10, 200));
+        let firmlink = g(&data, &short);
+        assert!(repeats_a_file(&firmlink[0]));
+        assert!(sorted(firmlink.clone()).is_empty(), "not a duplicate group");
+        for m in [
+            DuplicateMode::KeepOldest,
+            DuplicateMode::KeepNewest,
+            DuplicateMode::DeleteAll,
+        ] {
+            assert!(to_delete(&firmlink, m).is_empty(), "{m:?}");
+        }
+        assert!(!plan_is_consistent(
+            &firmlink,
+            std::slice::from_ref(&data),
+            DuplicateMode::KeepNewest
         ));
-        // ...but a group naming one file twice (a hard link) is still never acted on
+        // the pair in one group with a real copy: the group is not acted on at all
+        let mut copy = f("/T/copy", 10, 50);
+        copy.file_id = (7, 99);
+        let mixed = vec![vec![data.clone(), short.clone(), copy.clone()]];
+        assert!(to_delete(&mixed, DuplicateMode::KeepNewest).is_empty());
+        // the two names in two groups: one name may not go while the other stays
+        let mut other = f("/T/other", 10, 300);
+        other.file_id = (7, 100);
+        let split = vec![vec![short.clone(), copy.clone()], vec![data.clone(), other]];
+        assert!(!plan_is_consistent(
+            &split,
+            std::slice::from_ref(&data),
+            DuplicateMode::KeepNewest
+        ));
+        assert!(plan_is_consistent(
+            &split,
+            &[copy.clone()],
+            DuplicateMode::KeepNewest
+        ));
+        // ...and a group naming one file twice (a hard link) is never acted on either
         let linked = g(&a, &link);
         assert!(repeats_a_file(&linked[0]) && sorted(linked.clone()).is_empty());
         for m in [

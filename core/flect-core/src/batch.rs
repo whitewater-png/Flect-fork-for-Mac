@@ -318,6 +318,11 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
             if doomed.is_empty() {
                 return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
             }
+            if !folder::plan_still_holds(&groups, &doomed) {
+                // A copy that stays is gone, or a copy that goes changed or is now the same file as
+                // one that stays: nothing is shown or removed.
+                return fail(ctx, "msg.ioError", "duplicate plan changed".into());
+            }
             let bytes: u64 = doomed.iter().map(|d| d.size).sum();
             if params.get("dry").is_some_and(|v| v == "1") {
                 // Preview only: say which copy stays and which go, delete nothing. The app asks the user
@@ -445,7 +450,7 @@ pub fn first_root(paths: &[String]) -> Option<&Path> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::sync::Mutex;
 
     fn run(task: &str, paths: &[&Path], settings: &Settings) -> Vec<serde_json::Value> {
@@ -694,6 +699,123 @@ mod tests {
         assert_eq!(p["removeCount"], 1, "{p}");
         let g = &p["groups"][0];
         assert_ne!(g["keep"]["path"], g["remove"][0]["path"]);
+    }
+
+    /// `/System/Volumes/Data<T>` and `<T>` are one folder (a firmlink; resolving the path does not
+    /// undo it). A file touched between the two visits got two listing keys, both entries hashed
+    /// equal, and "keep newest" permanently deleted the only copy.
+    #[test]
+    fn firmlink_spellings_never_make_a_file_its_own_duplicate() {
+        let d = tempfile::tempdir().unwrap();
+        let t = fs::canonicalize(d.path()).unwrap();
+        let data = Path::new("/System/Volumes/Data").join(t.strip_prefix("/").unwrap());
+        let same = |a: &Path, b: &Path| match (fs::metadata(a), fs::metadata(b)) {
+            (Ok(x), Ok(y)) => (x.dev(), x.ino()) == (y.dev(), y.ino()),
+            _ => false,
+        };
+        if !same(&data, &t) {
+            eprintln!("no firmlink spelling of {t:?} here; skipped");
+            return;
+        }
+        let precious = t.join("sub/only.txt");
+        fs::create_dir_all(precious.parent().unwrap()).unwrap();
+        fs::write(&precious, "the only copy").unwrap();
+        let none = folder::NullProgress;
+
+        // the roots collapse: one folder, two spellings (and one inside the other's spelling)
+        assert_eq!(
+            folder::distinct_roots(&[data.clone(), t.clone()], &none).unwrap(),
+            std::slice::from_ref(&data)
+        );
+        assert_eq!(
+            folder::distinct_roots(&[t.join("sub"), data.clone()], &none).unwrap(),
+            std::slice::from_ref(&data)
+        );
+
+        // decision layer, with the double visit forced: each spelling scanned on its own and the
+        // second visit seeing a later modification time (as after a background `touch`)
+        let scan_one = |root: &Path| {
+            folder::scan(
+                &[root.to_path_buf()],
+                &folder::ExclusionFilter::default(),
+                &Default::default(),
+                &none,
+            )
+            .unwrap()
+            .files
+        };
+        let mut files = scan_one(&data);
+        let mut second = scan_one(&t);
+        assert_eq!((files.len(), second.len()), (1, 1));
+        second[0].modified += std::time::Duration::from_secs(10);
+        assert_ne!(files[0].same_file_key(), second[0].same_file_key());
+        files.extend(second);
+        let groups = folder::find_duplicates(&files, &Default::default(), &none).unwrap();
+        assert!(groups.is_empty(), "{groups:?}");
+        let forced = vec![files.clone()];
+        for m in [
+            DuplicateMode::KeepOldest,
+            DuplicateMode::KeepNewest,
+            DuplicateMode::DeleteAll,
+        ] {
+            assert!(folder::to_delete(&forced, m).is_empty(), "{m:?}");
+            assert!(
+                !folder::plan_is_consistent(&forced, &files[..1], m),
+                "{m:?}"
+            );
+        }
+        assert!(!folder::plan_still_holds(&forced, &files[..1]));
+
+        // end to end, permanent deletion, every mode
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        for mode in ["newest", "oldest", "all"] {
+            for roots in [[&data, &t], [&t, &data]] {
+                let roots: Vec<&Path> = roots.iter().map(|p| p.as_path()).collect();
+                let ev = run(
+                    &format!("folder.removeDuplicate?mode={mode}"),
+                    &roots,
+                    &perm,
+                );
+                assert_eq!(
+                    find(&ev, "done").unwrap()["summary_key"],
+                    "msg.noDuplicates",
+                    "{mode} {roots:?}: {ev:?}"
+                );
+                assert!(precious.exists(), "{mode}: the only copy is gone");
+            }
+        }
+    }
+
+    /// The plan is looked at again right before it is carried out.
+    #[test]
+    fn a_plan_that_no_longer_holds_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a.txt"), d.path().join("b.txt"));
+        fs::write(&a, "same").unwrap();
+        fs::write(&b, "same").unwrap();
+        let s = folder::scan(
+            &[d.path().to_path_buf()],
+            &folder::ExclusionFilter::default(),
+            &Default::default(),
+            &folder::NullProgress,
+        )
+        .unwrap();
+        let groups =
+            folder::find_duplicates(&s.files, &Default::default(), &folder::NullProgress).unwrap();
+        let doomed = folder::to_delete(&groups, DuplicateMode::KeepOldest);
+        assert_eq!(doomed.len(), 1);
+        assert!(folder::plan_still_holds(&groups, &doomed));
+        let kept = if doomed[0].path == a { &b } else { &a };
+        // the copy that goes is now a hard link to the copy that stays
+        fs::remove_file(&doomed[0].path).unwrap();
+        fs::hard_link(kept, &doomed[0].path).unwrap();
+        assert!(!folder::plan_still_holds(&groups, &doomed));
+        // the copy that stays is gone
+        fs::remove_file(&doomed[0].path).unwrap();
+        fs::write(&doomed[0].path, "same").unwrap();
+        fs::remove_file(kept).unwrap();
+        assert!(!folder::plan_still_holds(&groups, &doomed));
     }
 
     /// An excluded subfolder was skipped by the scan, so its parent looked empty; permanent mode then
