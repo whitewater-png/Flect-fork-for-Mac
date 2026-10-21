@@ -136,7 +136,7 @@ pub struct Done {
 pub fn is_text_task(name: &str) -> bool {
     matches!(
         name,
-        "text.encode" | "text.lineEndings" | "json.pretty" | "json.sort"
+        "text.encode" | "text.lineEndings" | "text.convert" | "json.pretty" | "json.sort"
     )
 }
 
@@ -661,6 +661,25 @@ mod tests {
     #[test]
     fn jar_decompile_is_dispatched_as_a_file_task() {
         assert!(is_file_task("jar.decompile"));
+    }
+
+    /// `run_text` implements `text.convert`, but the dispatcher did not list it, so the engine answered "unimplemented".
+    #[test]
+    fn text_convert_is_dispatched() {
+        assert!(is_file_task("text.convert"));
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("t.csv");
+        fs::write(&src, "a,b\n1,2\n").unwrap();
+        let ctx = Ctx {
+            settings: &Settings::default(),
+            seven_zip: None,
+            progress: &crate::folder::NullProgress,
+            media: None,
+            java: None,
+            cfr: None,
+        };
+        let done = run("text.convert?to=JSON", &src, &ctx).unwrap();
+        assert_eq!(done.output, d.path().join("t.json"));
     }
 
     #[test]
