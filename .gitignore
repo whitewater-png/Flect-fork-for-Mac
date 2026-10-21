@@ -8,3 +8,9 @@
 *.vcxproj.user
 
 AGENTS.md
+
+# Rust build output
+**/target/
+
+# Swift package build output
+/app/.build/

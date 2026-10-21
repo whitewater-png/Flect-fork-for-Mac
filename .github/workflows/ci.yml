@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**", "mac-release-clean"]
   pull_request:
   workflow_dispatch:
 
@@ -13,176 +13,79 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
-
 jobs:
-  i18n:
-    name: I18n missing key checks
+  core:
+    name: Rust core (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: ffmpeg and a JDK for the end-to-end tests
+        working-directory: .
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          bash scripts/fetch-cfr.sh "$RUNNER_TEMP/deps"
+          echo "FLECT_TEST_CFR_JAR=$RUNNER_TEMP/deps/cfr.jar" >> "$GITHUB_ENV"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --all --locked
+
+  deny:
+    name: Dependency audit (cargo-deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          node-version: 24
+          manifest-path: core/Cargo.toml
+          arguments: --all-features
 
-      - name: Check App and Web translations
-        run: node evals/i18n/check.mjs
-
-  build:
-    name: Build
-    runs-on: windows-latest
+  swift:
+    name: Swift app (macOS)
+    runs-on: macos-14
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Restore NuGet cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
-          restore-keys: nuget-${{ runner.os }}-
-
-      - name: Pick the dependency cache month
-        id: month
-        shell: pwsh
-        run: '"value=$(Get-Date -Format yyyy-MM)" >> $env:GITHUB_OUTPUT'
-
-      - name: Restore third-party tools
-        uses: actions/cache@v6
-        with:
-          path: dependencies
-          key: deps-${{ hashFiles('scripts/fetch.ps1') }}-${{ steps.month.outputs.value }}
-
-      - name: Fetch third-party tools
-        shell: pwsh
-        run: ./scripts/fetch.ps1
-
-      - name: Build shell extension and worker
-        shell: pwsh
-        run: ./scripts/build.ps1
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist
-          path: dist
-          retention-days: 7
-
-  modern:
-    name: Windows 11 menu build and COM smoke tests
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Build optional modern menu and test COM contracts
-        shell: pwsh
-        run: ./scripts/modern/test.ps1
-
-  installer:
-    name: Installer round trip
-    needs: build
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist
-
-      - name: Install Inno Setup
-        run: choco install innosetup --version 6.7.1 --no-progress -y
-
-      - name: Package installer
-        shell: pwsh
-        run: ./scripts/package.ps1
-
-      - name: Install, upgrade, smoke test and uninstall
-        shell: pwsh
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the Rust engine and tools
+        working-directory: core
+        run: cargo build --release --locked
+      - name: Swift version
+        run: swift --version
+      - name: Build the app
+        working-directory: app
         run: |
-          $installer = Get-ChildItem build/setup -Filter *.exe | Select-Object -First 1
-          ./evals/installer/Test-Installer.ps1 -Installer $installer.FullName -LogDirectory "$env:RUNNER_TEMP/installer-logs"
-
-      - name: Install and uninstall with install.ps1
-        shell: pwsh
+          set -o pipefail
+          swift build 2>&1 | tail -150
+      - name: Test the app core
+        working-directory: app
         run: |
-          $installer = Get-ChildItem build/setup -Filter *.exe | Select-Object -First 1
-          ./evals/installer/Test-InstallScript.ps1 -Installer $installer.FullName -LogDirectory "$env:RUNNER_TEMP/installer-logs"
-
-      - uses: actions/upload-artifact@v7
+          set -o pipefail
+          swift test 2>&1 | tail -150
+      - name: Generate the Quick Actions and validate them
+        run: |
+          core/target/release/flect-tools --out "$RUNNER_TEMP/qa"
+          ls "$RUNNER_TEMP/qa" | wc -l
+          for f in "$RUNNER_TEMP"/qa/*.workflow/Contents/*; do plutil -lint "$f"; done
+      - name: Build the .app bundle (ad-hoc signed) and smoke-test it
+        run: |
+          set -o pipefail
+          scripts/build.sh 2>&1 | tail -40
+          APP=dist/Flect-for-Mac.app
+          test -x "$APP/Contents/MacOS/Flect-for-Mac"
+          test -x "$APP/Contents/Resources/flect-engine"
+          test -f "$APP/Contents/Resources/AppIcon.icns"
+          ls "$APP/Contents/Resources"
+          plutil -lint "$APP/Contents/Info.plist"
+          echo '{"op":"export-menu"}' | "$APP/Contents/Resources/flect-engine" | head -c 300; echo
+          codesign -dv "$APP" 2>&1 | head -5
+      - uses: actions/upload-artifact@v4
         with:
-          name: installer
-          path: build/setup/*.exe
-          retention-days: 7
-
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: installer-logs
-          path: ${{ runner.temp }}/installer-logs
-
-  evals:
-    name: Feature evals
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - name: Restore NuGet cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
-          restore-keys: nuget-${{ runner.os }}-
-
-      - name: Pick the dependency cache month
-        id: month
-        shell: pwsh
-        run: '"value=$(Get-Date -Format yyyy-MM)" >> $env:GITHUB_OUTPUT'
-
-      - name: Restore third-party tools
-        uses: actions/cache@v6
-        with:
-          path: dependencies
-          key: deps-${{ hashFiles('scripts/fetch.ps1') }}-${{ steps.month.outputs.value }}
-
-      - name: Fetch third-party tools
-        shell: pwsh
-        run: ./scripts/fetch.ps1
-
-      - name: Run feature evals
-        working-directory: evals
-        shell: pwsh
-        run: >
-          dotnet test --project Evals/Evals.csproj -c Release
-          --filter-not-trait "Category=AI"
-          --report-xunit-trx --report-xunit-trx-filename evals.trx
-          --results-directory "${{ runner.temp }}/evals-results"
-
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: evals-results
-          path: ${{ runner.temp }}/evals-results
-          retention-days: 14
-
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: evals-work
-          path: tests/evals-work
+          name: Flect-for-Mac-adhoc-build
+          path: dist/Flect-for-Mac.app
           retention-days: 7

@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="base" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#E4FFF1"/>
+      <stop offset="0.5" stop-color="#8EE9BB"/>
+      <stop offset="1" stop-color="#3DBF8A"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0.22" cy="0.12" r="0.65">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.9" cy="1" r="0.65">
+      <stop offset="0" stop-color="#1E8F63" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#1E8F63" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0.1" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.88"/>
+      <stop offset="0.45" stop-color="#F2FFF9" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#C9F7E1" stop-opacity="0.34"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.75"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="22"/>
+      <feOffset dy="24"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.30"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadowF" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="18"/>
+      <feOffset dy="22"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.30"/></feComponentTransfer>
+      <feComposite in2="SourceAlpha" operator="out"/>
+    </filter>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="42"/></filter>
+    <filter id="soft2" x="-10%" y="-10%" width="120%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+    <clipPath id="fshape"><path d="M393 262H643A75 75 0 0 1 643 412H493A25 25 0 0 0 468 437V455A25 25 0 0 0 493 480H548A70 70 0 0 1 548 620H493A25 25 0 0 0 468 645V687A75 75 0 0 1 318 687V337A75 75 0 0 1 393 262Z"/></clipPath>
+  </defs>
+
+  <g filter="url(#drop)"><rect x="100" y="100" width="824" height="824" rx="184" fill="url(#base)"/></g>
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#glowA)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#glowB)"/>
+    <circle cx="770" cy="240" r="150" fill="#FFFFFF" opacity="0.35" filter="url(#soft)"/>
+    <circle cx="250" cy="810" r="190" fill="#2CAE7C" opacity="0.38" filter="url(#soft)"/>
+    <path d="M100 100h824v250C760 410 560 420 100 360z" fill="url(#gloss)" opacity="0.45" filter="url(#soft2)"/>
+  </g>
+  <rect x="103" y="103" width="818" height="818" rx="181" fill="none" stroke="url(#rim)" stroke-width="6"/>
+
+  <!-- the F: one continuous glass shape, no seams -->
+  <path d="M393 262H643A75 75 0 0 1 643 412H493A25 25 0 0 0 468 437V455A25 25 0 0 0 493 480H548A70 70 0 0 1 548 620H493A25 25 0 0 0 468 645V687A75 75 0 0 1 318 687V337A75 75 0 0 1 393 262Z" fill="#0B6B47" filter="url(#shadowF)"/>
+  <path d="M393 262H643A75 75 0 0 1 643 412H493A25 25 0 0 0 468 437V455A25 25 0 0 0 493 480H548A70 70 0 0 1 548 620H493A25 25 0 0 0 468 645V687A75 75 0 0 1 318 687V337A75 75 0 0 1 393 262Z" fill="url(#glass)"/>
+  <g clip-path="url(#fshape)">
+    <ellipse cx="520" cy="270" rx="260" ry="46" fill="#FFFFFF" opacity="0.45" filter="url(#soft2)"/>
+    <ellipse cx="520" cy="765" rx="140" ry="40" fill="#FFFFFF" opacity="0.30" filter="url(#soft2)"/>
+  </g>
+  <path d="M393 262H643A75 75 0 0 1 643 412H493A25 25 0 0 0 468 437V455A25 25 0 0 0 493 480H548A70 70 0 0 1 548 620H493A25 25 0 0 0 468 645V687A75 75 0 0 1 318 687V337A75 75 0 0 1 393 262Z" fill="none" stroke="url(#rim)" stroke-width="6"/>
+  <g fill="#FFFFFF" opacity="0.7">
+    <ellipse cx="545" cy="300" rx="120" ry="12"/>
+    <ellipse cx="371" cy="360" rx="12" ry="46"/>
+  </g>
+</svg>

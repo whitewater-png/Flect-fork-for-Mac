@@ -1,0 +1,33 @@
+[package]
+name = "flect-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+encoding_rs = "0.8"
+chardetng = "0.1"
+rayon = "1"
+quick-xml = "0.42"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate", "time"] }
+tar = { version = "0.4.46", default-features = false }
+flate2 = "1.1.10"
+
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "ico", "webp", "bmp"] }
+webp = "0.3"
+resvg = { version = "0.45", default-features = false, features = ["raster-images"] }
+fast_image_resize = "5"
+png = "0.17"
+color_quant = "1"
+base64 = "0.22"
+sha2 = "0.11.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

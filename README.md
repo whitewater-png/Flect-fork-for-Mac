@@ -1,355 +1,75 @@
-<div align="center">
+# Flect-for-Mac
 
-# Flect
+**Right-click files in Finder to convert, compress, resize and more.** A macOS port of [Flect](https://github.com/Konayukiw/Flect) (Windows), rebuilt with a Rust processing core and a Swift front end.
 
-**[日本語](/README.Ja.md) / English / [简体中文](/README.Zh.md)**
+> **Status: pre-release.** Everything compiles and passes CI on macOS 14 (Apple Silicon), but the Finder integration and OS-specific features still need verification on real hardware. See [`docs/mac-port/11-mac-verification-guide.ja.md`](docs/mac-port/11-mac-verification-guide.ja.md) (Japanese). No signed or notarized builds exist yet - you build it yourself.
 
-**Right-click any files or folders on the Windows Explorer to convert, compress, resize and more!**
+[日本語](README.Ja.md) / English
 
-You don't have to search for converter on the browser or compress using Video Editor.
+## What it does
 
-<p align="center">
-  <img src="src/App/Assets/Introduction/Hero-En.png" alt="Flect - Right-click to do it all." width="860">
-</p>
+Your originals are never touched: every task writes a new file next to the source (`name (2).ext` if the name is taken). Deletions go to the Trash by default.
 
-</div>
-
----
-
-## Installation
-
-### Installer
-
-1. Download the latest `Flect-Setup.exe` from [Releases](https://github.com/Konayukiw/Flect/releases/latest).
-2. Run Setup and complete installation.
-
-### PowerShell
-
-```powershell
-irm https://flect.konayuki.xyz/install.ps1 | iex
-```
-
-<details><summary>Caution</summary>
-PowerShell scripts provided in the format `irm <URL> | iex` are commands that directly execute files hosted on the web. Although Flect does not engage in privacy-violating activities such as data interception, make sure the script is actually safe when executing any PowerShell scripts, as this same method could potentially be used to download malware.
-</details>
-　
-
-The script downloads the latest Setup from [Releases](https://github.com/Konayukiw/Flect/releases/latest), checks its SHA256 against the one GitHub publishes, and installs Flect. If the .NET 10 Desktop Runtime is missing, it asks before installing it, and Windows then asks for administrator permission.
-
-After installing, right-click any file or folder and choose **Show more options** to find Flect.
-
-> **Why "Show more options"?**  - Windows 11 gives its short right-click menu. You can bring it up to the top level. See [FAQ](#faq) below.
-
-To change detailed settings, open **Flect** from the Start menu.
-
----
-
-## Features
-
-**Your original files are never touched.** 
-
-Every process writes a new file next to the original - nothing is overwritten or replaced. If a name is already taken, the new file gets a `(2)` suffix, exactly like Explorer does. 
-Deletions go to the Recycle Bin by default and they can be undone. A task that fails or is cancelled cleans up whatever it had written.
-
-Select as many files as you like - these run over the whole selection at once, not one file at a time.
-
-### Images
-
-| | |
+| Area | Tasks |
 | --- | --- |
-| **Resize** | Scale down by percentage, or to custom pixels |
-| **Compress** | Squeeze down to a target file size |
-| **Rotate** | Any angle - corners stay transparent, or turn white if the format has no alpha |
-| **Convert** | Between PNG, JPG, WEBP, HEIC, ICO, GIF and SVG |
-| **OCR** | Read the text out of an image, to a file, the clipboard, or just on screen |
-| **Remove Metadata** | Strip EXIF, GPS coordinates, comments and camera information |
-| **Remove Background** | Make one colour transparent |
+| Images | resize (%, pixels), compress to a target size, rotate, convert (PNG, JPG, WEBP, HEIC, ICO, GIF, SVG), OCR, strip metadata, color-key background |
+| Video / audio | resize, trim, thumbnail, compress (incl. Discord size), rotate, convert, extract audio (VideoToolbox optional) |
+| PDF | preview, merge, to PNG / JPG / text |
+| Text / JSON | convert formats, change encoding or line endings, pretty-print, sort keys |
+| Folders | find duplicates (byte-verified), remove empty folders, tree, analyze, bulk rename, compress |
+| Archives / code | safe extraction (ZIP, 7z, tar...), JAR decompile (CFR) |
 
-> OCR requires Windows language pack with OCR enabled. If you haven't downloaded the language you need, read [FAQ](#faq) for language pack setup.
-
-### Videos & audios
-
-| | |
-| --- | --- |
-| **Resize** | Scale down by percentage or to custom pixels |
-| **Trim** | Scrub to the part you want and keep just that - instantly, no re-encoding |
-| **Thumbnail** | Export any single frame as a PNG or JPG image |
-| **Subtitles** | Transcribe the spoken words into an SRT, VTT or TXT file |
-| **Compress** | Hit a target size - including a one-click Discord preset |
-| **Rotate** | Any angle, with a chosen fill colour |
-| **Convert** | Between MP4, MOV, MKV, M4A, AVI, WEBM, FLV,  animated GIF |
-| **Extract Audio** | Extract soundtrack out to MP3, M4A, WAV, AAC, OGG and more |
-
-### Folders
-
-| | |
-| --- | --- |
-| **Remove Duplicate** | Find identical files and remove them |
-| **Remove Empty** | Clear out empty folders |
-| **Tree** | Print the folder structure |
-| **Rename** | Batch rename with a custom prefix, suffix or numbering |
-| **Analyze** | Show total size, largest files, breakdown by file type, duplicates and empty folders |
-| **Compress** | Pack a folder into a ZIP, 7z, TAR or tar.gz |
-
-Duplicates are matched on size, hash and per-byte comparison.
-
-### Archives
-
-| | |
-| --- | --- |
-| **Extract** | Unpack ZIP, 7z, TAR, tar.gz and RAR archives into a new folder |
-
-RAR is read-only: Flect can extract `.rar` files but cannot create them. This is technical capacity and not caused by my laziness.
-
-### Text files
-
-| | |
-| --- | --- |
-| **PDF** | Preview, merge several into one, or export to PNG, JPG or TXT |
-| **TEXT** | Convert between data formats, change the encoding, or switch line endings |
-| **JSON** | Pretty print, sort keys with rules |
-| **JAR** | Decompile into a folder of readable Java source |
-
-## Conversion style
-
-| From | To |
-| --- | --- |
-| **PNG, JPG, WEBP, HEIC, ICO, GIF, SVG** | Any other format in this row |
-| **MP4, MOV, MKV, M4A, AVI, WEBM, FLV** | Any other format in this row + GIF |
-| **MP3, WAV, AIF, AIFF, AAC, OGG, WMA** | Any other format in this row + M4A |
-| Video → **Extract Audio** | MP3, M4A, WAV, AIF, AIFF, AAC, OGG, WMA |
-| **PDF** | PNG, JPG, TXT |
-| **Any text file** | TXT |
-| **CSV** | JSON, XML, HTML, MD |
-| **JSON** | CSV, XML |
-| **XML** | JSON |
-| **INI, CFG, CONF** | JSON, XML |
-| **JAR** | A folder of decompiled `.java` sources |
-| **Folder** | ZIP, 7z, TAR, tar.gz archive of the folder |
-| Text encodings | UTF-8, UTF-8 (BOM), UTF-16, Shift_JIS |
-| Line endings | CRLF (Windows), LF (Unix) |
-
-## Settings
-
-Open **Flect** from the Start menu.
-
-- **General** - Theme, language (English / 日本語 / 简体中文), when the progress window closes by itself, and a checkbox for every context-menu entry so you can hide the ones you never use.
-- **Folder** - Duplicate matching rules, whether deletions use the Recycle Bin, folders to skip while scanning, rename defaults, what counts as an "empty" folder, and the archive format used by folder compression (ZIP / 7z / TAR / tar.gz).
-- **Video** - Codec, hardware acceleration (NVENC / Quick Sync / AMF), whether to favour speed or quality, GIF export settings, thumbnail format (PNG / JPG), JPG quality and maximum width, the rotation fill colour, and the subtitle model, device, language and output format.
-- **Image** - WebP fallback for compression, the colour Remove Background keys out, and exactly which metadata gets stripped.
-- **Text** - What to do with characters Shift_JIS cannot represent, and JSON key-sorting rules.
-- **OCR** - Recognition language, where the text goes, and the output encoding.
-
-The menu presets (like `50%`, `10 MB`, `45°` entries) are editable here too.
+Subtitles (speech to SRT/VTT/TXT) use the `whisper` filter of a whisper-enabled ffmpeg (e.g. Homebrew `ffmpeg-full`) plus a model installed with `scripts/fetch-whisper-model.sh`. Not implemented yet: AI background removal.
 
 ## Requirements
 
-| | |
+- macOS 14 or later, Apple Silicon
+- Xcode Command Line Tools (Swift 5.9+), [Rust](https://rustup.rs)
+- `brew install ffmpeg-full sevenzip` (video/audio and 7z; optional `openjdk` for JAR decompilation)
+
+## Download (ad-hoc signed build)
+
+Releases contain `Flect-for-Mac-macos-arm64.zip` (Apple Silicon, macOS 14+) and its `.sha256`. The app is **not notarized**, so macOS will warn on first launch:
+
+```bash
+shasum -a 256 -c Flect-for-Mac-macos-arm64.zip.sha256     # verify the download
+unzip Flect-for-Mac-macos-arm64.zip && mv Flect-for-Mac.app ~/Applications/
+xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app
+~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # install the Quick Actions
+killall Finder
+```
+If you would rather not trust a binary, build it yourself (below). You also need `brew install ffmpeg-full sevenzip`.
+
+## Build and install
+
+```bash
+git clone https://github.com/whitewater-png/Flect-fork-for-Mac.git
+cd Flect-fork-for-Mac
+scripts/build.sh --install     # builds, ad-hoc signs, installs ~/Applications/Flect-for-Mac.app and the Quick Actions
+killall Finder
+```
+
+Then right-click a file in Finder → **Quick Actions** → Flect. Open the app itself to change settings.
+
+## Security design
+
+- The Swift app does the UI and OS work; all file processing runs in a separate Rust process (`flect-engine`, `#![forbid(unsafe_code)]`) that talks JSON Lines over stdio. One process per run.
+- External tools run with argument arrays only (no shell), from fixed directories, with ffmpeg's protocol whitelist restricted to `file,pipe`.
+- Archive extraction rejects absolute and `..` paths, links, and decompression bombs.
+- Outputs are created exclusively; existing files are never overwritten. Duplicate deletion is confirmed by byte comparison.
+- JAR decompilation uses a pinned (SHA-256) CFR jar under `sandbox-exec` when available.
+- See [`SECURITY.md`](SECURITY.md) and [`docs/mac-port/02-requirements.ja.md`](docs/mac-port/02-requirements.ja.md).
+
+## Repository layout
+
+| Path | Contents |
 | --- | --- |
-| **Windows** | 64-bit Windows 11 or Windows 10 |
-| **.NET 10 Desktop Runtime** | Required. Setup checks for it and offers the download if it is missing. |
-| **HEVC Video Extensions** | Only to *write* `.heic` files. Reading HEIC works without it. From the Microsoft Store. |
-| **Java (JDK or JRE)** | Only to decompile `.jar` files. |
-| **Windows language pack** | Only for OCR, and only for the language you want to read. Flect's settings can open the installer for you. |
-| **Python 3.10+** | Only for the AI features (Remove Background, Subtitles). Flect creates a private environment on first use. Install from python.org or the Microsoft Store. |
-
-Everything else - the image, video, PDF and decompiler engines - ships inside the installer. The AI features fetch their engine and model over the internet the first time you use them, and nothing is ever uploaded anywhere; every operation runs on your PC.
-
-## FAQ
-
-<details>
-<summary><b>Can I get Flect into the first right-click menu?</b></summary>
-
-Yes, developers can install the [Windows 11 Extension](#better-windows-11-context-menu) to add Flect to the modern menu. It is separate from the standard installer.
-
-As an easier way, by switching Windows 11 back to the classic context menu. It affects every app - though most people find the classic menu more useful anyway.
-
-Open Terminal or Command Prompt and run:
-
-```powershell
-reg add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve
-taskkill /f /im explorer.exe
-start explorer.exe
-```
-
-To getthe Windows 11 menu back:
-
-```powershell
-reg delete "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}" /f
-taskkill /f /im explorer.exe
-start explorer.exe
-```
-
-Both restart Explorer, so your open Explorer windows will close. Nothing else is affected, and the change is per-user - no administrator rights needed.
-</details>
-　
-<details>
-<summary><b>Subtitles need Python and download a model?</b></summary>
-
-Yes - subtitles run on an AI model (Whisper by OpenAI) that Flect cannot ship inside the installer. Both are one-off:
-
-- **Python 3.10+**: the first time you add subtitles, Flect creates a private Python environment under `%LOCALAPPDATA%\Flect\env` and installs faster-whisper into it. The **Remove Background** AI feature shares that environment.
-- **The model** is downloaded once from Hugging Face into `%LOCALAPPDATA%\Flect\models`. The default *Small* model is about 480 MB; *Base* ~145 MB, *Medium* ~1.5 GB and *Large v3* ~3 GB. Pick the size in **Video → Subtitles**.
-- Nothing is uploaded. The audio never leaves your PC - transcription happens locally, and an NVIDIA GPU is used automatically when one is available (CUDA libraries are installed into the same environment).
-</details>
-　
-<details>
-<summary><b>Where will the converted files go?</b></summary>
-
-Right next to the original, in the same folder. Originals are never modified or deleted. If the name is taken, Flect adds suffixes like `(2)`, `(3)`.
-</details>
-　
-<details>
-<summary><b>Can I undo a deletion?</b></summary>
-
-Yes - Remove Duplicate and Remove Empty move files to the Recycle Bin by default, so you can restore them. How ever if you switch deletion mode to permanent in the settings, you cannot.
-</details>
-　
-<details>
-<summary><b>Why did "to HEIC" fail?</b></summary>
-
-Writing HEIC needs the **HEVC Video Extensions** from the Microsoft Store, which Flect cannot bundle.
-
-There is no free-to-use HEIC *encoder* to ship. Windows does have an encoder inside the HEVC Video Extensions, so Flect routes `to HEIC` there through WIC and leaves everything else to ImageMagick.
-
-Reading HEIC works on any machine.
-</details>
-　
-<details>
-<summary><b>OCR says there is no recognizer for my language</b></summary>
-
-Flect uses the text recognition built into Windows, which can only read languages whose recognizer is installed on your PC. Open Flect's settings → **OCR** to see what is installed and to add a language. Language packs are little bit heavy and the installer asks for administrator rights.
-</details>
-　
-<details>
-<summary><b>How does compressing to a target size work?</b></summary>
-
-For video, Flect works down a ladder and stops at the first rung that gets under your target: repackage the streams, re-encode only the audio, then re-encode the picture - and after that, correct the bitrate using the size the first attempt actually produced and try once more.
-
-The menu deliberately stays short. The depth lives in the settings instead: codec, hardware acceleration, and whether compression is allowed to trade resolution or frame rate for size. For more detailed control, consider using [Compressor](https://compressor-v1.vercel.app).
-
-Video compression stages through a hidden scratch directory next to the destination, so a partial file never appears - the output shows up only once it is complete.
-</details>
-　
-<details>
-<summary><b>My trimmed clip starts a bit earlier than I marked</b></summary>
-
-That is the price of not re-encoding. Video is stored in chunks that begin with a keyframe, and the frames after one cannot be decoded without it - so a cut that copies the streams has to begin at the keyframe before your mark, which can be a few seconds early. Everything you asked for is there; there is just a little extra in front, and the file is finished the moment you click.
-
-If you need the cut exactly where you put it, open Flect's settings → **Video → Trim** and choose to land on the exact frame. That re-encodes the clip, so it takes as long as any other encode and loses a little quality.
-
-Trim only appears when you have selected a single video - one start and end cannot mean the same thing across clips of different lengths.
-</details>
-　
-<details>
-<summary><b>Why did Explorer restart when I installed?</b></summary>
-
-Explorer loads the menu handler into itself and holds onto it. Installing over a version that has already been used therefore needs Explorer to let go first. Setup does that on its own, and only when the file is genuinely locked.
-</details>
-　
-<details>
-<summary><b>The menu has more entries than I need</b></summary>
-
-Open Flect from the Start menu, go to **General → Context menu items**, and untick anything you do not want. Unchecked entries disappear from the Explorer menu entirely.
-</details>
-　
-<details>
-<summary><b>Where are my settings stored?</b></summary>
-
-In `%APPDATA%\Flect\settings.json`. The handful of values the Explorer menu itself needs are mirrored to `HKCU\Software\Flect`.
-
-**Reset settings** in the app clears both of those, and nothing else - the shell registration and the learned encoder results stay put.
-</details>
-　
-<details>
-<summary><b>How do I uninstall?</b></summary>
-
-Through **Settings › Apps › Installed apps** in Windows, like any other program. Files you have already produced are left alone.
-</details>
-　
-<details>
-<summary><b>Known limitations</b></summary>
-
-- WebM can only hold VP9 or AV1. While WebM is the chosen container, H.264 and H.265 are swapped for VP9 and the audio is encoded as Opus. **Auto** saves VP9 as `.webm` and every other codec as `.mp4`.
-- MOV cannot hold VP9 or AV1, so resizing, rotating or converting a `.mov` with either codec selected writes H.264 instead.
-- Hardware acceleration is offered only after Flect confirms your GPU can actually encode. It checks the first time you open the settings, and rechecks if you change graphics card or driver. If an encode fails on the GPU anyway, it finishes on the CPU instead.
-</details>
-
----
-
-## For development
-
-### Build
-
-```powershell
-.\scripts\fetch.ps1          # Downloads dependencies
-.\scripts\build.ps1          # Compiles both halves
-.\scripts\package.ps1        # Wraps installer
-```
-
-- If blocked, insert `powershell -ExecutionPolicy RemoteSigned -File ` at the top of the command.
-- `scripts\package.ps1` needs Inno Setup (`winget install JRSoftware.InnoSetup`).
-
-Flect is two halves: C++ shell extension (`src/Shell`) to render the menu inside Explorer, and a .NET worker (`src/App`) that does the actual processes and manages settings. The menu is a classic `IContextMenu` handler, which is why Windows 11 files it under "Show more options".
-
-### Better Windows 11 context menu
-
-`src/Shell/Modern` adds **Flect** directly to Windows 11's initial right-click menu through `IExplorerCommand` and a sparse MSIX package. It reuses the existing file classification, menu labels, hidden-item settings, presets, and worker commands. The classic handler stays available.
-
-Windows supports only one level of `IExplorerCommand` subcommands. The modern Flect submenu therefore lists operations such as **Resize** and **Convert**; selecting one opens its format or preset choices in a small native popup. Operations without choices start the existing worker immediately. File inspection is deferred from Explorer's synchronous UI path, and the popup and worker run in separate processes.
-
-To build and try the optional extension, install normal Flect first and use an x64 Windows 11 machine with Visual Studio C++ build tools and a Windows SDK:
-
-```powershell
-.\scripts\modern\test.ps1                 # Build and test COM contracts
-.\scripts\modern\package.ps1              # Create and sign the sparse package locally
-.\scripts\modern\register-elevated.ps1    # Request UAC, trust the local signer, and register
-```
-
-The local packaging script creates a non-exportable code-signing key in `CurrentUser\My` and exports only the public certificate to the ignored `build\modern` directory. Registration adds that certificate to `LocalMachine\TrustedPeople`, so it requires administrator approval. The add-on binaries live in `%LOCALAPPDATA%\FlectModernMenu`, separate from the existing Flect installation. Explorer may need to be reopened or the user signed out and back in after registration. An add-on update that finds its DLL still loaded also requires signing out before retrying.
-
-This is an opt-in development package; the normal installer and release signing workflow are unchanged. A distributable release should use the project's production signing identity rather than sharing the locally generated development certificate.
-
-```powershell
-.\scripts\modern\test.ps1 -InvokeWorker -Packaged       # Also test installed COM activation and JSON formatting
-.\scripts\modern\uninstall.ps1                          # Remove the modern menu only
-.\scripts\modern\uninstall.ps1 -RemoveLocalCertificate  # Also remove its machine trust entry (UAC)
-```
-
-The default smoke tests run without an installed worker or elevated permissions and are included in CI. They cover Unicode paths, multiple selection, unsupported and mixed selections, folders, submenu enumeration, COM lifetime, and packaged activation when requested. Uninstalling the add-on preserves the original Flect installation and its settings.
-
-### Dependencies
-
-| Purpose | Component | Comes from |
-| --- | --- | --- |
-| Runtime | .NET 10 Desktop Runtime | Setup automatically checks |
-| Images | Magick.​NET (ImageMagick) | NuGet |
-| Video | ffmpeg / ffprobe | `scripts\fetch.ps1` |
-| Archives | 7-Zip (7za.exe + 7z.exe) | `scripts\fetch.ps1` |
-| PDF | PDFtoImage / PDFium / PdfPig | NuGet |
-| Hashing | System.IO.Hashing | NuGet |
-| Encoding detection | UTF.Unknown | NuGet |
-| Decompile `.jar` | cfr.jar | `scripts\fetch.ps1` |
-| Decompile prerequisite | JDK / JRE | Installed by the user |
-| Write HEIC | Windows HEVC Video Extensions | Installed by the user |
-| Subtitles | faster-whisper | Installed at the first use |
-
----
+| `core/` | Rust workspace: `flect-core` (processing), `flect-engine` (stdio engine), `flect-tools` (Quick Action generator) |
+| `app/` | Swift package: `FlectCore` (testable logic), `FlectApp` (AppKit/SwiftUI app) |
+| `scripts/` | `build.sh`, `fetch-cfr.sh` |
+| `docs/mac-port/` | Design, protocol, parity table, verification guide (Japanese) |
+| `legacy/windows/` | Original Windows sources, kept as the behavior reference |
 
 ## License
 
-Flect is licensed under the [Apache License 2.0](LICENSE).
-
-If you reuse, redistribute, or incorporate source code from Flect into another project, you must:
-
-- Preserve all existing copyright, license, and attribution notices, as required by the Apache License 2.0.
-- Include appropriate attribution to the original author, [**Konayukiw**](@Konayukiw), in your project's `README.md`, `NOTICE`, `NOTICES`, `THIRD-PARTY-NOTICE`, `THIRD-PARTY-NOTICES` or `LICENSE` file.
-- Include a copy of the Apache License 2.0 and comply with its applicable terms.
-
-Suggested attribution:
-
-> Portions of this project are derived from [Flect](https://flect.konayuki.xyz), originally created by @Konayukiw.
-
-This attribution requirement applies to projects incorporating Flect's source code, not projects that merely use Flect as an end-user application.
-
-It bundles third-party components under their own licences including ImageMagick, FFmpeg (GPLv3), PDFium, 7-Zip (LGPL) and CFR. Every component, its licence and the full licence text are listed in [NOTICES](/NOTICES.md).
+Apache License 2.0 - see [`LICENSE`](LICENSE), [`NOTICE`](NOTICE) and [`NOTICES.md`](NOTICES.md). Original work © Konayukiw.
