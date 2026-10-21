@@ -49,6 +49,37 @@ final class TrashGuardTests: XCTestCase {
         XCTAssertEqual(TrashGuard.check(sel.appendingPathComponent("gone.txt").path, inputs: inputs, kind: .files), .missing)
     }
 
+    /// Another spelling of a selected folder is that folder; a case variant of a selected folder still allows the
+    /// paths inside it.
+    func testSpellingsOfSelectedItems() throws {
+        let root = scratch()
+        let sel = root.appendingPathComponent("MixedCase"), inside = sel.appendingPathComponent("Sub/dup.txt")
+        file(inside)
+        let variants = [root.appendingPathComponent("mixedcase").path, root.appendingPathComponent("MIXEDCASE").path, sel.path + "/", sel.path + "//"]
+        // the selected folder in any spelling is refused as a trash path...
+        for candidate in [root.appendingPathComponent("mixedcase").path, root.appendingPathComponent("MIXEDCASE").path] {
+            XCTAssertEqual(TrashGuard.check(candidate, inputs: [sel.path], kind: .emptyFolders), .isSelected, candidate)
+            XCTAssertEqual(TrashGuard.check(sel.path, inputs: [candidate], kind: .emptyFolders), .isSelected, candidate)
+        }
+        // ...and selecting it in any spelling still allows what is inside it
+        for input in variants {
+            XCTAssertNil(TrashGuard.check(inside.path, inputs: [input], kind: .files), input)
+            XCTAssertNil(TrashGuard.check(root.appendingPathComponent("mixedcase/sub/dup.txt").path, inputs: [input], kind: .files), input)
+            XCTAssertEqual(TrashGuard.check(sel.path, inputs: [input], kind: .emptyFolders), .isSelected, input)
+        }
+        // decomposed vs precomposed name of a selected folder
+        let nfc = root.appendingPathComponent("caf\u{E9}")
+        dir(nfc)
+        let nfd = root.appendingPathComponent("cafe\u{301}").path
+        XCTAssertEqual(TrashGuard.check(nfd, inputs: [nfc.path], kind: .emptyFolders), .isSelected)
+        // a selected file or link is not a folder the engine scanned: nothing is inside it
+        let link = root.appendingPathComponent("link")
+        XCTAssertEqual(symlink(sel.path, link.path), 0)
+        XCTAssertEqual(TrashGuard.check(inside.path, inputs: [link.path], kind: .files), .outsideSelection)
+        XCTAssertEqual(TrashGuard.check(inside.path, inputs: [link.path + "/"], kind: .files), .outsideSelection)
+        XCTAssertEqual(TrashGuard.check(inside.path, inputs: [inside.path], kind: .files), .outsideSelection)
+    }
+
     func testLinksAreNeverTrashedOrFollowed() throws {
         let root = scratch()
         let sel = root.appendingPathComponent("sel"), elsewhere = root.appendingPathComponent("elsewhere")
