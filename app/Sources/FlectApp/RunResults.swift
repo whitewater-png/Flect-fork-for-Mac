@@ -40,12 +40,16 @@ extension AppModel {
     var isSettingsScreen: Bool { if case .settings = screen { return true }; return false }
 
     /// Called once per finished run: remembers what it created, then tells the user (notification).
-    func recordFinished(outcome: Outcome, summary: String?, partial: Bool = false) {
+    func recordFinished(outcome: Outcome, summary: String?, partial: Bool = false, counts: (removed: Int, leftAlone: Int)? = nil) {
         let recorded = RecordedOutcome.string(outcome.rawValue, problems: partial)
-        let record = RunRecorder.record(task: tracker.task, outcome: recorded, startedAt: tracker.startedAt, finishedAt: Date(),
+        var record = RunRecorder.record(task: tracker.task, outcome: recorded, startedAt: tracker.startedAt, finishedAt: Date(),
                                         inputs: tracker.inputs, reportedOutputs: tracker.outputs, summary: summary)
+        record.removed = counts?.removed
+        record.leftAlone = counts?.leftAlone
         if record.outputs.isEmpty {
             currentRecordID = nil
+            // A deleting run creates no files, but what it removed and left alone is still worth keeping.
+            if counts != nil { history = historyStore.upsert(record) }
         } else {
             history = historyStore.upsert(record)
             currentRecordID = record.id

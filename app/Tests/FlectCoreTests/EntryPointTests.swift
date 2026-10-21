@@ -376,7 +376,7 @@ final class EntryPointTests: XCTestCase {
 
     // MARK: notifications and strings
 
-    func testNotificationTextIsLocalized() {
+    func testNotificationTextIsLocalized() throws {
         let en = Loc(language: .english), ja = Loc(language: .japanese)
         let a = NotificationText.make(outcome: "succeeded", summary: "Resized.", outputCount: 3, loc: en)
         XCTAssertEqual(a.title, "Flect: finished")
@@ -396,6 +396,25 @@ final class EntryPointTests: XCTestCase {
         let rec = RunRecorder.record(task: "folder.removeDuplicate?mode=oldest", outcome: RecordedOutcome.string("succeeded", problems: true),
                                      startedAt: Date(), finishedAt: Date(), inputs: [], reportedOutputs: [], summary: nil)
         XCTAssertEqual(rec.outcome, "partial")
+        // deleting runs: recorded with counts even without outputs
+        XCTAssertTrue(DeletionCounts.isDeletingTask("folder.removeDuplicate?mode=oldest"))
+        XCTAssertTrue(DeletionCounts.isDeletingTask("folder.removeEmpty"))
+        XCTAssertFalse(DeletionCounts.isDeletingTask("folder.removeEmptyX"))
+        XCTAssertFalse(DeletionCounts.isDeletingTask("image.resize?scale=50"))
+        XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.deletedPermanentlyPartial", args: ["7", "70", "2"], trash: .init()), 7)
+        XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.cancelledAfterDeleting", args: ["3", "30"], trash: .init()), 3)
+        XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.recycled", args: ["5", "50"], trash: .init(requested: 5, moved: 4)), 4)
+        XCTAssertEqual(DeletionCounts.removed(summaryKey: "msg.duplicatesAllChanged", args: ["3"], trash: .init()), 0)
+        XCTAssertTrue(DeletionCounts.leftAloneKeys.isSuperset(of: ["msg.duplicateChanged", "msg.emptyRemoveFailed", "msg.emptySkipped"]))
+        var counted = rec
+        counted.removed = 7; counted.leftAlone = 2
+        let data = try JSONEncoder().encode(counted)
+        XCTAssertEqual(try JSONDecoder().decode(RunRecord.self, from: data).leftAlone, 2)
+        // records written before these fields existed still load
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        old["removed"] = nil; old["leftAlone"] = nil
+        let legacy = try JSONDecoder().decode(RunRecord.self, from: JSONSerialization.data(withJSONObject: old))
+        XCTAssertNil(legacy.removed)
         let j = NotificationText.make(outcome: "succeeded", summary: nil, outputCount: 2, loc: ja)
         XCTAssertEqual(j.title, "Flect: 完了しました")
         XCTAssertEqual(j.body, "2 個のファイルを作成")

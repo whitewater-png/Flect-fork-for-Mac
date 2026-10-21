@@ -76,6 +76,10 @@ public struct RunRecord: Codable, Equatable, Identifiable {
     /// The (standardized) input paths of the run, so `RunHistoryStore.load` can re-check that no output is an input.
     /// Absent in records written by older versions.
     public var inputs: [String]? = nil
+    /// Deleting tasks (Remove Duplicate, Remove Empty): items removed or moved to the Trash, and items left alone
+    /// (changed, refused, or could not be removed). Absent for other tasks and in older records.
+    public var removed: Int? = nil
+    public var leftAlone: Int? = nil
 
     /// Outputs that undo can still act on.
     public var undoableCount: Int { outputs.filter { $0.status != .trashed }.count }
@@ -232,6 +236,27 @@ public final class RunHistoryStore {
 }
 
 // MARK: notification text
+
+/// What a deleting run (Remove Duplicate, Remove Empty) did, for its history record.
+public enum DeletionCounts {
+    /// Warnings with which the engine reports an item it left alone.
+    public static let leftAloneKeys: Set<String> = ["msg.duplicateChanged", "msg.emptyRemoveFailed", "msg.emptySkipped"]
+
+    /// Whether `task` is a deleting task: its runs are recorded even when they created no files.
+    public static func isDeletingTask(_ task: String) -> Bool {
+        let name = task.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? task
+        return name == "folder.removeDuplicate" || name == "folder.removeEmpty"
+    }
+
+    /// Items removed: in Trash mode those the app moved; in permanent mode the count the engine's summary gives.
+    public static func removed(summaryKey: String?, args: [String], trash: TrashGuard.Tally) -> Int {
+        if trash.requested > 0 { return trash.moved }
+        let permanent: Set<String> = ["msg.deletedPermanently", "msg.deletedPermanentlyPartial", "msg.emptyDeleted",
+                                      "msg.emptyDeletedPartial", "msg.cancelledAfterDeleting"]
+        guard let k = summaryKey, permanent.contains(k) else { return 0 }
+        return Int(args.first ?? "") ?? 0
+    }
+}
 
 /// The outcome a finished run is recorded and announced with.
 public enum RecordedOutcome {

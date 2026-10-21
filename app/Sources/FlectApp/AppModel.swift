@@ -193,13 +193,16 @@ final class AppModel: ObservableObject {
             var summary: String?
             var sawProblem = false
             var trashed = TrashGuard.Tally()
+            var leftAlone = 0, doneKey: String?, doneArgs: [String] = []
             for await event in events {
                 switch event {
                 case .status(let k, let a): status = loc.f(k, a)
                 case .step(let d, let t): done = d; total = t; filePermille = 0
                 case .fileStep(let p): filePermille = p
                 case .info(let k, let a): log.append(LogLine(kind: .info, text: loc.f(k, a)))
-                case .warn(let k, let a): log.append(LogLine(kind: .warn, text: loc.f(k, a))); sawProblem = true
+                case .warn(let k, let a):
+                    log.append(LogLine(kind: .warn, text: loc.f(k, a))); sawProblem = true
+                    if DeletionCounts.leftAloneKeys.contains(k) { leftAlone += 1 }
                 case .error(let k, let a): log.append(LogLine(kind: .error, text: loc.f(k, a))); sawProblem = true
                 case .needs(let what, let ps, let fingerprints):
                     if what == "trash" {
@@ -212,22 +215,28 @@ final class AppModel: ObservableObject {
                 case .done(let o, let key, let args):
                     outcome = o
                     summary = key.map { loc.f($0, args) }
+                    doneKey = key; doneArgs = args
                 case .crashed:
                     log.append(LogLine(kind: .error, text: loc.t("app.engineCrashed")))
                     sawProblem = true
                 }
             }
             if currentRun == scope.run { currentRun = nil }
+            let notDone = leftAlone + trashed.notMoved
+            let counts = DeletionCounts.isDeletingTask(task)
+                ? (removed: DeletionCounts.removed(summaryKey: doneKey, args: doneArgs, trash: trashed), leftAlone: notDone) : nil
             finishRun(outcome: outcome, summary: TrashGuard.runSummary(summary, tally: trashed, loc: loc), sawProblem: sawProblem,
-                      partial: trashed.notMoved > 0)
+                      partial: notDone > 0, counts: counts)
         }
     }
 
-    /// `partial`: the app could not carry out all of a successful run (Trash items refused or not moved); it is then
-    /// recorded and announced as finished with problems.
-    func finishRun(outcome: Outcome, summary: String?, sawProblem: Bool, partial: Bool = false) {
+    /// `partial`: a successful run left items alone (the engine skipped them, or the app refused or could not move them
+    /// to the Trash); it is then recorded and announced as finished with problems. `counts`: for a deleting task, what
+    /// it removed and left alone (recorded even when the run created no files).
+    func finishRun(outcome: Outcome, summary: String?, sawProblem: Bool, partial: Bool = false,
+                   counts: (removed: Int, leftAlone: Int)? = nil) {
         cancelling = false
-        recordFinished(outcome: outcome, summary: summary, partial: partial)
+        recordFinished(outcome: outcome, summary: summary, partial: partial, counts: counts)
         // A privacy check with one unreadable file ends as failed, but the other reports are still worth showing.
         if let (name, data) = pendingData.first, outcome == .succeeded || name == "privacy_report", showResult(name: name, data: data) { return }
         finished = true

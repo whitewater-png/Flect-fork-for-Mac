@@ -258,20 +258,43 @@ fn remove_duplicates_with(
     let kept_of = kept_copies(groups, doomed, mode);
     let kept_of = |d: &folder::ScannedFile| kept_of.get(d.path.as_path()).copied();
     let prog = Prog(ctx);
-    let (mut handed, mut bytes) = (Vec::new(), 0u64);
+    let (mut handed, mut bytes, mut skipped) = (Vec::new(), 0u64, 0usize);
+    // Cancelled part-way: say how many were already removed (permanent) or handed on (Trash).
+    let stopped = |handed: &Vec<PathBuf>, bytes: u64| {
+        if handed.is_empty() {
+            return cancelled(ctx);
+        }
+        let key = if permanent {
+            "msg.cancelledAfterDeleting"
+        } else {
+            "msg.cancelledAfterTrashing"
+        };
+        done(
+            ctx,
+            Outcome::Cancelled,
+            Some(key),
+            vec![handed.len().to_string(), bytes.to_string()],
+        );
+    };
     for (i, d) in doomed.iter().enumerate() {
+        if prog.cancelled() {
+            return stopped(&handed, bytes);
+        }
         let kept = kept_of(d);
         if (mode != DuplicateMode::DeleteAll && kept.is_none()) || !roots.contains(&d.root.path) {
             changed_event(ctx, &d.path);
+            skipped += 1;
             continue;
         }
         match folder::remove_duplicate(d, kept, permanent, &prog, before_unlink) {
-            Err(_) => return cancelled(ctx),
+            Err(_) => return stopped(&handed, bytes),
             Ok(folder::Removal::Changed) => {
                 changed_event(ctx, &d.path);
+                skipped += 1;
                 continue;
             }
             Ok(folder::Removal::Failed(e)) => {
+                skipped += 1;
                 (ctx.emit)(Event::Warn {
                     key: "msg.emptyRemoveFailed".into(),
                     args: vec![
@@ -296,14 +319,24 @@ fn remove_duplicates_with(
         });
     }
     if handed.is_empty() {
-        return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
+        // Say when there was something to remove but every one of them was left alone.
+        let (key, args) = if skipped > 0 {
+            ("msg.duplicatesAllChanged", vec![skipped.to_string()])
+        } else {
+            ("msg.nothingToRemove", vec![])
+        };
+        return done(ctx, Outcome::Succeeded, Some(key), args);
     }
-    let args = vec![handed.len().to_string(), bytes.to_string()];
-    let key = if permanent {
-        "msg.deletedPermanently"
-    } else {
-        "msg.recycled"
+    let mut args = vec![handed.len().to_string(), bytes.to_string()];
+    let key = match (permanent, skipped > 0) {
+        (true, false) => "msg.deletedPermanently",
+        (false, false) => "msg.recycled",
+        (true, true) => "msg.deletedPermanentlyPartial",
+        (false, true) => "msg.recycledPartial",
     };
+    if skipped > 0 {
+        args.push(skipped.to_string());
+    }
     done(ctx, Outcome::Succeeded, Some(key), args);
 }
 
@@ -341,20 +374,33 @@ fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
                 for (p, why) in &out.skipped {
                     skipped_event(p, why.as_deref());
                 }
-                if out.removed == 0 {
-                    return done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]);
+                let skipped = out.skipped.len();
+                match (out.removed, skipped) {
+                    (0, 0) => done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]),
+                    (0, s) => done(
+                        ctx,
+                        Outcome::Succeeded,
+                        Some("msg.emptyNoneRemoved"),
+                        vec![s.to_string()],
+                    ),
+                    (n, 0) => done(
+                        ctx,
+                        Outcome::Succeeded,
+                        Some("msg.emptyDeleted"),
+                        vec![n.to_string()],
+                    ),
+                    (n, s) => done(
+                        ctx,
+                        Outcome::Succeeded,
+                        Some("msg.emptyDeletedPartial"),
+                        vec![n.to_string(), s.to_string()],
+                    ),
                 }
-                done(
-                    ctx,
-                    Outcome::Succeeded,
-                    Some("msg.emptyDeleted"),
-                    vec![out.removed.to_string()],
-                );
             }
         }
     } else {
         // One folder at a time: checked, then handed on with its (device, inode) right away.
-        let (mut handed, mut total) = (0usize, 0usize);
+        let (mut handed, mut total, mut skipped) = (0usize, 0usize, 0usize);
         for p in planned {
             let (keep, n, _) = ft::recheck_empty(std::slice::from_ref(p), f);
             match (keep.first(), folder::dir_id(p)) {
@@ -363,18 +409,22 @@ fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
                     handed += 1;
                     total += n;
                 }
-                _ => skipped_event(p, None),
+                _ => {
+                    skipped_event(p, None);
+                    skipped += 1;
+                }
             }
         }
-        if handed == 0 {
-            return done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]);
-        }
-        done(
-            ctx,
-            Outcome::Succeeded,
-            Some("msg.emptyRecycled"),
-            vec![total.to_string()],
-        );
+        let (key, args) = match (handed, skipped) {
+            (0, 0) => ("msg.noEmpty", vec![]),
+            (0, s) => ("msg.emptyNoneRemoved", vec![s.to_string()]),
+            (_, 0) => ("msg.emptyRecycled", vec![total.to_string()]),
+            (_, s) => (
+                "msg.emptyRecycledPartial",
+                vec![total.to_string(), s.to_string()],
+            ),
+        };
+        done(ctx, Outcome::Succeeded, Some(key), args);
     }
 }
 
@@ -479,10 +529,25 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                 return fail(ctx, "msg.ioError", "inconsistent duplicate plan".into());
             }
             if doomed.is_empty() {
+                if !changed.is_empty() {
+                    let n = changed.len().to_string();
+                    return done(
+                        ctx,
+                        Outcome::Succeeded,
+                        Some("msg.duplicatesAllChanged"),
+                        vec![n],
+                    );
+                }
                 return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
             }
             if !plan_holds_or_report(ctx, &groups, &doomed) {
-                return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
+                let n = doomed.len().to_string();
+                return done(
+                    ctx,
+                    Outcome::Succeeded,
+                    Some("msg.duplicatesAllChanged"),
+                    vec![n],
+                );
             }
             let bytes: u64 = doomed.iter().map(|d| d.size).sum();
             if params.get("dry").is_some_and(|v| v == "1") {
@@ -1190,10 +1255,12 @@ mod tests {
                 "{ev:?}"
             );
             assert!(find(&ev, "needs").is_none(), "{ev:?}");
+            let done = find(&ev, "done").unwrap();
             assert_eq!(
-                find(&ev, "done").unwrap()["summary_key"],
-                "msg.nothingToRemove"
+                done["summary_key"], "msg.duplicatesAllChanged",
+                "every candidate skipped"
             );
+            assert_eq!(done["summary_args"], json!(["1"]));
 
             // 2. the copy that stays is replaced by an atomic save with other content
             let d = make();
@@ -1309,6 +1376,82 @@ mod tests {
                 assert!(!r.join("free").exists(), "{ev:?}");
             }
         }
+    }
+
+    /// Runs that leave something alone say so: a partial summary with the count, and a cancelled
+    /// permanent run says how many were already deleted.
+    #[test]
+    fn partial_and_cancelled_runs_report_their_counts() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        let make = || {
+            let d = tempfile::tempdir().unwrap();
+            for n in ["a", "b", "c"] {
+                fs::write(d.path().join(format!("{n}1.txt")), n).unwrap();
+                fs::write(d.path().join(format!("{n}2.txt")), n).unwrap();
+            }
+            d
+        };
+        // one of three duplicates changes after the checks of the others: partial
+        for (settings, key) in [
+            (&perm, "msg.deletedPermanentlyPartial"),
+            (&Settings::default(), "msg.recycledPartial"),
+        ] {
+            let d = make();
+            let ev = remove_stale(d.path(), DuplicateMode::KeepOldest, settings, |doomed| {
+                assert_eq!(doomed.len(), 3);
+                fs::write(&doomed[1].path, "x").unwrap();
+            });
+            let done = find(&ev, "done").unwrap();
+            assert_eq!(done["summary_key"], key, "{ev:?}");
+            assert_eq!(done["summary_args"][0], "2");
+            assert_eq!(done["summary_args"][2], "1");
+        }
+        // cancelled after the first removal
+        let d = make();
+        let s = folder::scan(
+            &[d.path().to_path_buf()],
+            &folder::ExclusionFilter::default(),
+            &Default::default(),
+            &folder::NullProgress,
+        )
+        .unwrap();
+        let groups =
+            folder::find_duplicates(&s.files, &Default::default(), &folder::NullProgress).unwrap();
+        let doomed = folder::to_delete(&groups, DuplicateMode::KeepOldest);
+        let events = Mutex::new(Vec::new());
+        let emit = |e: Event| {
+            events
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(&e).unwrap())
+        };
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let cancel = || stop.load(std::sync::atomic::Ordering::SeqCst);
+        let ctx = Ctx {
+            settings: &perm,
+            cancelled: &cancel,
+            emit: &emit,
+        };
+        let hook = |_: &folder::ScannedFile| stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        remove_duplicates_with(
+            &ctx,
+            &groups,
+            &doomed,
+            DuplicateMode::KeepOldest,
+            &[d.path().to_path_buf()],
+            &hook,
+        );
+        let ev = events.into_inner().unwrap();
+        let done = find(&ev, "done").unwrap();
+        assert_eq!(done["outcome"], "cancelled", "{ev:?}");
+        assert_eq!(done["summary_key"], "msg.cancelledAfterDeleting");
+        assert_eq!(done["summary_args"][0], "1");
+        assert_eq!(
+            fs::read_dir(d.path()).unwrap().count(),
+            5,
+            "exactly one removed"
+        );
     }
 
     /// `kept_of` searched every group for every doomed file (16,000 pairs: ~34 s in debug).
@@ -1497,7 +1640,9 @@ mod tests {
             "{why:?}"
         );
         assert!(parent.join("E").exists());
-        assert_eq!(find(&ev, "done").unwrap()["summary_key"], "msg.noEmpty");
+        let done = find(&ev, "done").unwrap();
+        assert_eq!(done["summary_key"], "msg.emptyNoneRemoved", "{ev:?}");
+        assert_eq!(done["summary_args"], json!(["1"]));
     }
 
     /// Option names are never percent-decoded: `%63onfirm` is not `confirm` (the CLI guard matched
