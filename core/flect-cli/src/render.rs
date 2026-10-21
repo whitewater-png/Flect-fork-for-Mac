@@ -6,6 +6,37 @@ use serde_json::Value;
 
 use flect_core::{batch, tasks};
 
+/// Make an untrusted string safe to print to a terminal: control characters (C0 including ESC and
+/// newlines, DEL, C1), bidi overrides/isolates and line/paragraph separators become U+FFFD, so
+/// file names and engine text cannot move the cursor, rewrite the screen or fake output lines.
+/// `--json` output is not passed through this (it is already JSON-escaped by the engine).
+pub fn safe(s: &str) -> String {
+    safe_with(s, false)
+}
+
+/// Like [`safe`] but keeps `\n` (for multi-line results such as the tree).
+pub fn safe_multiline(s: &str) -> String {
+    safe_with(s, true)
+}
+
+fn safe_with(s: &str, keep_newline: bool) -> String {
+    s.chars()
+        .map(|c| {
+            if c == '\n' && keep_newline {
+                c
+            } else if c.is_control()
+                || matches!(c,
+                    '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
+            {
+                '\u{FFFD}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 pub fn message(v: &Value) -> String {
     let key = v["key"].as_str().unwrap_or("?");
     let args: Vec<&str> = v["args"]
@@ -17,9 +48,9 @@ pub fn message(v: &Value) -> String {
 
 pub fn plain(key: &str, args: &[&str]) -> String {
     if args.is_empty() {
-        key.to_owned()
+        safe(key)
     } else {
-        format!("{key}: {}", args.join(", "))
+        format!("{}: {}", safe(key), safe(&args.join(", ")))
     }
 }
 
@@ -94,7 +125,7 @@ pub fn task_line(t: &TaskInfo) -> String {
     } else {
         format!("to={}", t.to.join("|"))
     };
-    format!("{}\t{}\t{}", t.id, t.label, opts)
+    format!("{}\t{}\t{}", safe(&t.id), safe(&t.label), safe(&opts))
 }
 
 #[cfg(test)]
@@ -109,6 +140,26 @@ mod tests {
             message(&json!({"key":"msg.processing","args":["a.png","b"]})),
             "msg.processing: a.png, b"
         );
+    }
+
+    #[test]
+    fn terminal_control_and_bidi_characters_are_neutralised() {
+        let evil = "a\u{1b}[2Jb\u{9b}c\rd\ne\u{202e}f\u{7f}\u{2028}g";
+        let out = safe(evil);
+        assert_eq!(
+            out,
+            "a\u{fffd}[2Jb\u{fffd}c\u{fffd}d\u{fffd}e\u{fffd}f\u{fffd}\u{fffd}g"
+        );
+        assert_eq!(safe_multiline("x\ny\u{1b}"), "x\ny\u{fffd}");
+        assert_eq!(safe("日本語 ok.png"), "日本語 ok.png");
+        let m = message(&json!({"key":"msg.x","args":["\u{1b}]0;pwn\u{7}.png"]}));
+        assert!(!m.contains('\u{1b}') && !m.contains('\u{7}'));
+        assert!(!task_line(&TaskInfo {
+            id: "i".into(),
+            label: "l\u{1b}".into(),
+            to: vec![]
+        })
+        .contains('\u{1b}'));
     }
 
     #[test]

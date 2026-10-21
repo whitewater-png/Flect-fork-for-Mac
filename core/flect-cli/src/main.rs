@@ -182,7 +182,7 @@ fn list(json_output: bool) -> i32 {
 }
 
 fn fail(message: &str) -> i32 {
-    say(&format!("flect: {message}"));
+    say(&format!("flect: {}", render::safe(message)));
     EXIT_FAILED
 }
 
@@ -312,7 +312,8 @@ fn handle_event(v: &Value, json_output: bool, tally: &mut render::Tally) -> Opti
                 render::plain(key, &args)
             });
             say(&format!(
-                "{outcome}: {}/{} file(s), {} error(s){}",
+                "{}: {}/{} file(s), {} error(s){}",
+                render::safe(outcome),
                 tally.done,
                 tally.total,
                 tally.errors,
@@ -337,15 +338,21 @@ fn handle_event(v: &Value, json_output: bool, tally: &mut render::Tally) -> Opti
                 .unwrap_or_default();
             say(&format!(
                 "warn: the app would now do '{}' for the paths below; the CLI does not, so nothing was changed:\n  {}",
-                v["what"].as_str().unwrap_or("?"),
-                paths.join("\n  ")
+                render::safe(v["what"].as_str().unwrap_or("?")),
+                paths
+                    .iter()
+                    .map(|p| render::safe(p))
+                    .collect::<Vec<_>>()
+                    .join("\n  ")
             ));
         }
         "data" => {
             // Results go to stdout so `flect run folder.tree dir > tree.txt` works.
             let text = match (v["name"].as_str(), v["data"]["text"].as_str()) {
-                (Some("tree"), Some(t)) => t.to_owned(),
-                _ => serde_json::to_string_pretty(&v["data"]).unwrap_or_default(),
+                (Some("tree"), Some(t)) => render::safe_multiline(t),
+                _ => render::safe_multiline(
+                    &serde_json::to_string_pretty(&v["data"]).unwrap_or_default(),
+                ),
             };
             emit_out(&text);
         }
@@ -384,7 +391,11 @@ fn main() {
         Ok(Cmd::SettingsPath) => settings_path(),
         Ok(Cmd::Run(a)) => run(a),
         Err(message) => {
-            say(&format!("flect: {message}\n\n{}", args::USAGE));
+            say(&format!(
+                "flect: {}\n\n{}",
+                render::safe(&message),
+                args::USAGE
+            ));
             EXIT_USAGE
         }
     };
