@@ -4,9 +4,10 @@ import Foundation
 /// decides what goes; this makes sure a wrong or stale answer cannot reach anything else:
 /// - the path is absolute, without `.` / `..` / empty components, and lies strictly inside one of the run's selected
 ///   folders (each resolved with realpath; for the path only its folder part is resolved, the last component is not
-///   followed, so a link is judged as itself); it is never one of the selected items, by text or by (device, inode),
-///   so another spelling of a selected folder (case, normalisation, firmlink) is refused too. (Both deleting tasks take folders: Remove Duplicate lists files found
-///   inside the selected folders and ignores selected files, so no trash path is ever a selected item.)
+///   followed, so a link is judged as itself);
+/// - it is never one of the selected items, files and folders alike, by text or by (device, inode), so another
+///   spelling of a selected item (case, normalisation, firmlink) is refused too, and never a folder that holds a
+///   selected item. (The engine plans neither either; this is the app's own check.)
 /// - it exists and is not a symbolic link;
 /// - Remove Empty: a folder that, checked again right now, holds nothing but folders and OS litter (the engine's
 ///   list under the same settings, see `LitterRules`); every other task: a regular file.
@@ -19,7 +20,7 @@ public enum TrashGuard {
     }
 
     public enum Refusal: String, Error, Equatable, CaseIterable {
-        case invalidPath, outsideSelection, isSelected, missing, symlink, unexpectedType, notEmpty, unreadable
+        case invalidPath, outsideSelection, isSelected, holdsSelected, missing, symlink, unexpectedType, notEmpty, unreadable
         /// The request came from a run that is not the current one.
         case staleRun
         /// The localized reason (`strings.ux.*.json`).
@@ -97,11 +98,13 @@ public enum TrashGuard {
         guard let resolved = resolvedKeepingLast(path) else { return isWellFormed(path) ? .missing : .invalidPath }
         var st = stat()
         let statError: Int32? = lstat(path, &st) == 0 ? nil : errno
-        let roots = inputs.compactMap(resolvedInput)
+        let selected = inputs.compactMap(resolvedInput)
+        let roots = selected.filter(\.isFolder)
         // One of the selected items itself, in any spelling (case, Unicode normalisation, firmlink): same text, or
         // the same (device, inode) as the item.
-        if roots.contains(where: { $0.path == resolved }) { return .isSelected }
-        if statError == nil, roots.contains(where: { $0.id == FileID(st) }) { return .isSelected }
+        if selected.contains(where: { $0.path == resolved }) { return .isSelected }
+        if statError == nil, selected.contains(where: { $0.id == FileID(st) }) { return .isSelected }
+        if selected.contains(where: { $0.path.hasPrefix(resolved + "/") }) { return .holdsSelected }
         guard roots.contains(where: { resolved.hasPrefix($0.path == "/" ? "/" : $0.path + "/") }) else { return .outsideSelection }
         if let e = statError { return e == ENOENT || e == ENOTDIR ? .missing : .unreadable }
         switch st.st_mode & S_IFMT {
@@ -122,17 +125,21 @@ public enum TrashGuard {
         init(_ st: stat) { dev = st.st_dev; ino = st.st_ino }
     }
 
-    /// A selected item as the engine scanned it: a folder (not a link; trailing slashes ignored), resolved fully
-    /// with realpath(3) (which also gives the case stored on disk), with its (device, inode). nil for anything else:
-    /// the deleting tasks never scan below it.
-    static func resolvedInput(_ input: String) -> (path: String, id: FileID)? {
+    /// A selected item (trailing slashes ignored, links not followed) with its (device, inode). A folder is resolved
+    /// fully with realpath(3), which also gives the case stored on disk; only folders have anything inside them that
+    /// the engine scanned. Anything else (a file, a link) keeps its last component as it is. nil when it cannot be
+    /// looked at.
+    static func resolvedInput(_ input: String) -> (path: String, id: FileID, isFolder: Bool)? {
         var p = input
         while p.count > 1, p.hasSuffix("/") { p.removeLast() }
         guard p.hasPrefix("/"), !p.contains("\0") else { return nil }
         var st = stat()
-        guard lstat(p, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, let r = realpath(p, nil) else { return nil }
-        defer { free(r) }
-        return (String(cString: r), FileID(st))
+        guard lstat(p, &st) == 0 else { return nil }
+        if (st.st_mode & S_IFMT) == S_IFDIR, let r = realpath(p, nil) {
+            defer { free(r) }
+            return (String(cString: r), FileID(st), true)
+        }
+        return (resolvedKeepingLast(p) ?? p, FileID(st), false)
     }
 
     /// Absolute, no NUL, and no empty, `.` or `..` component (a trailing `/` is an empty component).

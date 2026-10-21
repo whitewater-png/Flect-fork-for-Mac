@@ -79,6 +79,37 @@ fn folders(paths: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The selected items (files and folders, links not followed) by (device, inode), and the same
+/// plus every folder that holds one of them. Neither deleting task ever removes a selected item,
+/// or a folder that holds one, in either Trash or permanent mode.
+type IdSet = std::collections::HashSet<(u64, u64)>;
+
+fn selected_ids(paths: &[String]) -> (IdSet, IdSet) {
+    use std::os::unix::fs::MetadataExt;
+    let (mut items, mut holders) = (
+        std::collections::HashSet::new(),
+        std::collections::HashSet::new(),
+    );
+    for p in paths {
+        let p = Path::new(p);
+        if let Ok(m) = std::fs::symlink_metadata(p) {
+            items.insert((m.dev(), m.ino()));
+        }
+        for spelled in [Some(p.to_path_buf()), std::fs::canonicalize(p).ok()]
+            .into_iter()
+            .flatten()
+        {
+            for a in spelled.ancestors().skip(1) {
+                if let Some(id) = folder::dir_id(a) {
+                    holders.insert(id);
+                }
+            }
+        }
+    }
+    holders.extend(items.iter().copied());
+    (items, holders)
+}
+
 fn path_list(v: &[PathBuf]) -> Vec<String> {
     v.iter().map(|p| p.to_string_lossy().into_owned()).collect()
 }
@@ -374,7 +405,10 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
             for p in &changed {
                 changed_event(ctx, p);
             }
-            let doomed = folder::to_delete(&groups, mode);
+            let mut doomed = folder::to_delete(&groups, mode);
+            // A selected file is never removed (it was chosen, not found).
+            let (selected, _) = selected_ids(paths);
+            doomed.retain(|d| !selected.contains(&d.file_id));
             if !folder::plan_is_consistent(&groups, &doomed, mode) {
                 // Never expected (the scan lists each file once); refuse rather than risk the only copy.
                 return fail(ctx, "msg.ioError", "inconsistent duplicate plan".into());
@@ -406,7 +440,9 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
             remove_duplicates(ctx, &groups, &doomed, mode, &roots);
         }
         "folder.removeEmpty" => {
-            let (plan, total) = match ft::plan_remove_empty(&roots, f, &prog) {
+            let (_, protected) = selected_ids(paths);
+            let (plan, total) = match ft::plan_remove_empty_protecting(&roots, f, &prog, &protected)
+            {
                 Ok(v) => v,
                 Err(_) => return cancelled(ctx),
             };
@@ -978,6 +1014,80 @@ mod tests {
                 );
             }
             assert!(d.path().join("a.txt").exists());
+        }
+    }
+
+    /// A selected item is never planned for removal: `--apply D D/chosen.txt` handed the selected
+    /// file to the Trash, and permanent mode removed a selected empty folder that Trash mode refused.
+    #[test]
+    fn selected_items_are_never_removed_in_either_mode() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        for settings in [&Settings::default(), &perm] {
+            let d = tempfile::tempdir().unwrap();
+            let r = d.path();
+            fs::write(r.join("copy.txt"), "same").unwrap();
+            fs::write(r.join("chosen.txt"), "same").unwrap();
+            let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+            fs::File::options()
+                .write(true)
+                .open(r.join("copy.txt"))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            let chosen = r.join("chosen.txt");
+            for mode in ["oldest", "all"] {
+                let ev = run(
+                    &format!("folder.removeDuplicate?mode={mode}&dry=1"),
+                    &[r, &chosen],
+                    settings,
+                );
+                if let Some(data) = find(&ev, "data") {
+                    for g in data["data"]["groups"].as_array().unwrap() {
+                        for x in g["remove"].as_array().unwrap() {
+                            let p = x["path"].as_str().unwrap();
+                            assert!(!p.ends_with("chosen.txt"), "{mode}: {ev:?}");
+                        }
+                    }
+                }
+                let ev = run(
+                    &format!("folder.removeDuplicate?mode={mode}"),
+                    &[r, &chosen],
+                    settings,
+                );
+                if let Some(n) = find(&ev, "needs") {
+                    assert!(
+                        !n["paths"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|p| p.as_str().unwrap().ends_with("chosen.txt")),
+                        "{mode}: {ev:?}"
+                    );
+                }
+                assert!(chosen.exists(), "{mode}: {ev:?}");
+            }
+
+            // empty folders: a selected one, and a folder holding only a selected one
+            let e = r.join("E");
+            let inner = r.join("X/inner");
+            fs::create_dir_all(&e).unwrap();
+            fs::create_dir_all(&inner).unwrap();
+            fs::create_dir_all(r.join("free")).unwrap();
+            let listed = run("folder.removeEmpty", &[r, &e, &inner], settings);
+            let targets = &find(&listed, "data").unwrap()["data"]["targets"];
+            assert_eq!(
+                targets,
+                &json!([r.join("free").to_string_lossy()]),
+                "{listed:?}"
+            );
+            let ev = run("folder.removeEmpty?confirm=1", &[r, &e, &inner], settings);
+            assert!(e.is_dir() && inner.is_dir(), "{ev:?}");
+            if let Some(n) = find(&ev, "needs") {
+                assert_eq!(n["paths"], json!([r.join("free").to_string_lossy()]));
+            } else {
+                assert!(!r.join("free").exists(), "{ev:?}");
+            }
         }
     }
 

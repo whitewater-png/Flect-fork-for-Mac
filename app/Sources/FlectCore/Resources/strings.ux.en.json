@@ -1,6 +1,7 @@
 {
  "app.trashPartial": "Moved {0} of {1} items to the Trash; {2} were left in place (see the list below).",
  "app.trashRefused": "Not moved to the Trash: {0} ({1})",
+ "app.trashWhy.holdsSelected": "it holds one of the selected items",
  "app.trashWhy.invalidPath": "not a valid path",
  "app.trashWhy.isSelected": "it is one of the selected items",
  "app.trashWhy.missing": "it no longer exists",

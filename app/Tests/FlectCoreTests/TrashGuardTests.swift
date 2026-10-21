@@ -77,7 +77,32 @@ final class TrashGuardTests: XCTestCase {
         XCTAssertEqual(symlink(sel.path, link.path), 0)
         XCTAssertEqual(TrashGuard.check(inside.path, inputs: [link.path], kind: .files), .outsideSelection)
         XCTAssertEqual(TrashGuard.check(inside.path, inputs: [link.path + "/"], kind: .files), .outsideSelection)
-        XCTAssertEqual(TrashGuard.check(inside.path, inputs: [inside.path], kind: .files), .outsideSelection)
+        // a selected file is refused itself
+        XCTAssertEqual(TrashGuard.check(inside.path, inputs: [inside.path], kind: .files), .isSelected)
+    }
+
+    /// `--apply D D/chosen.txt` had the selected file handed to the Trash (only folders were compared).
+    func testSelectedFilesAreNeverTrashed() throws {
+        let root = scratch()
+        let d = root.appendingPathComponent("D"), chosen = d.appendingPathComponent("Chosen.txt"), copy = d.appendingPathComponent("copy.txt")
+        file(chosen); file(copy)
+        XCTAssertNil(TrashGuard.check(copy.path, inputs: [d.path, chosen.path], kind: .files))
+        XCTAssertEqual(TrashGuard.check(chosen.path, inputs: [d.path, chosen.path], kind: .files), .isSelected)
+        for spelling in [d.appendingPathComponent("chosen.txt").path, d.appendingPathComponent("CHOSEN.TXT").path,
+                         root.appendingPathComponent("d/Chosen.txt").path] {
+            XCTAssertEqual(TrashGuard.check(spelling, inputs: [d.path, chosen.path], kind: .files), .isSelected, spelling)
+            XCTAssertEqual(TrashGuard.check(chosen.path, inputs: [d.path, spelling], kind: .files), .isSelected, spelling)
+        }
+        // a hard link to a selected file is that file
+        let alias = d.appendingPathComponent("alias.txt")
+        XCTAssertEqual(link(chosen.path, alias.path), 0)
+        XCTAssertEqual(TrashGuard.check(alias.path, inputs: [d.path, chosen.path], kind: .files), .isSelected)
+        // a folder that holds a selected item is never trashed as "empty"
+        let holder = d.appendingPathComponent("H"), sel = holder.appendingPathComponent("inner")
+        dir(sel)
+        XCTAssertEqual(TrashGuard.check(holder.path, inputs: [d.path, sel.path], kind: .emptyFolders), .holdsSelected)
+        XCTAssertEqual(TrashGuard.check(sel.path, inputs: [d.path, sel.path], kind: .emptyFolders), .isSelected)
+        XCTAssertNil(TrashGuard.check(holder.path, inputs: [d.path], kind: .emptyFolders))
     }
 
     func testLinksAreNeverTrashedOrFollowed() throws {

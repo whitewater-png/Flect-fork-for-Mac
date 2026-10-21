@@ -298,7 +298,7 @@ pub fn distinct_roots(
 }
 
 /// (device, inode) of a folder, links not followed.
-fn dir_id(p: &Path) -> Option<(u64, u64)> {
+pub(crate) fn dir_id(p: &Path) -> Option<(u64, u64)> {
     fs::symlink_metadata(p)
         .ok()
         .filter(|m| m.is_dir())

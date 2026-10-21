@@ -496,12 +496,26 @@ pub fn plan_remove_empty(
     f: &FolderSettings,
     progress: &dyn Progress,
 ) -> Result<(DeletePlan, usize), Cancelled> {
-    let scan = folder::scan(
+    plan_remove_empty_protecting(roots, f, progress, &HashSet::new())
+}
+
+/// [`plan_remove_empty`], leaving out every empty folder whose (device, inode) is in `protected`
+/// (the selected items and the folders that hold them: removing such a folder would remove a
+/// selected item).
+pub fn plan_remove_empty_protecting(
+    roots: &[PathBuf],
+    f: &FolderSettings,
+    progress: &dyn Progress,
+    protected: &HashSet<(u64, u64)>,
+) -> Result<(DeletePlan, usize), Cancelled> {
+    let mut scan = folder::scan(
         roots,
         &ExclusionFilter::from_rules(&f.scan_exclusions),
         &f.empty,
         progress,
     )?;
+    scan.empty_directories
+        .retain(|d| folder::dir_id(d).is_some_and(|id| !protected.contains(&id)));
     let total = scan.empty_directories.len();
     Ok((
         DeletePlan {
