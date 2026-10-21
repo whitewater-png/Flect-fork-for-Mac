@@ -9,12 +9,15 @@ Usage:
   flect list [--json]
   flect run <task> [--option key=value ...] [--json-options '{...}'] [--json] <paths...>
   flect run --preset <name> [--json] <paths...>
+  flect run folder.removeDuplicate|folder.removeEmpty ... [--apply [--permanent]] <paths...>
   flect settings path
   flect --help | --version
 
 Tasks come from `flect list`. Options are passed to the task like the app does,
 e.g. `flect run image.resize -o scale=50 photo.png`. `--preset` runs a preset saved in
 the app (its name, or its id), e.g. `flect run --preset \"SNS 1080px / 2MB\" photo.png`.
+Deleting tasks (folder.removeDuplicate, folder.removeEmpty) only preview by default; --apply
+really deletes, and with the \"delete permanently\" setting --permanent is required as well.
 Exit status: 0 success, 1 failed, 2 usage error, 130 cancelled (Ctrl-C).";
 
 #[derive(Debug, PartialEq)]
@@ -36,6 +39,10 @@ pub struct RunArgs {
     /// Absolute paths, in the order given (order matters for `pdf.merge`).
     pub paths: Vec<String>,
     pub json: bool,
+    /// `--apply`: let the deleting tasks really delete (default: preview only).
+    pub apply: bool,
+    /// `--permanent`: confirm deletion without the Trash when the setting is "delete permanently".
+    pub permanent: bool,
 }
 
 /// Parse `argv[1..]`. `cwd` makes relative paths absolute (the engine accepts absolute paths only).
@@ -75,7 +82,7 @@ fn parse_run<'a>(
     mut it: impl Iterator<Item = &'a str>,
     cwd: &std::path::Path,
 ) -> Result<Command, String> {
-    let mut json = false;
+    let (mut json, mut apply, mut permanent) = (false, false, false);
     let mut options: Vec<(String, String)> = vec![];
     let mut positional: Vec<&str> = vec![];
     let mut preset: Option<String> = None;
@@ -86,6 +93,8 @@ fn parse_run<'a>(
                 break;
             }
             "--json" => json = true,
+            "--apply" => apply = true,
+            "--permanent" => permanent = true,
             "--preset" => preset = Some(it.next().ok_or("--preset needs a name")?.to_owned()),
             _ if a.starts_with("--preset=") => preset = Some(a["--preset=".len()..].to_owned()),
             "-o" | "--option" => {
@@ -123,6 +132,8 @@ fn parse_run<'a>(
             preset: Some(name),
             paths,
             json,
+            apply,
+            permanent,
         }));
     }
     let mut positional = positional.into_iter();
@@ -138,6 +149,8 @@ fn parse_run<'a>(
         preset: None,
         paths,
         json,
+        apply,
+        permanent,
     }))
 }
 
@@ -311,6 +324,19 @@ mod tests {
         assert!(p(&["run", "--preset=", "a"]).is_err());
         assert!(p(&["run", "--preset", "web"]).is_err());
         assert!(p(&["run", "--preset", "web", "-o", "scale=5", "a"]).is_err());
+    }
+
+    #[test]
+    fn apply_and_permanent_flags() {
+        let Ok(Command::Run(r)) = p(&["run", "folder.removeEmpty", "--apply", "--permanent", "d"])
+        else {
+            panic!()
+        };
+        assert_eq!((r.apply, r.permanent), (true, true));
+        let Ok(Command::Run(r)) = p(&["run", "folder.removeEmpty", "d"]) else {
+            panic!()
+        };
+        assert_eq!((r.apply, r.permanent), (false, false));
     }
 
     #[test]

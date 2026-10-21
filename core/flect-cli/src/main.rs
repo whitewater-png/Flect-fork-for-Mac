@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod guard;
 mod render;
 
 use std::ffi::OsString;
@@ -187,7 +188,8 @@ fn fail(message: &str) -> i32 {
 
 /// The request for `--preset NAME`: `run` for one step, `pipeline` for more. The app writes
 /// `presets.json`; here it is only read, through the same strict checks the engine applies.
-fn preset_request(name: &str, paths: &[String]) -> Result<Value, String> {
+fn preset_request(a: &RunArgs, name: &str, setting_permanent: bool) -> Result<Value, String> {
+    let paths = &a.paths;
     use flect_core::presets::{self, PresetError};
     let dir = flect_core::locations::data_dir()
         .ok_or("cannot determine the data folder (HOME is not set)")?;
@@ -202,19 +204,41 @@ fn preset_request(name: &str, paths: &[String]) -> Result<Value, String> {
     };
     let preset = presets::find(&all, name).ok_or_else(|| format!("no preset named {name:?}"))?;
     Ok(match preset.steps.as_slice() {
-        [one] => json!({"op": "run", "task": one, "paths": paths}),
+        [one] => {
+            let task = guard::guard_task(one, a.apply, a.permanent, setting_permanent)?;
+            json!({"op": "run", "task": task, "paths": paths})
+        }
         steps => json!({"op": "pipeline", "steps": steps, "paths": paths}),
     })
 }
 
 fn run(a: RunArgs) -> i32 {
+    let setting_permanent = flect_core::locations::data_dir()
+        .map(|d| flect_core::settings::Store::new(d).load())
+        .is_some_and(|s| s.folder.delete_method == flect_core::settings::DeleteMethod::Permanent);
     let request = match &a.preset {
-        Some(name) => match preset_request(name, &a.paths) {
+        Some(name) => match preset_request(&a, name, setting_permanent) {
             Ok(r) => r,
+            Err(e) if e.starts_with("--") || e.starts_with("your setting") => {
+                fail(&e);
+                return EXIT_USAGE;
+            }
             Err(e) => return fail(&e),
         },
-        None => json!({"op": "run", "task": a.task, "paths": a.paths}),
+        None => match guard::guard_task(&a.task, a.apply, a.permanent, setting_permanent) {
+            Ok(task) => json!({"op": "run", "task": task, "paths": a.paths}),
+            Err(e) => {
+                fail(&e);
+                return EXIT_USAGE;
+            }
+        },
     };
+    if !a.apply
+        && (a.task.starts_with("folder.removeDuplicate")
+            || a.task.starts_with("folder.removeEmpty"))
+    {
+        say("flect: preview only, nothing is deleted (add --apply to delete)");
+    }
     let mut engine = match Engine::spawn() {
         Ok(e) => e,
         Err(e) => return fail(&e),

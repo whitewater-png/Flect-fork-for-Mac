@@ -296,6 +296,43 @@ fn settings_path_matches_the_store() {
 }
 
 #[test]
+fn deleting_tasks_preview_unless_apply_and_permanent() {
+    use flect_core::settings::{DeleteMethod, Settings, Store};
+    let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut s = Settings::default();
+    s.folder.delete_method = DeleteMethod::Permanent;
+    Store::new(home.path().to_path_buf()).save(&s).unwrap();
+    let empty = work.path().join("hollow");
+    fs::create_dir(&empty).unwrap();
+    let root = work.path().to_str().unwrap();
+    // default and a user-supplied confirm=1: preview only
+    for extra in [&[][..], &["-o", "confirm=1"][..]] {
+        let mut args = vec!["run", "folder.removeEmpty"];
+        args.extend_from_slice(extra);
+        args.push(root);
+        run(home.path(), &args);
+        assert!(empty.is_dir(), "deleted without --apply");
+    }
+    // --apply alone is refused while the setting is permanent
+    let out = run(home.path(), &["run", "folder.removeEmpty", "--apply", root]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(empty.is_dir());
+    let out = run(
+        home.path(),
+        &["run", "folder.removeEmpty", "--permanent", root],
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(empty.is_dir());
+    // both flags: really deleted
+    let out = run(
+        home.path(),
+        &["run", "folder.removeEmpty", "--apply", "--permanent", root],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(!empty.exists());
+}
+
+#[test]
 fn ctrl_c_cancels_with_130_and_keeps_originals() {
     let (home, work) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     // Each result is fsynced, so thousands of files take long enough to interrupt reliably.

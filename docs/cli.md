@@ -24,6 +24,7 @@ From a source checkout: `cd core && cargo build --release`, then use
 flect list [--json]
 flect run <task> [-o key=value ...] [--json-options '{...}'] [--json] <paths...>
 flect run --preset <name> [--json] <paths...>
+flect run folder.removeDuplicate|folder.removeEmpty [-o ...] [--apply [--permanent]] <paths...>
 flect settings path
 ```
 
@@ -45,6 +46,18 @@ flect settings path
 
 Results are written next to the originals under new names; existing files are never overwritten.
 
+### Deleting tasks (`folder.removeDuplicate`, `folder.removeEmpty`)
+
+A terminal has no confirmation dialog, so these tasks **never delete by default**. Without
+`--apply` the CLI forces the preview form (duplicates: `dry=1`; empty folders: no `confirm=1`),
+prints what would be removed, and deletes nothing; `dry` / `confirm` given with `-o` are ignored.
+
+- `--apply` makes the task really delete. With the default setting (Trash) the engine only asks
+  the app to move the files to the Trash, which the CLI cannot do, so nothing is removed.
+- If your setting is "delete permanently", `--apply` alone is refused: add `--permanent` as well
+  (`flect run folder.removeEmpty --apply --permanent dir`). Permanent deletion cannot be undone.
+- `--permanent` without `--apply`, and either flag on other tasks, is a usage error (exit 2).
+
 ## Output
 
 Human mode (default): status, info, warnings, errors, `[done/total]` progress and a final summary
@@ -57,8 +70,9 @@ e.g. `warn: msg.alreadySmall: photo.png`.
 (`status`, `step`, `info`, `warn`, `error`, `data`, `needs`, `done`). Nothing else is written to
 stdout. Parse the last line (`done`) for the outcome.
 
-Tasks that need the app's OS services (`needs: trash`, used after confirming duplicate or empty
-folder removal) are reported but not performed; the CLI never moves anything to the Trash.
+Tasks that need the app's OS services (`needs: trash`, used when removal is confirmed with the
+Trash setting) are reported but not performed; the CLI never moves anything to the Trash. The
+only deletion the CLI can perform is permanent deletion, which needs `--apply --permanent`.
 
 ## Exit status
 
