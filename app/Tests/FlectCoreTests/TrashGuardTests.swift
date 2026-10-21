@@ -103,6 +103,17 @@ final class TrashGuardTests: XCTestCase {
         XCTAssertEqual(TrashGuard.check(holder.path, inputs: [d.path, sel.path], kind: .emptyFolders), .holdsSelected)
         XCTAssertEqual(TrashGuard.check(sel.path, inputs: [d.path, sel.path], kind: .emptyFolders), .isSelected)
         XCTAssertNil(TrashGuard.check(holder.path, inputs: [d.path], kind: .emptyFolders))
+        // ...in any spelling of the holder or of the selected item (case variants)
+        let holderVariant = d.appendingPathComponent("h").path
+        XCTAssertEqual(TrashGuard.check(holderVariant, inputs: [d.path, sel.path], kind: .emptyFolders), .holdsSelected)
+        XCTAssertEqual(TrashGuard.check(holder.path, inputs: [d.path, d.appendingPathComponent("h/INNER").path], kind: .emptyFolders), .holdsSelected)
+        // a selected link stands for its target: the target and the folders above it are protected
+        let lnk = root.appendingPathComponent("lnk"), lnkDir = root.appendingPathComponent("lnkdir")
+        XCTAssertEqual(symlink(copy.path, lnk.path), 0)
+        XCTAssertEqual(symlink(sel.path, lnkDir.path), 0)
+        XCTAssertEqual(TrashGuard.check(copy.path, inputs: [d.path, lnk.path], kind: .files), .isSelected)
+        XCTAssertEqual(TrashGuard.check(sel.path, inputs: [d.path, lnkDir.path], kind: .emptyFolders), .isSelected)
+        XCTAssertEqual(TrashGuard.check(holder.path, inputs: [d.path, lnkDir.path], kind: .emptyFolders), .holdsSelected)
     }
 
     func testLinksAreNeverTrashedOrFollowed() throws {

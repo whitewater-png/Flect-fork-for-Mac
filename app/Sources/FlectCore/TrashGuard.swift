@@ -107,8 +107,11 @@ public enum TrashGuard {
         // One of the selected items itself, in any spelling (case, Unicode normalisation, firmlink): same text, or
         // the same (device, inode) as the item.
         if selected.contains(where: { $0.path == resolved }) { return .isSelected }
-        if statError == nil, selected.contains(where: { $0.id == FileID(st) }) { return .isSelected }
+        if statError == nil, selected.contains(where: { $0.ids.contains(FileID(st)) }) { return .isSelected }
+        // A folder that holds a selected item (or a selected link's target), by text or by (device, inode) of the
+        // folders above the item, so case and normalisation variants are caught too.
         if selected.contains(where: { $0.path.hasPrefix(resolved + "/") }) { return .holdsSelected }
+        if statError == nil, selected.contains(where: { $0.holders.contains(FileID(st)) }) { return .holdsSelected }
         guard roots.contains(where: { resolved.hasPrefix($0.path == "/" ? "/" : $0.path + "/") }) else { return .outsideSelection }
         if let e = statError { return e == ENOENT || e == ENOTDIR ? .missing : .unreadable }
         switch st.st_mode & S_IFMT {
@@ -124,26 +127,55 @@ public enum TrashGuard {
         }
     }
 
-    struct FileID: Equatable {
+    struct FileID: Hashable {
         let dev: dev_t, ino: ino_t
         init(_ st: stat) { dev = st.st_dev; ino = st.st_ino }
     }
 
-    /// A selected item (trailing slashes ignored, links not followed) with its (device, inode). A folder is resolved
-    /// fully with realpath(3), which also gives the case stored on disk; only folders have anything inside them that
-    /// the engine scanned. Anything else (a file, a link) keeps its last component as it is. nil when it cannot be
-    /// looked at.
-    static func resolvedInput(_ input: String) -> (path: String, id: FileID, isFolder: Bool)? {
+    struct Selected {
+        /// Resolved as described at `resolvedInput`.
+        let path: String
+        /// The item's own (device, inode), plus its target's for a link.
+        let ids: Set<FileID>
+        /// The folders above the item (and above a link's target), resolved, by (device, inode).
+        let holders: Set<FileID>
+        let isFolder: Bool
+    }
+
+    /// A selected item (trailing slashes ignored, links not followed for `isFolder`). A folder is resolved fully with
+    /// realpath(3), which also gives the case stored on disk; only folders have anything inside them that the engine
+    /// scanned. Anything else (a file, a link) keeps its last component as it is. A link also stands for its target.
+    /// nil when it cannot be looked at.
+    static func resolvedInput(_ input: String) -> Selected? {
         var p = input
         while p.count > 1, p.hasSuffix("/") { p.removeLast() }
         guard p.hasPrefix("/"), !p.contains("\0") else { return nil }
         var st = stat()
         guard lstat(p, &st) == 0 else { return nil }
-        if (st.st_mode & S_IFMT) == S_IFDIR, let r = realpath(p, nil) {
-            defer { free(r) }
-            return (String(cString: r), FileID(st), true)
+        var ids: Set<FileID> = [FileID(st)]
+        var target = stat()
+        if stat(p, &target) == 0 { ids.insert(FileID(target)) }
+        var holders = Set<FileID>()
+        // Folders above the item along its resolved path (realpath follows a link to its target).
+        for start in [realPath(p), resolvedKeepingLast(p)].compactMap({ $0 }) {
+            var dir = (start as NSString).deletingLastPathComponent
+            while true {
+                var a = stat()
+                if lstat(dir, &a) == 0 { holders.insert(FileID(a)) }
+                if dir == "/" || dir.isEmpty { break }
+                dir = (dir as NSString).deletingLastPathComponent
+            }
         }
-        return (resolvedKeepingLast(p) ?? p, FileID(st), false)
+        if (st.st_mode & S_IFMT) == S_IFDIR, let r = realPath(p) {
+            return Selected(path: r, ids: ids, holders: holders, isFolder: true)
+        }
+        return Selected(path: resolvedKeepingLast(p) ?? p, ids: ids, holders: holders, isFolder: false)
+    }
+
+    static func realPath(_ p: String) -> String? {
+        guard let r = realpath(p, nil) else { return nil }
+        defer { free(r) }
+        return String(cString: r)
     }
 
     /// Absolute, no NUL, and no empty, `.` or `..` component (a trailing `/` is an empty component).
