@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = AppModel()
         self.model = model
         let host = NSHostingController(rootView: RootView(model: model))
+        // Without this the hosting controller resizes the window to the SwiftUI view's minimum (480x328),
+        // overriding the sizes set below, so the settings window opened clipped.
+        host.sizingOptions = []
         let w = NSWindow(contentViewController: host)
         w.title = "Flect"
         w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
