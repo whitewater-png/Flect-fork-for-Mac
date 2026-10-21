@@ -297,9 +297,9 @@ final class AppModel: ObservableObject {
     /// Every path is checked by `TrashGuard` right before it is moved (inside the run's selection, not a link, and for
     /// Remove Empty still nothing but OS litter); one that fails is skipped and reported.
     private func trash(_ ps: [String]) {
-        let zeroByte = settings.bool("Folder", "Empty", "IgnoreZeroByteFiles", default: false)
+        let litter = TrashGuard.LitterRules(settings: settings)
         for p in ps {
-            if let why = TrashGuard.check(p, inputs: trashScope.inputs, kind: trashScope.kind, zeroByteIsLitter: zeroByte) {
+            if let why = TrashGuard.check(p, inputs: trashScope.inputs, kind: trashScope.kind, litter: litter) {
                 log.append(LogLine(kind: .warn, text: loc.f("app.trashRefused", [p, loc.t(why.key)])))
                 continue
             }

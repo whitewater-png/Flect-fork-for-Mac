@@ -106,7 +106,7 @@ final class TrashGuardTests: XCTestCase {
         file(full.appendingPathComponent("deep/deeper/note.txt"))
         file(zero.appendingPathComponent("blank"), "")
         dir(linked); XCTAssertEqual(symlink("/etc", linked.appendingPathComponent("l").path), 0)
-        let check = { (u: URL, zeroByte: Bool) in TrashGuard.check(u.path, inputs: [sel.path], kind: .emptyFolders, zeroByteIsLitter: zeroByte) }
+        let check = { (u: URL, zeroByte: Bool) in TrashGuard.check(u.path, inputs: [sel.path], kind: .emptyFolders, litter: .init(zeroByte: zeroByte)) }
         XCTAssertNil(check(empty, false))
         XCTAssertNil(check(litter, false))
         XCTAssertNil(check(nested, false))
@@ -130,13 +130,39 @@ final class TrashGuardTests: XCTestCase {
 
     func testLitterNamesMatchTheEngine() {
         for n in [".DS_Store", ".ds_store", "._anything", ".localized", "Icon\r", "desktop.ini", "Desktop.ini", "Thumbs.db", "thumbs.DB"] {
-            XCTAssertTrue(TrashGuard.isLitter(name: n, size: 10, zeroByteIsLitter: false), n)
+            XCTAssertTrue(TrashGuard.isLitter(name: n, size: 10, rules: .init()), n)
         }
         for n in ["Icon", "icon\r", "_x", "DS_Store", "notes.txt", ".hidden"] {
-            XCTAssertFalse(TrashGuard.isLitter(name: n, size: 10, zeroByteIsLitter: false), n)
+            XCTAssertFalse(TrashGuard.isLitter(name: n, size: 10, rules: .init()), n)
         }
-        XCTAssertFalse(TrashGuard.isLitter(name: "a", size: 0, zeroByteIsLitter: false))
-        XCTAssertTrue(TrashGuard.isLitter(name: "a", size: 0, zeroByteIsLitter: true))
+        XCTAssertFalse(TrashGuard.isLitter(name: "a", size: 0, rules: .init()))
+        XCTAssertTrue(TrashGuard.isLitter(name: "a", size: 0, rules: .init(zeroByte: true)))
+    }
+
+    /// The litter list honours the engine's settings: with a toggle off, those files are content again.
+    func testLitterFollowsTheEmptyFolderSettings() throws {
+        let noDesktop = TrashGuard.LitterRules(desktopIni: false), noThumbs = TrashGuard.LitterRules(thumbsDb: false)
+        for n in [".DS_Store", "._x", ".localized", "Icon\r", "desktop.ini"] {
+            XCTAssertFalse(TrashGuard.isLitter(name: n, size: 10, rules: noDesktop), n)
+            XCTAssertTrue(TrashGuard.isLitter(name: n, size: 10, rules: noThumbs), n)
+        }
+        XCTAssertFalse(TrashGuard.isLitter(name: "Thumbs.db", size: 10, rules: noThumbs))
+        XCTAssertTrue(TrashGuard.isLitter(name: "Thumbs.db", size: 10, rules: noDesktop))
+
+        let sel = scratch(), store = scratch()
+        let ds = sel.appendingPathComponent("ds"), thumbs = sel.appendingPathComponent("thumbs")
+        file(ds.appendingPathComponent(".DS_Store")); file(thumbs.appendingPathComponent("Thumbs.db"))
+        func rules(_ json: String) throws -> TrashGuard.LitterRules {
+            try json.write(to: store.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
+            return TrashGuard.LitterRules(settings: SettingsStore(directory: store))
+        }
+        XCTAssertEqual(try rules("{}"), TrashGuard.LitterRules())
+        let off = try rules(#"{"Folder":{"Empty":{"IgnoreDesktopIni":false,"IgnoreThumbsDb":false,"IgnoreZeroByteFiles":true}}}"#)
+        XCTAssertEqual(off, TrashGuard.LitterRules(zeroByte: true, desktopIni: false, thumbsDb: false))
+        XCTAssertEqual(TrashGuard.check(ds.path, inputs: [sel.path], kind: .emptyFolders, litter: off), .notEmpty)
+        XCTAssertEqual(TrashGuard.check(thumbs.path, inputs: [sel.path], kind: .emptyFolders, litter: off), .notEmpty)
+        XCTAssertNil(TrashGuard.check(ds.path, inputs: [sel.path], kind: .emptyFolders, litter: .init()))
+        XCTAssertNil(TrashGuard.check(thumbs.path, inputs: [sel.path], kind: .emptyFolders, litter: .init()))
     }
 
     func testRefusalMessagesExistInEveryLanguage() throws {

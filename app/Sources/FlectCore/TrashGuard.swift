@@ -9,8 +9,7 @@ import Foundation
 ///   inside the selected folders and ignores selected files, so no trash path is ever a selected item.)
 /// - it exists and is not a symbolic link;
 /// - Remove Empty: a folder that, checked again right now, holds nothing but folders and OS litter (the engine's
-///   list: `.DS_Store`, `._*`, `.localized`, `Icon\r`, `desktop.ini`, `Thumbs.db`, plus 0-byte files when that
-///   setting is on); every other task: a regular file.
+///   list under the same settings, see `LitterRules`); every other task: a regular file.
 public enum TrashGuard {
     public enum Kind: Equatable {
         /// `folder.removeEmpty`: folders that must still be empty.
@@ -35,15 +34,33 @@ public enum TrashGuard {
         return name == "folder.removeEmpty" ? .emptyFolders : .files
     }
 
-    /// OS litter, as the engine's `folder::ignorable` with its default toggles.
-    public static func isLitter(name: String, size: Int64, zeroByteIsLitter: Bool) -> Bool {
-        if zeroByteIsLitter && size == 0 { return true }
+    /// What counts as OS litter, from the same settings the engine reads (`Folder.Empty`): `IgnoreDesktopIni`
+    /// (`desktop.ini` and the macOS litter `.DS_Store`, `.localized`, `Icon\r`, `._*`), `IgnoreThumbsDb`
+    /// (`Thumbs.db`) and `IgnoreZeroByteFiles`. Defaults as the engine's.
+    public struct LitterRules: Equatable {
+        public var zeroByte = false, desktopIni = true, thumbsDb = true
+        public init(zeroByte: Bool = false, desktopIni: Bool = true, thumbsDb: Bool = true) {
+            self.zeroByte = zeroByte; self.desktopIni = desktopIni; self.thumbsDb = thumbsDb
+        }
+        public init(settings: SettingsStore) {
+            self.init(zeroByte: settings.bool("Folder", "Empty", "IgnoreZeroByteFiles", default: false),
+                      desktopIni: settings.bool("Folder", "Empty", "IgnoreDesktopIni", default: true),
+                      thumbsDb: settings.bool("Folder", "Empty", "IgnoreThumbsDb", default: true))
+        }
+    }
+
+    /// OS litter, as the engine's `folder::ignorable`.
+    public static func isLitter(name: String, size: Int64, rules: LitterRules) -> Bool {
+        if rules.zeroByte && size == 0 { return true }
         let lower = name.lowercased()
-        return ["desktop.ini", ".ds_store", ".localized", "thumbs.db"].contains(lower) || name == "Icon\r" || name.hasPrefix("._")
+        if rules.desktopIni && (["desktop.ini", ".ds_store", ".localized"].contains(lower) || name == "Icon\r" || name.hasPrefix("._")) {
+            return true
+        }
+        return rules.thumbsDb && lower == "thumbs.db"
     }
 
     /// nil when `path` may be moved to the Trash now, otherwise why not.
-    public static func check(_ path: String, inputs: [String], kind: Kind, zeroByteIsLitter: Bool = false) -> Refusal? {
+    public static func check(_ path: String, inputs: [String], kind: Kind, litter: LitterRules = LitterRules()) -> Refusal? {
         guard let resolved = resolvedKeepingLast(path) else { return isWellFormed(path) ? .missing : .invalidPath }
         var st = stat()
         let statError: Int32? = lstat(path, &st) == 0 ? nil : errno
@@ -59,7 +76,7 @@ public enum TrashGuard {
         case S_IFDIR:
             guard kind == .emptyFolders else { return .unexpectedType }
             var budget = maxEntries
-            return onlyLitter(path, depth: 0, budget: &budget, zeroByteIsLitter: zeroByteIsLitter)
+            return onlyLitter(path, depth: 0, budget: &budget, rules: litter)
         case S_IFREG:
             return kind == .files ? nil : .unexpectedType
         default:
@@ -107,7 +124,7 @@ public enum TrashGuard {
 
     /// Whether the folder holds only folders and litter, all the way down (links, other files, anything unreadable
     /// and anything beyond the limits make it non-empty).
-    static func onlyLitter(_ dir: String, depth: Int, budget: inout Int, zeroByteIsLitter: Bool) -> Refusal? {
+    static func onlyLitter(_ dir: String, depth: Int, budget: inout Int, rules: LitterRules) -> Refusal? {
         guard depth <= maxDepth, let d = opendir(dir) else { return .unreadable }
         defer { closedir(d) }
         while true {
@@ -124,9 +141,9 @@ public enum TrashGuard {
             guard lstat(child, &st) == 0 else { return .unreadable }
             switch st.st_mode & S_IFMT {
             case S_IFDIR:
-                if let r = onlyLitter(child, depth: depth + 1, budget: &budget, zeroByteIsLitter: zeroByteIsLitter) { return r }
+                if let r = onlyLitter(child, depth: depth + 1, budget: &budget, rules: rules) { return r }
             case S_IFREG:
-                if !isLitter(name: name, size: Int64(st.st_size), zeroByteIsLitter: zeroByteIsLitter) { return .notEmpty }
+                if !isLitter(name: name, size: Int64(st.st_size), rules: rules) { return .notEmpty }
             default:
                 return .notEmpty // links, sockets, devices...
             }
