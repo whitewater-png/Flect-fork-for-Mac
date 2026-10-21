@@ -258,6 +258,7 @@ fn remove_duplicates_with(
     let kept_of = kept_copies(groups, doomed, mode);
     let kept_of = |d: &folder::ScannedFile| kept_of.get(d.path.as_path()).copied();
     let prog = Prog(ctx);
+    let cache = folder::ParentCache::default();
     let (mut handed, mut bytes, mut skipped) = (Vec::new(), 0u64, 0usize);
     // Cancelled part-way: say how many were already removed (permanent) or handed on (Trash).
     let stopped = |handed: &Vec<PathBuf>, bytes: u64| {
@@ -286,7 +287,7 @@ fn remove_duplicates_with(
             skipped += 1;
             continue;
         }
-        match folder::remove_duplicate(d, kept, permanent, &prog, before_unlink) {
+        match folder::remove_duplicate(d, kept, permanent, &prog, &cache, before_unlink) {
             Err(_) => return stopped(&handed, bytes),
             Ok(folder::Removal::Changed) => {
                 changed_event(ctx, &d.path);
@@ -412,23 +413,28 @@ fn remove_empty(ctx: &Ctx<'_>, plan: &ft::DeletePlan, roots: &[PathBuf]) {
         }
     } else {
         // One folder at a time: checked, then handed on with its (device, inode) right away.
+        let excl = folder::ExclusionFilter::from_rules(&f.scan_exclusions);
         let (mut handed, mut total, mut skipped) = (0usize, 0usize, 0usize);
         for p in planned {
             // The folder must be the one scanned before and after the emptiness check, so the
             // fingerprint handed on describes the folder that was checked.
             let want = plan.folder_ids.get(p).copied();
             let before = folder::dir_id(p);
-            let (keep, n, _) = ft::recheck_empty(std::slice::from_ref(p), f);
+            let checked = ft::still_empty_why(p, &excl, &f.empty);
             crate::fsat::seam("T1", p);
             let after = folder::dir_id(p);
             let same = want.is_some() && before == want && after == want;
-            match (keep.first(), want.filter(|_| same)) {
-                (Some(_), Some(id)) => {
+            match (checked, want.filter(|_| same)) {
+                (Ok(n), Some(id)) => {
                     trash_one(ctx, p, crate::fsat::dir_fingerprint(id));
                     handed += 1;
                     total += n;
                 }
-                _ => {
+                (Err(why), _) => {
+                    skipped_event(p, why.reason().as_deref());
+                    skipped += 1;
+                }
+                (Ok(_), None) => {
                     skipped_event(p, None);
                     skipped += 1;
                 }

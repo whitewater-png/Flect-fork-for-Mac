@@ -560,37 +560,135 @@ fn check_inside(path: &Path, canon_roots: &[PathBuf]) -> io::Result<()> {
     }
 }
 
+/// Deepest folder level Remove Empty looks into (below the planned folder). Each level being
+/// checked or removed holds one open folder, so this keeps the run well inside the per-process
+/// limit on open files (256 for apps started from the Finder); a deeper tree is reported as too
+/// deep, not as "no longer empty".
+pub const MAX_EMPTY_DEPTH: usize = 100;
+
+/// Why a planned folder is not removed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotEmpty {
+    /// Something in it counts as content (or could not be read).
+    Content,
+    /// More than [`MAX_EMPTY_DEPTH`] levels deep.
+    TooDeep,
+}
+
+impl NotEmpty {
+    pub fn reason(&self) -> Option<String> {
+        match self {
+            Self::Content => None,
+            Self::TooDeep => Some(format!(
+                "too deep (more than {MAX_EMPTY_DEPTH} folder levels)"
+            )),
+        }
+    }
+}
+
 /// Re-check, right before acting on it, that `dir` still holds nothing but empty folders and OS
 /// litter (see `folder::ignorable`). Read-only. Returns the number of folders in it (itself
 /// included), or `None` when anything counts as content: a file, a link, a special file, an
-/// excluded folder, or anything that cannot be read.
+/// excluded folder, or anything that cannot be read (or the tree is too deep, see
+/// [`still_empty_why`]).
 pub fn still_empty(
     dir: &Path,
     excl: &ExclusionFilter,
     empty: &EmptyFolderSettings,
 ) -> Option<usize> {
-    if !fs::symlink_metadata(dir).ok()?.is_dir() {
-        return None;
-    }
-    let mut folders = 1;
-    for entry in fs::read_dir(dir).ok()? {
-        let entry = entry.ok()?;
-        let meta = match fs::symlink_metadata(entry.path()) {
-            Ok(m) => m,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue, // gone since the listing
-            Err(_) => return None,
-        };
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if meta.is_dir() {
-            if excl.excludes_folder(&name) {
-                return None;
+    still_empty_why(dir, excl, empty).ok()
+}
+
+/// [`still_empty`] with the reason when it is not. Each folder's entries are read completely
+/// before going into its subfolders, so only one folder is open at a time.
+pub fn still_empty_why(
+    dir: &Path,
+    excl: &ExclusionFilter,
+    empty: &EmptyFolderSettings,
+) -> Result<usize, NotEmpty> {
+    fn check(
+        dir: &Path,
+        depth: usize,
+        excl: &ExclusionFilter,
+        empty: &EmptyFolderSettings,
+    ) -> Result<usize, NotEmpty> {
+        if depth > MAX_EMPTY_DEPTH {
+            return Err(NotEmpty::TooDeep);
+        }
+        if !fs::symlink_metadata(dir)
+            .map_err(|_| NotEmpty::Content)?
+            .is_dir()
+        {
+            return Err(NotEmpty::Content);
+        }
+        let entries: Vec<_> = fs::read_dir(dir)
+            .map_err(|_| NotEmpty::Content)?
+            .collect::<Result<_, _>>()
+            .map_err(|_| NotEmpty::Content)?;
+        let mut folders = 1;
+        for entry in entries {
+            let meta = match fs::symlink_metadata(entry.path()) {
+                Ok(m) => m,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue, // gone since the listing
+                Err(_) => return Err(NotEmpty::Content),
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if meta.is_dir() {
+                if excl.excludes_folder(&name) {
+                    return Err(NotEmpty::Content);
+                }
+                folders += check(&entry.path(), depth + 1, excl, empty)?;
+            } else if !(meta.is_file() && folder::ignorable(&name, meta.len(), empty)) {
+                return Err(NotEmpty::Content);
             }
-            folders += still_empty(&entry.path(), excl, empty)?;
-        } else if !(meta.is_file() && folder::ignorable(&name, meta.len(), empty)) {
-            return None;
+        }
+        Ok(folders)
+    }
+    check(dir, 0, excl, empty)
+}
+
+/// Read-only pass over the tree `name` in `parent` (through handles, links not followed): it must
+/// be the folder `expected` and hold nothing but folders and litter, at most [`MAX_EMPTY_DEPTH`]
+/// levels deep. Run before anything is removed, so litter is never taken out of a folder that then
+/// turns out to be kept.
+fn verify_empty_tree_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &std::ffi::OsStr,
+    expected: (u64, u64),
+    depth: usize,
+    excl: &ExclusionFilter,
+    empty: &EmptyFolderSettings,
+) -> io::Result<()> {
+    if depth > MAX_EMPTY_DEPTH {
+        return Err(io::Error::other(
+            NotEmpty::TooDeep.reason().unwrap_or_default(),
+        ));
+    }
+    let dir = fsat::open_dir_at(parent, name)?;
+    if fsat::Fingerprint::of_stat(&fsat::stat_fd(&dir)?).id() != expected {
+        return Err(fsat::changed(&format!(
+            "{} is not the folder that was checked",
+            name.to_string_lossy()
+        )));
+    }
+    for entry in fsat::names_in(&dir)? {
+        let st = match fsat::stat_at(&dir, &entry) {
+            Ok(st) => st,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        let ename = entry.to_string_lossy();
+        if fsat::is_dir(&st) && !excl.excludes_folder(&ename) {
+            let sub = fsat::Fingerprint::of_stat(&st).id();
+            verify_empty_tree_at(&dir, &entry, sub, depth + 1, excl, empty)?;
+        } else if !(fsat::is_file(&st) && folder::ignorable(&ename, st.st_size as u64, empty)) {
+            return Err(io::Error::other(format!(
+                "{} is not empty",
+                name.to_string_lossy()
+            )));
         }
     }
-    Some(folders)
+    Ok(())
 }
 
 /// Delete the empty tree `name` in the open folder `parent`, deepest first, through handles only:
@@ -605,9 +703,15 @@ fn remove_empty_tree_at(
     parent: &std::os::fd::OwnedFd,
     name: &std::ffi::OsStr,
     expected: (u64, u64),
+    depth: usize,
     excl: &ExclusionFilter,
     empty: &EmptyFolderSettings,
 ) -> io::Result<usize> {
+    if depth > MAX_EMPTY_DEPTH {
+        return Err(io::Error::other(
+            NotEmpty::TooDeep.reason().unwrap_or_default(),
+        ));
+    }
     let not_empty = || io::Error::other(format!("{} is not empty", name.to_string_lossy()));
     let dir = fsat::open_dir_at(parent, name)?;
     let dir_id = fsat::Fingerprint::of_stat(&fsat::stat_fd(&dir)?).id();
@@ -630,7 +734,7 @@ fn remove_empty_tree_at(
         let ename = entry.to_string_lossy().into_owned();
         if fsat::is_dir(&st) && !excl.excludes_folder(&ename) {
             let sub = fsat::Fingerprint::of_stat(&st).id();
-            removed += remove_empty_tree_at(&dir, &entry, sub, excl, empty)?;
+            removed += remove_empty_tree_at(&dir, &entry, sub, depth + 1, excl, empty)?;
         } else if fsat::is_file(&st) && folder::ignorable(&ename, st.st_size as u64, empty) {
             fsat::seam("E3", Path::new(&entry));
             let was = fsat::Fingerprint::of_stat(&st);
@@ -702,7 +806,8 @@ fn remove_empty_tree(
         .ok_or_else(|| fsat::changed("not a planned folder"))?;
     fsat::seam("E1", path);
     let parent = fsat::open_below(root, Some(root_id), rel.parent().unwrap_or(Path::new("")))?;
-    remove_empty_tree_at(&parent, name, id, excl, empty)
+    verify_empty_tree_at(&parent, name, id, 0, excl, empty)?;
+    remove_empty_tree_at(&parent, name, id, 0, excl, empty)
 }
 
 #[derive(Debug, Default)]
@@ -737,8 +842,8 @@ pub fn delete_empty_permanently(
             out.skipped.push((path.clone(), Some(e.to_string())));
             continue;
         }
-        if still_empty(path, &excl, &f.empty).is_none() {
-            out.skipped.push((path.clone(), None));
+        if let Err(why) = still_empty_why(path, &excl, &f.empty) {
+            out.skipped.push((path.clone(), why.reason()));
             continue;
         }
         match remove_empty_tree(path, plan, roots, &excl, &f.empty) {
@@ -1252,6 +1357,82 @@ mod tests {
         assert_eq!((out.removed, out.skipped.len()), (1, 0), "{out:?}");
         assert!(!r.join("e").exists());
         assert!(still_empty(&r, &ExclusionFilter::default(), &f.empty).is_some());
+    }
+
+    /// A tree deeper than the limit used to hold one open folder per level and, past the
+    /// per-process limit, was reported as "no longer empty". It is reported as too deep, in both
+    /// modes, and nothing in it is removed.
+    #[test]
+    fn too_deep_trees_are_reported_as_such() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().to_path_buf();
+        let mut deep = r.join("e");
+        for _ in 0..(MAX_EMPTY_DEPTH + 10) {
+            deep.push("d");
+        }
+        fs::create_dir_all(&deep).unwrap();
+        let f = Settings::default().folder;
+        assert_eq!(
+            still_empty_why(&r.join("e"), &ExclusionFilter::default(), &f.empty),
+            Err(NotEmpty::TooDeep)
+        );
+        let (plan, _) = plan_remove_empty(std::slice::from_ref(&r), &f, &NullProgress).unwrap();
+        let out = delete_empty_permanently(&plan, std::slice::from_ref(&r), &f).unwrap();
+        assert_eq!(out.removed, 0);
+        assert!(
+            out.skipped[0]
+                .1
+                .as_deref()
+                .unwrap_or("")
+                .contains("too deep"),
+            "{out:?}"
+        );
+        assert!(deep.is_dir());
+        // within the limit it is removed
+        let shallow = tempfile::tempdir().unwrap();
+        let mut p = shallow.path().join("e");
+        for _ in 0..(MAX_EMPTY_DEPTH - 1) {
+            p.push("d");
+        }
+        fs::create_dir_all(&p).unwrap();
+        fs::write(p.join(".DS_Store"), "x").unwrap();
+        let root = [shallow.path().to_path_buf()];
+        let (plan, _) = plan_remove_empty(&root, &f, &NullProgress).unwrap();
+        let out = delete_empty_permanently(&plan, &root, &f).unwrap();
+        assert_eq!(
+            (out.removed, out.skipped.len()),
+            (MAX_EMPTY_DEPTH, 0),
+            "{out:?}"
+        );
+    }
+
+    /// Content that appears after planning, anywhere in the tree, keeps the whole tree, and no
+    /// litter is taken out of folders that are then kept (the tree is verified before anything
+    /// is removed).
+    #[test]
+    fn litter_is_never_removed_from_a_folder_that_is_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().to_path_buf();
+        fs::create_dir_all(r.join("e/a")).unwrap();
+        fs::create_dir_all(r.join("e/z")).unwrap();
+        for p in ["e/.DS_Store", "e/a/.DS_Store", "e/z/._x"] {
+            fs::write(r.join(p), "litter").unwrap();
+        }
+        let f = Settings::default().folder;
+        let (plan, _) = plan_remove_empty(std::slice::from_ref(&r), &f, &NullProgress).unwrap();
+        let rr = r.clone();
+        let out = crate::fsat::with_seam(
+            move |p, _| {
+                if p == "E1" {
+                    fs::write(rr.join("e/z/real.txt"), "REAL").unwrap();
+                }
+            },
+            || delete_empty_permanently(&plan, std::slice::from_ref(&r), &f).unwrap(),
+        );
+        assert_eq!((out.removed, out.skipped.len()), (0, 1), "{out:?}");
+        for p in ["e/.DS_Store", "e/a/.DS_Store", "e/z/._x", "e/z/real.txt"] {
+            assert!(r.join(p).exists(), "{p} removed");
+        }
     }
 
     fn walk_names(r: &Path) -> Vec<String> {

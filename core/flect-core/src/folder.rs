@@ -805,23 +805,64 @@ pub enum Removal {
     LeftAs(PathBuf),
 }
 
+/// Folders already opened and verified during one removal run, so files in the same (deep)
+/// folder do not walk the way from the selected folder again and again. Bounded: at most
+/// [`ParentCache::CAP`] descriptors are kept. A cached descriptor always refers to the folder that
+/// was verified when it was opened (a descriptor follows its folder); whether that folder is still
+/// where its path leads is checked separately, right before each removal.
+#[derive(Default)]
+pub struct ParentCache {
+    open: std::cell::RefCell<(OpenFolders, std::collections::VecDeque<PathBuf>)>,
+}
+
+/// Folder path -> its verified descriptor and (device, inode).
+type OpenFolders = HashMap<PathBuf, (std::rc::Rc<std::os::fd::OwnedFd>, (u64, u64))>;
+
+impl ParentCache {
+    pub const CAP: usize = 32;
+}
+
+type Parent = (std::rc::Rc<std::os::fd::OwnedFd>, std::ffi::OsString);
+
 /// The folder a scanned file was listed in, opened through handles from its selected folder
 /// ([`fsat::open_below`]: the root checked by (device, inode), every folder below it opened
 /// without following links), and checked to be that same folder; plus the file's name in it.
-fn open_parent(f: &ScannedFile) -> Option<(std::os::fd::OwnedFd, std::ffi::OsString)> {
+fn open_parent(f: &ScannedFile, cache: &ParentCache) -> Option<Parent> {
     let rel = f.path.strip_prefix(&f.root.path).ok()?;
     let name = rel.file_name()?.to_owned();
+    let key = f.path.parent()?.to_path_buf();
+    let mut open = cache.open.borrow_mut();
+    if let Some((fd, id)) = open.0.get(&key) {
+        if *id == f.parent_id {
+            return Some((fd.clone(), name));
+        }
+    }
     let fd = fsat::open_below(
         &f.root.path,
         Some(f.root.id),
         rel.parent().unwrap_or(Path::new("")),
     )
     .ok()?;
-    (fsat::stat_fd(&fd)
-        .ok()
-        .map(|st| fsat::Fingerprint::of_stat(&st).id())
-        == Some(f.parent_id))
-    .then_some((fd, name))
+    let id = fsat::Fingerprint::of_stat(&fsat::stat_fd(&fd).ok()?).id();
+    if id != f.parent_id {
+        return None;
+    }
+    let fd = std::rc::Rc::new(fd);
+    if open.0.insert(key.clone(), (fd.clone(), id)).is_none() {
+        open.1.push_back(key);
+        while open.1.len() > ParentCache::CAP {
+            if let Some(old) = open.1.pop_front() {
+                open.0.remove(&old);
+            }
+        }
+    }
+    Some((fd, name))
+}
+
+/// Whether the folder `f` was listed in is still where its path leads (`lstat` of the folder's
+/// path: a link put in its place, or another folder moved there, has another identity).
+fn parent_still_here(f: &ScannedFile) -> bool {
+    f.path.parent().and_then(dir_id) == Some(f.parent_id)
 }
 
 /// Whether `name` in the open folder `dir` is still the regular file `f` describes (not followed).
@@ -857,9 +898,10 @@ pub fn remove_duplicate(
     kept: Option<&ScannedFile>,
     unlink: bool,
     progress: &dyn Progress,
+    cache: &ParentCache,
     before_unlink: &dyn Fn(&ScannedFile),
 ) -> Result<Removal, Cancelled> {
-    let Some((dp, dn)) = open_parent(doomed) else {
+    let Some((dp, dn)) = open_parent(doomed, cache) else {
         return Ok(Removal::Changed);
     };
     fsat::seam("D1", &doomed.path);
@@ -870,7 +912,7 @@ pub fn remove_duplicate(
         if kept.may_be_same_file(doomed) || kept.path == doomed.path {
             return Ok(Removal::Changed);
         }
-        let Some((kp, kn)) = open_parent(kept) else {
+        let Some((kp, kn)) = open_parent(kept, cache) else {
             return Ok(Removal::Changed);
         };
         let Some(mut k) = open_still(kept, &kp, &kn) else {
@@ -904,10 +946,7 @@ pub fn remove_duplicate(
     fsat::seam("D3", &doomed.path);
     // The folder must still be where its path leads (nothing above it renamed or swapped), and
     // the name in it must still be the file checked.
-    let here = open_parent(doomed)
-        .and_then(|(fd, _)| fsat::stat_fd(&fd).ok())
-        .map(|st| fsat::Fingerprint::of_stat(&st).id());
-    if here != Some(doomed.parent_id) || !is_still(doomed, &dp, &dn) {
+    if !parent_still_here(doomed) || !is_still(doomed, &dp, &dn) {
         return Ok(Removal::Changed);
     }
     fsat::seam("D4", &doomed.path);
@@ -1333,7 +1372,53 @@ mod tests {
     }
 
     fn safe(d: &ScannedFile, k: Option<&ScannedFile>, p: &dyn Progress) -> Result<bool, Cancelled> {
-        remove_duplicate(d, k, false, p, &|_| {}).map(|r| matches!(r, Removal::Verified))
+        remove_duplicate(d, k, false, p, &ParentCache::default(), &|_| {})
+            .map(|r| matches!(r, Removal::Verified))
+    }
+
+    /// Files in one (deep) folder reuse its verified descriptor instead of walking the way from
+    /// the selected folder again; the cache is bounded.
+    #[test]
+    fn verified_parent_folders_are_cached_and_bounded() {
+        let d = tempfile::tempdir().unwrap();
+        let mut deep = d.path().to_path_buf();
+        for _ in 0..150 {
+            deep.push("d");
+        }
+        for i in 0..3 {
+            write(&deep.join(format!("f{i}")), b"x");
+        }
+        for i in 0..(ParentCache::CAP + 5) {
+            write(&d.path().join(format!("w{i}/f")), b"y");
+        }
+        let s = scan(
+            &[d.path().to_path_buf()],
+            &ExclusionFilter::default(),
+            &EmptyFolderSettings::default(),
+            &NullProgress,
+        )
+        .unwrap();
+        let cache = ParentCache::default();
+        let in_deep: Vec<_> = s
+            .files
+            .iter()
+            .filter(|f| f.path.starts_with(&deep))
+            .collect();
+        assert_eq!(in_deep.len(), 3);
+        let a = open_parent(in_deep[0], &cache).unwrap();
+        let b = open_parent(in_deep[1], &cache).unwrap();
+        assert!(
+            std::rc::Rc::ptr_eq(&a.0, &b.0),
+            "same folder, one descriptor"
+        );
+        for f in s.files.iter().filter(|f| !f.path.starts_with(&deep)) {
+            assert!(open_parent(f, &cache).is_some());
+        }
+        assert!(cache.open.borrow().0.len() <= ParentCache::CAP);
+        // a cached descriptor is only used for files listed in that same folder
+        let mut stranger = in_deep[2].clone();
+        stranger.parent_id = (0, 0);
+        assert!(open_parent(&stranger, &cache).is_none());
     }
 
     /// The per-file check made right before a duplicate is removed.
