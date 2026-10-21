@@ -6,6 +6,7 @@ pub mod batch;
 pub mod convert;
 pub mod folder;
 pub mod foldertasks;
+pub mod fsat;
 pub mod imaging;
 pub mod jar;
 pub mod locations;

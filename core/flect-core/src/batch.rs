@@ -205,14 +205,27 @@ fn plan_holds_or_report(
 
 /// Carry out a confirmed duplicate plan, one file at a time. Right before each file is removed
 /// (permanent) or handed on to the app for the Trash, it and the copy that stays are checked again
-/// ([`folder::still_safe_to_remove`]: same files as scanned, contents still identical); a file that
-/// fails is skipped and reported with `msg.duplicateChanged`. The summary counts what was removed.
+/// and the removal goes through handles of the verified folder ([`folder::remove_duplicate`]); a
+/// file that fails is skipped and reported with `msg.duplicateChanged`. The summary counts what was
+/// removed.
 fn remove_duplicates(
     ctx: &Ctx<'_>,
     groups: &[Vec<folder::ScannedFile>],
     doomed: &[folder::ScannedFile],
     mode: DuplicateMode,
     roots: &[PathBuf],
+) {
+    remove_duplicates_with(ctx, groups, doomed, mode, roots, &|_| {});
+}
+
+/// [`remove_duplicates`] with a hook that runs after a file's checks, right before it is removed.
+fn remove_duplicates_with(
+    ctx: &Ctx<'_>,
+    groups: &[Vec<folder::ScannedFile>],
+    doomed: &[folder::ScannedFile],
+    mode: DuplicateMode,
+    roots: &[PathBuf],
+    before_unlink: &dyn Fn(&folder::ScannedFile),
 ) {
     let permanent = ctx.settings.folder.delete_method == DeleteMethod::Permanent;
     let gone: std::collections::HashSet<&Path> = doomed.iter().map(|d| d.path.as_path()).collect();
@@ -226,20 +239,17 @@ fn remove_duplicates(
     let (mut handed, mut bytes) = (Vec::new(), 0u64);
     for (i, d) in doomed.iter().enumerate() {
         let kept = kept_of(d);
-        if mode != DuplicateMode::DeleteAll && kept.is_none() {
+        if (mode != DuplicateMode::DeleteAll && kept.is_none()) || !roots.contains(&d.root.path) {
             changed_event(ctx, &d.path);
             continue;
         }
-        match folder::still_safe_to_remove(d, kept, &prog) {
+        match folder::remove_duplicate(d, kept, permanent, &prog, before_unlink) {
             Err(_) => return cancelled(ctx),
-            Ok(false) => {
+            Ok(folder::Removal::Changed) => {
                 changed_event(ctx, &d.path);
                 continue;
             }
-            Ok(true) => {}
-        }
-        if permanent {
-            if let Err(e) = ft::delete_permanently(std::slice::from_ref(&d.path), roots) {
+            Ok(folder::Removal::Failed(e)) => {
                 (ctx.emit)(Event::Warn {
                     key: "msg.emptyRemoveFailed".into(),
                     args: vec![
@@ -249,6 +259,7 @@ fn remove_duplicates(
                 });
                 continue;
             }
+            Ok(folder::Removal::Removed | folder::Removal::Verified) => {}
         }
         handed.push(d.path.clone());
         bytes += d.size;
@@ -982,6 +993,118 @@ mod tests {
         let ev = events.into_inner().unwrap();
         assert_eq!(changed_paths(&ev), [kept.path.to_string_lossy()], "{ev:?}");
         assert!(ev.iter().all(|e| e["event"] != "error"), "{ev:?}");
+    }
+
+    /// rev021d swap.sh: after every check passed, a folder above the duplicate is swapped
+    /// (`mv A A.old; mv B A`, or a link put in its place). Removing by path then deleted B/x.txt,
+    /// the only copy of other content. Removal goes through the verified folder's handle, and the
+    /// folder must still be where its path leads: nothing is removed, the file is reported.
+    #[test]
+    fn swapping_a_folder_after_the_checks_never_removes_another_file() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        for variant in ["rename", "symlink", "before"] {
+            let d = tempfile::tempdir().unwrap();
+            let r = d.path().to_path_buf();
+            for (p, c) in [
+                ("keep/x.txt", "dup-content\n"),
+                ("A/x.txt", "dup-content\n"),
+                ("B/x.txt", "UNIQUE-ONLY-COPY\n"),
+            ] {
+                fs::create_dir_all(r.join(p).parent().unwrap()).unwrap();
+                fs::write(r.join(p), c).unwrap();
+            }
+            let old =
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+            fs::File::options()
+                .write(true)
+                .open(r.join("keep/x.txt"))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            let s = folder::scan(
+                std::slice::from_ref(&r),
+                &folder::ExclusionFilter::default(),
+                &Default::default(),
+                &folder::NullProgress,
+            )
+            .unwrap();
+            let groups =
+                folder::find_duplicates(&s.files, &Default::default(), &folder::NullProgress)
+                    .unwrap();
+            let doomed = folder::to_delete(&groups, DuplicateMode::KeepOldest);
+            assert_eq!(doomed.len(), 1);
+            assert_eq!(doomed[0].path, r.join("A/x.txt"));
+            let swap = || {
+                fs::rename(r.join("A"), r.join("A.old")).unwrap();
+                if variant == "symlink" {
+                    std::os::unix::fs::symlink("B", r.join("A")).unwrap();
+                } else {
+                    fs::rename(r.join("B"), r.join("A")).unwrap();
+                }
+            };
+            if variant == "before" {
+                swap();
+            }
+            let swapped = std::cell::Cell::new(false);
+            let hook = |_: &folder::ScannedFile| {
+                if variant != "before" && !swapped.replace(true) {
+                    swap();
+                }
+            };
+            let events = Mutex::new(Vec::new());
+            let emit = |e: Event| {
+                events
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::to_value(&e).unwrap())
+            };
+            let never = || false;
+            let ctx = Ctx {
+                settings: &perm,
+                cancelled: &never,
+                emit: &emit,
+            };
+            remove_duplicates_with(
+                &ctx,
+                &groups,
+                &doomed,
+                DuplicateMode::KeepOldest,
+                std::slice::from_ref(&r),
+                &hook,
+            );
+            let ev = events.into_inner().unwrap();
+            assert!(
+                variant == "before" || swapped.get(),
+                "{variant}: the seam ran"
+            );
+            let unique = if variant == "symlink" {
+                r.join("B/x.txt")
+            } else {
+                r.join("A/x.txt")
+            };
+            assert_eq!(
+                fs::read_to_string(&unique).unwrap(),
+                "UNIQUE-ONLY-COPY\n",
+                "{variant}: {ev:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(r.join("A.old/x.txt")).unwrap(),
+                "dup-content\n",
+                "{variant}"
+            );
+            assert!(r.join("keep/x.txt").exists());
+            assert_eq!(
+                changed_paths(&ev),
+                [r.join("A/x.txt").to_string_lossy()],
+                "{variant}: {ev:?}"
+            );
+            assert_ne!(
+                find(&ev, "done").unwrap()["summary_key"],
+                "msg.deletedPermanently",
+                "{variant}"
+            );
+        }
     }
 
     /// race.py "doomed" / "kept" / FAT: a copy that goes was rewritten in place, the copy that stays

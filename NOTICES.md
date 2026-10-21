@@ -55,6 +55,7 @@ Generated from `cargo metadata` for the locked dependency graph; `cargo deny che
 | either | 1.19.0 | MIT OR Apache-2.0 |
 | encoding_rs | 0.8.42 | (Apache-2.0 OR MIT) AND BSD-3-Clause |
 | equivalent | 1.0.3 | Apache-2.0 OR MIT |
+| errno | 0.3.14 | MIT OR Apache-2.0 |
 | euclid | 0.22.14 | MIT OR Apache-2.0 |
 | fast_image_resize | 5.5.0 | MIT OR Apache-2.0 |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
@@ -109,6 +110,7 @@ Generated from `cargo metadata` for the locked dependency graph; `cargo deny che
 | resvg | 0.45.1 | Apache-2.0 OR MIT |
 | rgb | 0.8.53 | MIT |
 | roxmltree | 0.20.0 | MIT OR Apache-2.0 |
+| rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |

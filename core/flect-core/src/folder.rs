@@ -10,6 +10,8 @@ use std::time::SystemTime;
 use rayon::prelude::*;
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::fsat;
+
 use crate::settings::{
     DuplicateSettings, DuplicateStrictness, EmptyFolderSettings, ExclusionRules, TreeSettings,
 };
@@ -134,6 +136,19 @@ pub struct ScannedFile {
     /// Status change time (ctime) as (seconds, nanoseconds): with the other fields, what a later
     /// look must find again before anything is removed ([`ScannedFile::unchanged`]).
     pub changed: (i64, i64),
+    /// Modification time as (seconds, nanoseconds), as `stat` reports it.
+    pub mtime: (i64, i64),
+    /// (device, inode) of the folder the file was listed in.
+    pub parent_id: (u64, u64),
+    /// The selected folder the scan reached it from.
+    pub root: std::sync::Arc<ScanRoot>,
+}
+
+/// A selected folder as scanned: the path it was given as, and its (device, inode) then.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScanRoot {
+    pub path: PathBuf,
+    pub id: (u64, u64),
 }
 
 /// What two entries must share to be listed once (see [`TreeScan`]).
@@ -160,11 +175,18 @@ impl ScannedFile {
     /// nanosecond). A file rewritten in place, replaced by another one (an atomic save) or recreated
     /// under a reused inode number (FAT) fails at least one of these.
     pub fn unchanged(&self, m: &fs::Metadata) -> bool {
-        m.file_type().is_file()
-            && (m.dev(), m.ino()) == self.file_id
-            && m.len() == self.size
-            && m.modified().unwrap_or(SystemTime::UNIX_EPOCH) == self.modified
-            && (m.ctime(), m.ctime_nsec()) == self.changed
+        m.file_type().is_file() && fsat::Fingerprint::of_metadata(m) == self.fingerprint()
+    }
+
+    /// Device, inode, size, modification and status change time, as recorded by the scan.
+    pub fn fingerprint(&self) -> fsat::Fingerprint {
+        fsat::Fingerprint {
+            dev: self.file_id.0,
+            ino: self.file_id.1,
+            size: self.size,
+            mtime: self.mtime,
+            ctime: self.changed,
+        }
     }
 }
 
@@ -318,8 +340,12 @@ pub fn scan(
         if progress.cancelled() {
             return Err(Cancelled);
         }
-        if root.symlink_metadata().map(|m| m.is_dir()).unwrap_or(false) {
-            walk(root, &mut out, excl, empty, progress, true)?;
+        if let Some(id) = dir_id(root) {
+            let origin = std::sync::Arc::new(ScanRoot {
+                path: root.clone(),
+                id,
+            });
+            walk(root, &origin, &mut out, excl, empty, progress, true)?;
         }
     }
     Ok(out)
@@ -330,6 +356,7 @@ pub fn scan(
 /// not looked at, so its parent is never "empty").
 fn walk(
     dir: &Path,
+    origin: &std::sync::Arc<ScanRoot>,
     out: &mut TreeScan,
     excl: &ExclusionFilter,
     empty: &EmptyFolderSettings,
@@ -342,6 +369,8 @@ fn walk(
     let Ok(entries) = fs::read_dir(dir) else {
         return Ok(true);
     }; // unreadable: assume it has content
+       // (0, 0) never matches a real folder: files under an unidentifiable folder are never removed.
+    let parent_id = dir_id(dir).unwrap_or((0, 0));
     let mut has_content = false;
     let mut subdirs = Vec::new();
     for entry in entries {
@@ -379,6 +408,9 @@ fn walk(
                 extension: extension_of(&name),
                 file_id: (meta.dev(), meta.ino()),
                 changed: (meta.ctime(), meta.ctime_nsec()),
+                mtime: (meta.mtime(), meta.mtime_nsec()),
+                parent_id,
+                root: origin.clone(),
             });
             if !listed {
                 continue; // another name for a file already listed
@@ -393,7 +425,7 @@ fn walk(
     subdirs.sort();
     for sub in subdirs {
         out.directory_count += 1;
-        if walk(&sub, out, excl, empty, progress, false)? {
+        if walk(&sub, origin, out, excl, empty, progress, false)? {
             has_content = true;
         }
     }
@@ -751,70 +783,125 @@ pub fn unchanged_groups(groups: Vec<Vec<ScannedFile>>) -> (Vec<Vec<ScannedFile>>
     (held, changed)
 }
 
-#[cfg(target_os = "macos")]
-const O_NOFOLLOW: i32 = 0x0100;
-#[cfg(not(target_os = "macos"))]
-const O_NOFOLLOW: i32 = 0o400000;
-
-/// Open a regular file for reading without following a link in the last component.
-fn open_nofollow(p: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(p)
+/// What became of one duplicate at the moment it was to be removed.
+#[derive(Debug)]
+pub enum Removal {
+    /// Removed (permanent mode).
+    Removed,
+    /// Every check passed; the caller hands it on to the Trash (Trash mode).
+    Verified,
+    /// It, or the copy that stays, is not what was scanned and compared: left alone.
+    Changed,
+    /// The removal itself failed.
+    Failed(io::Error),
 }
 
-/// The last check, made right before one duplicate is removed (or handed on to the Trash):
-/// - `doomed` and, in a keep mode, `kept` (the copy that stays) both still are the files the scan
-///   saw ([`ScannedFile::unchanged`]), by name and through a descriptor opened with `O_NOFOLLOW`;
-/// - their contents are still byte-for-byte identical (streamed, bounded memory, cancellable);
-/// - after the comparison neither descriptor's file changed and both names still lead to them.
+/// The folder a scanned file was listed in, opened through handles from its selected folder
+/// ([`fsat::open_below`]: the root checked by (device, inode), every folder below it opened
+/// without following links), and checked to be that same folder; plus the file's name in it.
+fn open_parent(f: &ScannedFile) -> Option<(std::os::fd::OwnedFd, std::ffi::OsString)> {
+    let rel = f.path.strip_prefix(&f.root.path).ok()?;
+    let name = rel.file_name()?.to_owned();
+    let fd = fsat::open_below(
+        &f.root.path,
+        Some(f.root.id),
+        rel.parent().unwrap_or(Path::new("")),
+    )
+    .ok()?;
+    (fsat::stat_fd(&fd)
+        .ok()
+        .map(|st| fsat::Fingerprint::of_stat(&st).id())
+        == Some(f.parent_id))
+    .then_some((fd, name))
+}
+
+/// Whether `name` in the open folder `dir` is still the regular file `f` describes (not followed).
+fn is_still(f: &ScannedFile, dir: &std::os::fd::OwnedFd, name: &std::ffi::OsStr) -> bool {
+    fsat::stat_at(dir, name)
+        .is_ok_and(|st| fsat::is_file(&st) && fsat::Fingerprint::of_stat(&st) == f.fingerprint())
+}
+
+fn open_still(f: &ScannedFile, dir: &std::os::fd::OwnedFd, name: &std::ffi::OsStr) -> Option<File> {
+    let file = fsat::open_file_at(dir, name).ok()?;
+    file.metadata()
+        .is_ok_and(|m| f.unchanged(&m))
+        .then_some(file)
+}
+
+/// Remove one duplicate (permanent mode, `unlink`) or confirm it may go to the Trash, right now:
+/// 1. the folders of `doomed` and of `kept` (the copy that stays, in a keep mode) are opened
+///    through handles from their selected folder and must be the folders the scan listed them in;
+/// 2. both files, looked at in those folders without following links and through descriptors
+///    opened there, must still have the scanned device, inode, size and times;
+/// 3. their bytes must still be identical (streamed, bounded memory, cancellable), and step 2
+///    must still hold afterwards;
+/// 4. right before the removal the folder must still be where the path leads, and the file is
+///    then removed with `unlinkat` on the verified folder: never by path, so renaming or swapping
+///    a folder above it cannot make it remove another file.
 ///
-/// `Ok(false)` on any difference: the caller skips that file and reports it.
-pub fn still_safe_to_remove(
+/// `before_unlink` runs between the checks and step 4 (a test seam; a no-op otherwise).
+pub fn remove_duplicate(
     doomed: &ScannedFile,
     kept: Option<&ScannedFile>,
+    unlink: bool,
     progress: &dyn Progress,
-) -> Result<bool, Cancelled> {
-    let check = |f: &ScannedFile, file: &File| {
-        file.metadata().is_ok_and(|m| f.unchanged(&m))
-            && fs::symlink_metadata(&f.path).is_ok_and(|m| f.unchanged(&m))
+    before_unlink: &dyn Fn(&ScannedFile),
+) -> Result<Removal, Cancelled> {
+    let Some((dp, dn)) = open_parent(doomed) else {
+        return Ok(Removal::Changed);
     };
-    let Ok(mut d) = open_nofollow(&doomed.path) else {
-        return Ok(false);
+    let Some(mut d) = open_still(doomed, &dp, &dn) else {
+        return Ok(Removal::Changed);
     };
-    if !check(doomed, &d) {
-        return Ok(false);
-    }
-    let Some(kept) = kept else {
-        return Ok(true); // "delete all": nothing stays to compare with
-    };
-    if kept.may_be_same_file(doomed) || kept.path == doomed.path {
-        return Ok(false);
-    }
-    let Ok(mut k) = open_nofollow(&kept.path) else {
-        return Ok(false);
-    };
-    if !check(kept, &k) {
-        return Ok(false);
-    }
-    let (mut bd, mut bk) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
-    loop {
-        if progress.cancelled() {
-            return Err(Cancelled);
+    if let Some(kept) = kept {
+        if kept.may_be_same_file(doomed) || kept.path == doomed.path {
+            return Ok(Removal::Changed);
         }
-        let (Ok(nd), Ok(nk)) = (read_full(&mut d, &mut bd), read_full(&mut k, &mut bk)) else {
-            return Ok(false);
+        let Some((kp, kn)) = open_parent(kept) else {
+            return Ok(Removal::Changed);
         };
-        if nd != nk || bd[..nd] != bk[..nk] {
-            return Ok(false);
+        let Some(mut k) = open_still(kept, &kp, &kn) else {
+            return Ok(Removal::Changed);
+        };
+        let (mut bd, mut bk) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+        loop {
+            if progress.cancelled() {
+                return Err(Cancelled);
+            }
+            let (Ok(nd), Ok(nk)) = (read_full(&mut d, &mut bd), read_full(&mut k, &mut bk)) else {
+                return Ok(Removal::Changed);
+            };
+            if nd != nk || bd[..nd] != bk[..nk] {
+                return Ok(Removal::Changed);
+            }
+            if nd == 0 {
+                break;
+            }
         }
-        if nd == 0 {
-            break;
+        let still = |f: &ScannedFile, file: &File| file.metadata().is_ok_and(|m| f.unchanged(&m));
+        if !(still(kept, &k) && is_still(kept, &kp, &kn)) {
+            return Ok(Removal::Changed);
         }
     }
-    Ok(check(doomed, &d) && check(kept, &k))
+    if !(d.metadata().is_ok_and(|m| doomed.unchanged(&m)) && is_still(doomed, &dp, &dn)) {
+        return Ok(Removal::Changed);
+    }
+    before_unlink(doomed);
+    // The folder must still be where its path leads (nothing above it renamed or swapped), and
+    // the name in it must still be the file checked.
+    let here = open_parent(doomed)
+        .and_then(|(fd, _)| fsat::stat_fd(&fd).ok())
+        .map(|st| fsat::Fingerprint::of_stat(&st).id());
+    if here != Some(doomed.parent_id) || !is_still(doomed, &dp, &dn) {
+        return Ok(Removal::Changed);
+    }
+    if !unlink {
+        return Ok(Removal::Verified);
+    }
+    Ok(match fsat::unlink_file_at(&dp, &dn) {
+        Ok(()) => Removal::Removed,
+        Err(e) => Removal::Failed(e),
+    })
 }
 
 // ------------------------------------------------------------ tree
@@ -1085,6 +1172,9 @@ mod tests {
             extension: String::new(),
             file_id: (1, u64::from(n.as_bytes()[0])),
             changed: (0, 0),
+            mtime: (0, 0),
+            parent_id: (0, 0),
+            root: Default::default(),
         };
         let groups = vec![vec![f("a", 20), f("b", 10), f("c", 30)]];
         let names = |v: Vec<ScannedFile>| {
@@ -1136,6 +1226,9 @@ mod tests {
             extension: String::new(),
             file_id: (7, 42),
             changed: (0, 0),
+            mtime: (0, 0),
+            parent_id: (0, 0),
+            root: Default::default(),
         };
         let (a, link) = (f("a", 10, 100), f("hardlink", 10, 100));
         let (other_size, other_time) = (f("b", 11, 100), f("c", 10, 101));
@@ -1214,6 +1307,10 @@ mod tests {
         ));
     }
 
+    fn safe(d: &ScannedFile, k: Option<&ScannedFile>, p: &dyn Progress) -> Result<bool, Cancelled> {
+        remove_duplicate(d, k, false, p, &|_| {}).map(|r| matches!(r, Removal::Verified))
+    }
+
     /// The per-file check made right before a duplicate is removed.
     #[test]
     fn still_safe_to_remove_checks_identity_metadata_and_bytes() {
@@ -1240,48 +1337,34 @@ mod tests {
         };
         let (k, x) = rescan();
         assert_ne!(x.changed, (0, 0));
-        assert_eq!(still_safe_to_remove(&x, Some(&k), &NullProgress), Ok(true));
-        assert_eq!(still_safe_to_remove(&x, None, &NullProgress), Ok(true));
+        assert_eq!(safe(&x, Some(&k), &NullProgress), Ok(true));
+        assert_eq!(safe(&x, None, &NullProgress), Ok(true));
         // the same file on both sides is never "safe"
-        assert_eq!(still_safe_to_remove(&x, Some(&x), &NullProgress), Ok(false));
+        assert_eq!(safe(&x, Some(&x), &NullProgress), Ok(false));
         // any recorded field that no longer matches (as a reused FAT inode would show)
         for tweak in 0..4 {
             let mut y = x.clone();
             match tweak {
                 0 => y.changed.1 += 1,
-                1 => y.modified += Duration::from_nanos(1),
+                1 => y.mtime.1 += 1,
                 2 => y.size += 1,
                 _ => y.file_id.1 += 1,
             }
-            assert_eq!(
-                still_safe_to_remove(&y, Some(&k), &NullProgress),
-                Ok(false),
-                "{tweak}"
-            );
-            assert_eq!(
-                still_safe_to_remove(&x, Some(&y), &NullProgress),
-                Ok(false),
-                "{tweak}"
-            );
+            assert_eq!(safe(&y, Some(&k), &NullProgress), Ok(false), "{tweak}");
+            assert_eq!(safe(&x, Some(&y), &NullProgress), Ok(false), "{tweak}");
         }
         // contents differing in the last byte, with metadata re-recorded: refused by the comparison
         let mut other = vec![5u8; 200_000];
         other[199_999] = 6;
         write(&r.join("x"), &other);
         let (k2, x2) = rescan();
-        assert_eq!(
-            still_safe_to_remove(&x2, Some(&k2), &NullProgress),
-            Ok(false)
-        );
+        assert_eq!(safe(&x2, Some(&k2), &NullProgress), Ok(false));
         // a link where the file was: not followed, refused
         write(&r.join("x"), &vec![5u8; 200_000]);
         let (k3, x3) = rescan();
         fs::remove_file(r.join("x")).unwrap();
         std::os::unix::fs::symlink(r.join("k"), r.join("x")).unwrap();
-        assert_eq!(
-            still_safe_to_remove(&x3, Some(&k3), &NullProgress),
-            Ok(false)
-        );
+        assert_eq!(safe(&x3, Some(&k3), &NullProgress), Ok(false));
         // cancelled during the comparison
         fs::remove_file(r.join("x")).unwrap();
         write(&r.join("x"), &vec![5u8; 200_000]);
@@ -1292,7 +1375,7 @@ mod tests {
                 true
             }
         }
-        assert_eq!(still_safe_to_remove(&x4, Some(&k4), &Stop), Err(Cancelled));
+        assert_eq!(safe(&x4, Some(&k4), &Stop), Err(Cancelled));
         // plan_still_holds looks at every entry, kept ones included
         let groups = vec![vec![k4.clone(), x4.clone()]];
         assert!(plan_still_holds(&groups, std::slice::from_ref(&x4)));

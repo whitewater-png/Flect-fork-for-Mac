@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::folder::{self, Cancelled, ExclusionFilter, Progress, ScannedFile, TreeScan};
+use crate::fsat;
 use crate::settings::{EmptyFolderSettings, FolderSettings, RenameSettings, ReportFormat};
 use crate::text::natural_cmp;
 
@@ -546,25 +547,6 @@ fn check_inside(path: &Path, canon_roots: &[PathBuf]) -> io::Result<()> {
     }
 }
 
-/// Permanent deletion of files (duplicate removal), used only when the user chose it in settings.
-/// Refuses anything that is not inside one of `roots` and never follows symlinks. A folder is only
-/// ever removed when it is already empty (`remove_dir`); nothing here deletes a tree.
-pub fn delete_permanently(paths: &[PathBuf], roots: &[PathBuf]) -> io::Result<usize> {
-    let canon_roots = canonical_roots(roots);
-    let mut n = 0;
-    for path in paths {
-        check_inside(path, &canon_roots)?;
-        let meta = fs::symlink_metadata(path)?;
-        if meta.is_dir() {
-            fs::remove_dir(path)?;
-        } else {
-            fs::remove_file(path)?;
-        }
-        n += 1;
-    }
-    Ok(n)
-}
-
 /// Re-check, right before acting on it, that `dir` still holds nothing but empty folders and OS
 /// litter (see `folder::ignorable`). Read-only. Returns the number of folders in it (itself
 /// included), or `None` when anything counts as content: a file, a link, a special file, an
@@ -594,30 +576,55 @@ pub fn still_empty(
     Some(folders)
 }
 
-/// Delete an empty tree deepest first: litter files one by one (each re-checked), then each folder
-/// with `remove_dir`, which refuses a folder that is not empty. Stops at the first thing that is not
-/// litter, so content that appeared after the check is left alone.
-fn remove_empty_tree(
-    dir: &Path,
+/// Delete the empty tree `name` in the open folder `parent`, deepest first, through handles only:
+/// each folder is opened with `O_NOFOLLOW` relative to its (open) parent, litter files are removed
+/// one by one with `unlinkat` after an `fstatat` that does not follow links, and each folder with
+/// `unlinkat(AT_REMOVEDIR)`, which refuses a folder that is not empty. Stops at the first thing
+/// that is not litter, so content that appeared after the check is left alone; renaming or swapping
+/// a folder on the way cannot redirect a removal elsewhere.
+fn remove_empty_tree_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &std::ffi::OsStr,
     excl: &ExclusionFilter,
     empty: &EmptyFolderSettings,
 ) -> io::Result<usize> {
-    let not_empty = || io::Error::other(format!("{} is not empty", dir.display()));
+    let not_empty = || io::Error::other(format!("{} is not empty", name.to_string_lossy()));
+    let dir = fsat::open_dir_at(parent, name)?;
     let mut removed = 0;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let meta = fs::symlink_metadata(entry.path())?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if meta.is_dir() && !excl.excludes_folder(&name) {
-            removed += remove_empty_tree(&entry.path(), excl, empty)?;
-        } else if meta.is_file() && folder::ignorable(&name, meta.len(), empty) {
-            fs::remove_file(entry.path())?;
+    for entry in fsat::names_in(&dir)? {
+        let st = fsat::stat_at(&dir, &entry)?;
+        let ename = entry.to_string_lossy();
+        if fsat::is_dir(&st) && !excl.excludes_folder(&ename) {
+            removed += remove_empty_tree_at(&dir, &entry, excl, empty)?;
+        } else if fsat::is_file(&st) && folder::ignorable(&ename, st.st_size as u64, empty) {
+            fsat::unlink_file_at(&dir, &entry)?;
         } else {
             return Err(not_empty());
         }
     }
-    fs::remove_dir(dir)?;
+    drop(dir);
+    fsat::remove_dir_at(parent, name)?;
     Ok(removed + 1)
+}
+
+/// [`remove_empty_tree_at`] for `path`, reached through handles from the selected folder it lies in.
+fn remove_empty_tree(
+    path: &Path,
+    roots: &[PathBuf],
+    excl: &ExclusionFilter,
+    empty: &EmptyFolderSettings,
+) -> io::Result<usize> {
+    let root = roots
+        .iter()
+        .filter(|r| path.starts_with(r) && path != r.as_path())
+        .max_by_key(|r| r.components().count())
+        .ok_or_else(|| fsat::changed("not inside a selected folder"))?;
+    let rel = path
+        .strip_prefix(root)
+        .map_err(|_| fsat::changed("not below the root"))?;
+    let name = rel.file_name().ok_or_else(|| fsat::changed("no name"))?;
+    let parent = fsat::open_below(root, None, rel.parent().unwrap_or(Path::new("")))?;
+    remove_empty_tree_at(&parent, name, excl, empty)
 }
 
 #[derive(Debug, Default)]
@@ -640,12 +647,23 @@ pub fn delete_empty_permanently(
     let excl = ExclusionFilter::from_rules(&f.scan_exclusions);
     let mut out = EmptyRemoval::default();
     for path in paths {
-        check_inside(path, &canon_roots)?;
+        if let Err(e) = check_inside(path, &canon_roots) {
+            if !roots
+                .iter()
+                .any(|r| path.starts_with(r) && path != r.as_path())
+            {
+                return Err(e); // not a plan for these folders at all
+            }
+            // Under a selected folder as planned, but a folder on the way changed (moved, or a
+            // link put in its place): left alone and reported.
+            out.skipped.push((path.clone(), Some(e.to_string())));
+            continue;
+        }
         if still_empty(path, &excl, &f.empty).is_none() {
             out.skipped.push((path.clone(), None));
             continue;
         }
-        match remove_empty_tree(path, &excl, &f.empty) {
+        match remove_empty_tree(path, roots, &excl, &f.empty) {
             Ok(n) => out.removed += n,
             Err(e) => out.skipped.push((path.clone(), Some(e.to_string()))),
         }
@@ -999,22 +1017,35 @@ mod tests {
 
         // nothing is removed by planning
         assert!(d.path().join("a/one.bin").exists() && d.path().join("x/y/z").exists());
-        // the file deleter never removes a folder that is not empty (no recursive fallback)
-        assert!(delete_permanently(&ep.paths, &[d.path().to_path_buf()]).is_err());
-        assert!(d.path().join("x/y/z").exists());
         let gone = delete_empty_permanently(&ep.paths, &[d.path().to_path_buf()], &f).unwrap();
         assert_eq!((gone.removed, gone.skipped.len()), (3, 0));
         assert!(!d.path().join("x").exists());
+        // a folder on the way swapped for a link after planning: the removal is refused, never
+        // redirected to the link's target
+        let (p2, _) = {
+            fs::create_dir_all(d.path().join("s/t/u")).unwrap();
+            plan_remove_empty(&[d.path().to_path_buf()], &f, &NullProgress).unwrap()
+        };
+        assert_eq!(p2.paths, [d.path().join("s")]);
+        let away = tempfile::tempdir().unwrap();
+        fs::create_dir_all(away.path().join("t/u")).unwrap();
+        let planned = [d.path().join("s/t")];
+        fs::rename(d.path().join("s"), d.path().join("s.old")).unwrap();
+        std::os::unix::fs::symlink(away.path(), d.path().join("s")).unwrap();
+        let out = delete_empty_permanently(&planned, &[d.path().to_path_buf()], &f).unwrap();
+        assert_eq!((out.removed, out.skipped.len()), (0, 1), "{out:?}");
+        assert!(away.path().join("t/u").is_dir(), "followed the link");
+        assert!(d.path().join("s.old/t/u").is_dir());
         // a plan pointing outside the selected folders is refused
         let other = tempfile::tempdir().unwrap();
-        touch(&other.path().join("victim"), b"v");
-        let err = delete_permanently(&[other.path().join("victim")], &[d.path().to_path_buf()])
-            .unwrap_err();
+        fs::create_dir_all(other.path().join("victim")).unwrap();
+        let err = delete_empty_permanently(
+            &[other.path().join("victim")],
+            &[d.path().to_path_buf()],
+            &f,
+        )
+        .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(other.path().join("victim").exists());
-        // symlinks are removed as links, never followed
-        std::os::unix::fs::symlink(other.path(), d.path().join("lnk")).unwrap();
-        delete_permanently(&[d.path().join("lnk")], &[d.path().to_path_buf()]).unwrap();
-        assert!(other.path().join("victim").exists() && !d.path().join("lnk").exists());
     }
 }
