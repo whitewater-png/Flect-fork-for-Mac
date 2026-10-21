@@ -1,0 +1,29 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "id": "6F1C2A8E-0B7D-4C1E-9A55-3D2B1C0E9F11",
+   "name": "Discord audio",
+   "steps": [
+    "video.convert?to=M4A",
+    "audio.convert?to=MP3"
+   ]
+  },
+  {
+   "id": "0E4C7A1B-9D3E-4F2A-8B6C-5A4D3C2B1A00",
+   "name": "Small video",
+   "steps": [
+    "video.resize?scale=50",
+    "video.compress?preset=discord"
+   ]
+  },
+  {
+   "id": "11111111-2222-3333-4444-555555555555",
+   "name": "Text tidy",
+   "steps": [
+    "text.lineEndings?to=LF",
+    "text.encode?to=UTF8"
+   ]
+  }
+ ]
+}

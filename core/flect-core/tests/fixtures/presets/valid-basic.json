@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "id": "6F1C2A8E-0B7D-4C1E-9A55-3D2B1C0E9F11",
+   "name": "SNS 1080px / 2MB",
+   "steps": [
+    "image.resize?scale=custom&w=1080&h=1080&keep=1",
+    "image.compress?bytes=2097152"
+   ]
+  },
+  {
+   "id": "0e4c7a1b-9d3e-4f2a-8b6c-5a4d3c2b1a00",
+   "name": "写真 → JPG（情報削除）",
+   "steps": [
+    "image.resize?scale=50",
+    "image.convert?to=JPG",
+    "image.strip"
+   ]
+  }
+ ]
+}

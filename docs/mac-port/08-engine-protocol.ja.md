@@ -11,6 +11,7 @@
 | op | 形 | 意味 |
 | --- | --- | --- |
 | `run` | `{"op":"run","task":"image.resize?scale=50","paths":["/abs/a.png"]}` | タスクを実行。`task` は `ID?key=value&...`（値は `%XX` パーセントエンコード、UTF-8）。`options` は予約（現在無視） |
+| `pipeline` | `{"op":"pipeline","steps":["image.resize?scale=50","image.convert?to=JPG","image.strip"],"paths":["/abs/a.png"]}` | 各パスに `steps` を順に適用し、**最後の結果だけ**を元ファイルの隣（または最後のタスクの出力フォルダ）に書く。`steps` は 1〜8 個・各 1024 バイト以内（超えると `protocol.badPipeline`）。使えるタスク・パラメータ・種類の連結は `17-presets-pipeline.ja.md`。中間ファイルは `$TMPDIR` の非公開フォルダ（0700）で、`done` の前に消える。`outputs` は最終出力のみ |
 | `cancel` | `{"op":"cancel"}` | 実行中のタスクを中断。処理中でも即時に受理され、`done` が `outcome:"cancelled"` で届く。待機中なら何も起きない |
 | `export-menu` | `{"op":"export-menu"}` | `menu` イベントを 1 つ返す（`menu.json` と同内容。Quick Action 生成にも使用） |
 
@@ -119,6 +120,12 @@
 - `msg.pdfNeedTwo`
 - `msg.privacyClean`
 - `msg.privacyFound`
+- `msg.pipelineBadStep`
+- `msg.pipelineIncompatible`
+- `msg.pipelineStage`
+- `msg.pipelineStepCount`
+- `msg.pipelineStepNotAllowed`
+- `msg.pipelineWrongInput`
 - `msg.processing`
 - `msg.renameFailed`
 - `msg.reportSaved`
@@ -127,6 +134,7 @@
 - `msg.safeResized`
 - `msg.sandboxUnavailable`
 - `protocol.badJson`
+- `protocol.badPipeline`
 - `protocol.badPath`
 - `protocol.lineTooLong`
 - `protocol.notUtf8`

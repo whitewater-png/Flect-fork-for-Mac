@@ -11,8 +11,13 @@ struct Engine {
 
 impl Engine {
     fn start(home: &std::path::Path) -> Self {
+        Self::start_in(home, &std::env::temp_dir())
+    }
+    /// With `TMPDIR` pointing at `tmp`, so pipeline work folders can be checked.
+    fn start_in(home: &std::path::Path, tmp: &std::path::Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_flect-engine"))
             .env("FLECT_HOME", home)
+            .env("TMPDIR", tmp)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -256,4 +261,151 @@ fn duplicate_preview_deletes_nothing_and_confirming_asks_for_the_trash() {
     let ev = e.until_done();
     let needs = ev.iter().find(|x| x["event"] == "needs").unwrap();
     assert_eq!(needs["what"], "trash");
+}
+
+fn names(dir: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+fn outputs(ev: &[serde_json::Value]) -> Vec<String> {
+    ev.iter()
+        .filter(|x| x["event"] == "data" && x["name"] == "outputs")
+        .flat_map(|x| x["data"]["paths"].as_array().unwrap().clone())
+        .map(|p| p.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn pipeline_reports_only_the_final_output_and_leaves_no_work_files() {
+    let (d, tmp) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let f = d.path().join("a.txt");
+    std::fs::write(&f, "one\r\ntwo\r\n").unwrap();
+    let mut e = Engine::start_in(&d.path().join("home"), tmp.path());
+    e.send(&format!(
+        r#"{{"op":"pipeline","steps":["text.lineEndings?to=LF","text.encode?to=UTF16"],"paths":["{}"]}}"#,
+        f.display()
+    ));
+    let ev = e.until_done();
+    assert_eq!(ev.last().unwrap()["outcome"], "succeeded", "{ev:?}");
+    let last = d.path().join("a_lf_utf16.txt");
+    assert_eq!(outputs(&ev), [last.to_str().unwrap()]);
+    assert_eq!(names(d.path()), ["a.txt", "a_lf_utf16.txt"]);
+    assert_eq!(std::fs::read(&f).unwrap(), b"one\r\ntwo\r\n");
+    let stages = ev
+        .iter()
+        .filter(|x| x["event"] == "status" && x["key"] == "msg.pipelineStage")
+        .count();
+    assert_eq!(stages, 2);
+    // the private work folder is gone by the time `done` arrives
+    assert!(names(tmp.path()).is_empty(), "{:?}", names(tmp.path()));
+}
+
+#[test]
+fn invalid_pipelines_are_refused_before_anything_is_written() {
+    let (d, tmp) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let f = d.path().join("a.txt");
+    std::fs::write(&f, "x").unwrap();
+    let mut e = Engine::start_in(&d.path().join("home"), tmp.path());
+    for (steps, key) in [
+        (
+            r#"["text.encode?to=UTF8","image.strip"]"#,
+            "msg.pipelineIncompatible",
+        ),
+        (
+            r#"["folder.removeEmpty?confirm=1"]"#,
+            "msg.pipelineStepNotAllowed",
+        ),
+        (r#"["text.encode?to=EBCDIC"]"#, "msg.pipelineBadStep"),
+    ] {
+        e.send(&format!(
+            r#"{{"op":"pipeline","steps":{steps},"paths":["{}"]}}"#,
+            f.display()
+        ));
+        let ev = e.until_done();
+        assert_eq!(ev[0]["key"], key);
+        assert_eq!(ev.last().unwrap()["outcome"], "failed");
+    }
+    e.send(r#"{"op":"pipeline","steps":[],"paths":["/x"]}"#);
+    assert_eq!(e.until_done()[0]["key"], "protocol.badPipeline");
+    // a file of the wrong kind fails alone; the others still run
+    let j = d.path().join("b.json");
+    std::fs::write(&j, "{\"b\":1,\"a\":2}").unwrap();
+    let img = d.path().join("c.png");
+    std::fs::write(&img, "not really").unwrap();
+    e.send(&format!(
+        r#"{{"op":"pipeline","steps":["json.sort","json.pretty"],"paths":["{}","{}"]}}"#,
+        img.display(),
+        j.display()
+    ));
+    let ev = e.until_done();
+    assert_eq!(ev.last().unwrap()["outcome"], "failed");
+    assert!(ev.iter().any(|x| x["key"] == "msg.pipelineWrongInput"));
+    assert_eq!(
+        outputs(&ev),
+        [d.path().join("b_sorted_pretty.json").to_str().unwrap()]
+    );
+    assert_eq!(
+        names(d.path()),
+        ["a.txt", "b.json", "b_sorted_pretty.json", "c.png"]
+    );
+    assert!(names(tmp.path()).is_empty());
+}
+
+#[test]
+fn cancel_stops_a_pipeline_and_removes_its_work_folder() {
+    let (d, tmp) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let body = format!(
+        "[{}]",
+        (0..100_000)
+            .map(|i| format!("{{\"k{i}\":{i}}}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let paths: Vec<String> = (0..150)
+        .map(|i| {
+            let p = d.path().join(format!("f{i}.json"));
+            std::fs::write(&p, &body).unwrap();
+            format!("\"{}\"", p.display())
+        })
+        .collect();
+    let mut e = Engine::start_in(&d.path().join("home"), tmp.path());
+    e.send(&format!(
+        r#"{{"op":"pipeline","steps":["json.pretty","json.sort"],"paths":[{}]}}"#,
+        paths.join(",")
+    ));
+    let mut seen = Vec::new();
+    loop {
+        let x = e.next();
+        let stop = x["event"] == "step";
+        seen.push(x);
+        if stop {
+            break;
+        }
+    }
+    let t = Instant::now();
+    e.send(r#"{"op":"cancel"}"#);
+    seen.extend(e.until_done());
+    assert_eq!(seen.last().unwrap()["outcome"], "cancelled");
+    assert!(
+        t.elapsed() < Duration::from_secs(10),
+        "cancel took {:?}",
+        t.elapsed()
+    );
+    // exactly the reported outputs exist next to the originals; no intermediate leaked out
+    let made: Vec<String> = names(d.path())
+        .into_iter()
+        .filter(|n| n.contains("_pretty"))
+        .collect();
+    assert_eq!(made.len(), outputs(&seen).len());
+    assert!(
+        made.iter().all(|n| n.ends_with("_pretty_sorted.json")),
+        "{made:?}"
+    );
+    assert!(made.len() < 100);
+    assert!(names(tmp.path()).is_empty(), "{:?}", names(tmp.path()));
 }

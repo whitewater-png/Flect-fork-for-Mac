@@ -1,0 +1,19 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "id": "6F1C2A8E-0B7D-4C1E-9A55-3D2B1C0E9F11",
+   "name": "8 steps",
+   "steps": [
+    "image.rotate?deg=90",
+    "image.rotate?deg=90",
+    "image.rotate?deg=90",
+    "image.rotate?deg=90",
+    "image.strip",
+    "image.convert?to=PNG",
+    "image.resize?scale=50",
+    "image.compress?bytes=1048576"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "id": "6F1C2A8E-0B7D-4C1E-9A55-3D2B1C0E9F11",
+   "name": "a",
+   "steps": [
+    {
+     "task": "image.strip"
+    }
+   ]
+  }
+ ]
+}

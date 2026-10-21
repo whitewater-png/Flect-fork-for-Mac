@@ -1,0 +1,19 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "id": "6F1C2A8E-0B7D-4C1E-9A55-3D2B1C0E9F11",
+   "name": "Web",
+   "steps": [
+    "image.strip"
+   ]
+  },
+  {
+   "id": "0E4C7A1B-9D3E-4F2A-8B6C-5A4D3C2B1A00",
+   "name": "web",
+   "steps": [
+    "image.strip"
+   ]
+  }
+ ]
+}

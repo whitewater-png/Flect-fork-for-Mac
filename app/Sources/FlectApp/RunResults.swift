@@ -75,6 +75,7 @@ extension AppModel {
     }
 
     func taskLabel(_ task: String) -> String {
+        if task.hasPrefix("preset:") { return String(task.dropFirst(7)) } // a preset run is shown by its name
         let base = task.split(separator: "?").first.map(String.init) ?? task
         return loc.has("menu.\(base)") ? loc.t("menu.\(base)") : base
     }
