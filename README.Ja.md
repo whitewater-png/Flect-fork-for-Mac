@@ -29,13 +29,23 @@ English: [README.md](README.md)
 
 ## ダウンロード（ad-hoc 署名のビルド）
 
-Releases に `Flect-for-Mac-macos-arm64.zip`（Apple Silicon・macOS 14 以降）と `.sha256` を置きます。**公証はしていない**ため、初回起動で macOS が警告します。
+Releases に `Flect-for-Mac-macos-arm64.dmg`（おすすめ）と `Flect-for-Mac-macos-arm64.zip`（Apple Silicon・macOS 14 以降）を置きます。どちらにも `.sha256` が付きます。**公証はしていない**ため、初回起動で macOS が警告します。下の手順は、ディスクイメージの中にも図で入っています。
+
+**ディスクイメージから（いちばん簡単）**
+
+1. `.dmg` を開き、**Flect-for-Mac** を **Applications** へドラッグします。
+2. Flect-for-Mac を開きます。「開発元を確認できません」などと出たら、最初の 1 回だけ許可します:
+   - macOS 15 以降: 一度開こうとして、出た表示を閉じ（「ゴミ箱に入れる」は押さない）、**システム設定 → プライバシーとセキュリティ →「このまま開く」** を押します（パスワードを聞かれます。開こうとしてから約 1 時間だけ押せます）。
+   - macOS 14: アプリを右クリック →「開く」→「開く」。
+3. アプリは **「はじめに」** タブで始まります。**クイックアクションをインストール** → **Finder の設定を開く** で、Flect の項目をオンにします（詳しくは下）。**「必要なツール」** タブに、一部の項目が使う外部ツール（`brew install ffmpeg-full sevenzip`）が出ます。
+
+**zip から（ターミナル）**
 
 ```bash
 shasum -a 256 -c Flect-for-Mac-macos-arm64.zip.sha256     # ダウンロードの検証
 unzip Flect-for-Mac-macos-arm64.zip && mv Flect-for-Mac.app ~/Applications/
-xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app
-~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # Quick Action を配置
+xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app   # macOS の警告を出さない
+~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # アプリのボタンでも可
 killall Finder
 ```
 このあと「クイックアクションをオンにする」（下）を行ってください。バイナリを信用したくない場合は、下の手順で自分でビルドしてください。`brew install ffmpeg-full sevenzip` も必要です。
@@ -53,7 +63,7 @@ killall Finder
 
 macOS は新しいクイックアクションを**オフ**にするため、オンにするまで右クリックに出ません:
 
-1. **システム設定 → 一般 → ログイン項目と機能拡張** を開き、下の **拡張機能** の **Finder** の右にある (i) ボタンを押します。
+1. アプリの **「はじめに」** タブの **Finder の設定を開く** を押すか、**システム設定 → 一般 → ログイン項目と機能拡張** を自分で開き、下の **拡張機能** の **Finder** の右にある (i) ボタンを押します。
 2. **Flect: …** の項目（35 個）をすべてオンにします。ほかの項目はそのままで構いません。
 3. それでも Flect の項目が出ないときは、`killall Finder` を実行します。
 

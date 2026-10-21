@@ -29,13 +29,23 @@ Subtitles (speech to SRT/VTT/TXT) use the `whisper` filter of a whisper-enabled 
 
 ## Download (ad-hoc signed build)
 
-Releases contain `Flect-for-Mac-macos-arm64.zip` (Apple Silicon, macOS 14+) and its `.sha256`. The app is **not notarized**, so macOS will warn on first launch:
+Releases contain `Flect-for-Mac-macos-arm64.dmg` (recommended) and `Flect-for-Mac-macos-arm64.zip` (Apple Silicon, macOS 14+), each with a `.sha256`. The app is **not notarized**, so macOS warns on first launch. The steps below are also drawn inside the disk image.
+
+**From the disk image (easiest)**
+
+1. Open the `.dmg` and drag **Flect-for-Mac** onto **Applications**.
+2. Open Flect-for-Mac. If macOS says it cannot verify the developer, allow it once:
+   - macOS 15 or later: try to open it, close the message (do not click "Move to Trash"), then **System Settings → Privacy & Security → Open Anyway** (it asks for your password and is available for about an hour after the attempt).
+   - macOS 14: right-click the app → **Open** → **Open**.
+3. The app starts on the **Getting started** tab: **Install the Quick Actions**, then **Open the Finder settings** and switch the Flect items on (details below). The **Required tools** tab lists the extra tools some items need (`brew install ffmpeg-full sevenzip`).
+
+**From the zip, in Terminal**
 
 ```bash
 shasum -a 256 -c Flect-for-Mac-macos-arm64.zip.sha256     # verify the download
 unzip Flect-for-Mac-macos-arm64.zip && mv Flect-for-Mac.app ~/Applications/
-xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app
-~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # install the Quick Actions
+xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app   # skips the macOS warning
+~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # or use the button in the app
 killall Finder
 ```
 Then turn on the Quick Actions (next section). If you would rather not trust a binary, build it yourself (below). You also need `brew install ffmpeg-full sevenzip`.
@@ -53,7 +63,7 @@ killall Finder
 
 macOS leaves new Quick Actions **off**, so they do not show up until you turn them on:
 
-1. Open **System Settings → General → Login Items & Extensions**, scroll to **Extensions**, and click the (i) button next to **Finder**.
+1. Click **Open the Finder settings** on the app's **Getting started** tab, or open **System Settings → General → Login Items & Extensions** yourself, scroll to **Extensions**, and click the (i) button next to **Finder**.
 2. Switch on every **Flect: …** item (35 of them). You can leave the others as they are.
 3. If a Flect item is still missing, run `killall Finder`.
 
