@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 - easier install
 
 - Disk image (`Flect-for-Mac-macos-arm64.dmg`): drag the app onto Applications; the window shows the steps for macOS's first-launch warning (Japanese and English), and a text file repeats them. The zip stays available.
 - The app starts on a **Getting started** tab until the Quick Actions are installed: a button installs them (no Terminal needed) and another opens System Settings where they are switched on.
-- Fix: the zip built on CI crashed at launch when unpacked elsewhere (resource bundle lookup).
+- The app's version is shown without the tag's leading "v" (0.1.1, not v0.1.1).
+- Issues are enabled for bugs and questions (README, CONTRIBUTING).
 
 ## 0.1.0 - first release
 
