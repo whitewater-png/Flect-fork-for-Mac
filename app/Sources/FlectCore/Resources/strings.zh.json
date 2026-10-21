@@ -317,7 +317,7 @@
  "msg.renameFailed": "无法重命名 {0}：{1}",
  "msg.renamed": "已重命名 {0}。",
  "msg.reportSaved": "报告已保存：{0}",
- "msg.sandboxUnavailable": "无法使用沙盒，已在无沙盒情况下运行。",
+ "msg.sandboxFailed": "无法建立沙盒（sandbox-exec），未进行反编译（反编译器不会在无沙盒情况下运行）。{0}",
  "msg.scanning": "正在扫描...",
  "msg.scanningCount": "正在扫描 - {0}",
  "msg.separator.tab": "制表符",

@@ -69,7 +69,7 @@ shasum -a 256 ~/Library/Application\ Support/Flect-for-Mac/deps/whisper/ggml-tin
 ## 4. 第 1 回で残った項目
 | # | 確認 | 内容 |
 | --- | --- | --- |
-| 4-1 | JAR（未実施） | `scripts/fetch-cfr.sh`（`java -version` が通ること）→ 手元の `.jar` を右クリック → デコンパイル。出力フォルダにソースができる。`sandbox-exec` が拒否された場合の警告文面を報告 |
+| 4-1 | JAR（未実施） | `scripts/fetch-cfr.sh`（`java -version` が通ること）→ 手元の `.jar` を右クリック → デコンパイル。出力フォルダにソースができる。`sandbox-exec` が拒否された場合のエラー文面（`msg.sandboxFailed`）を報告 |
 | 4-2 | 日本語入り PDF の空白 | 空白になった PDF を Finder のプレビューで開いて表示されるか。`pdffonts` が無ければ省略可。Flect のプレビューで空白、Finder のプレビューで表示できるなら、その PDF を共有してほしい（原因調査用） |
 | 4-3 | mkv | `.mkv` を右クリックして動画の項目が出る（修正の再確認）。Finder 拡張でオンにした項目だけ出ることに注意 |
 | 4-4 | HEIC / 形式の選択画面 | 「PNG に変換」のように表示される |

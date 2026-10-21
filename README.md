@@ -99,7 +99,7 @@ Bugs and questions: open an issue (**Issues** tab) with your macOS version, the 
 - Archive extraction rejects absolute and `..` paths, links, and decompression bombs.
 - Outputs are created exclusively; existing files are never overwritten. Duplicate deletion is confirmed by byte comparison.
 - A configured output folder (Settings > Output) that is a symbolic link, or lies behind one, is refused with an error (`msg.outputFolderLink`) instead of being followed; `~`, absolute and relative paths to real folders work as before.
-- JAR decompilation uses a pinned (SHA-256) CFR jar under `sandbox-exec` when available.
+- JAR decompilation uses a pinned (SHA-256) CFR jar and only ever runs under `sandbox-exec` (no network, writes only to its staging and private temporary folder, no other programs). If the sandbox cannot be set up, nothing is decompiled (`msg.sandboxFailed`); there is no unsandboxed fallback.
 - Network: the app makes **no connection of its own** except the update check you start (or switch on): one HTTPS request to `api.github.com` that sends nothing about you or your Mac, and whose answer is accepted only if it is a plain `vX.Y.Z` release of this repository. Nothing is downloaded or installed automatically.
 - See [`SECURITY.md`](SECURITY.md) and [`docs/mac-port/02-requirements.ja.md`](docs/mac-port/02-requirements.ja.md).
 

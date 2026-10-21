@@ -77,7 +77,7 @@
 `image.resize.p1` のようなメニュー ID は、アプリ（Quick Action 起動後のウィンドウ）が設定（`Image.Presets.ResizeA` など）を読んで `image.resize?scale=50` のような**実タスク + パラメータ**に解決してからエンジンへ渡す。`*.custom` はアプリがダイアログで値を取得する。`video.compress.discord` は `video.compress?preset=discord`。
 
 ## 外部ツールの探索（PATH は信用しない）
-`ffmpeg`/`ffprobe`/`7zz`: `/opt/homebrew/bin`, `/usr/local/bin` のみ（他者書込可能なファイル/ディレクトリは拒否）。Java: `/usr/libexec/java_home` の結果または Homebrew の openjdk（`/usr/bin/java` スタブは使わない）。CFR: `<データフォルダ>/deps/cfr.jar` で **SHA-256 が固定値と一致するときだけ**使用（取得は `scripts/fetch-cfr.sh`）。
+`ffmpeg`/`ffprobe`/`7zz`: `/opt/homebrew/bin`, `/usr/local/bin` のみ（他者書込可能なファイル/ディレクトリは拒否）。Java: `/usr/libexec/java_home` の結果または Homebrew の openjdk（`/usr/bin/java` スタブは使わない）。CFR: `<データフォルダ>/deps/cfr.jar` で **SHA-256 が固定値と一致するときだけ**使用（取得は `scripts/fetch-cfr.sh`）。CFR は必ず `/usr/bin/sandbox-exec` の中で動かす（ネットワーク禁止、書き込みはステージングと非公開の一時フォルダ（0700、作業フォルダ内）だけ、起動できるのは JVM のみ。パスは解決済み（`/private/var/...`）で `-D` パラメータとして渡す）。実行前に同じプロファイル・同じパラメータで `/usr/bin/true` を動かして確かめ、`sandbox-exec` が無い／拒否された場合は `error msg.sandboxFailed` で失敗し、**サンドボックスなしでは実行しない**。
 
 ## エンジンが使う `key`（Swift の String Catalog に必要）
 旧 Windows 版の `Strings.En.cs` にも存在するキーは翻訳を流用できる。**新規**（翻訳が必要）:
@@ -133,7 +133,7 @@
 - `msg.safeNothing`
 - `msg.safeRemoved`
 - `msg.safeResized`
-- `msg.sandboxUnavailable`
+- `msg.sandboxFailed`
 - `protocol.badJson`
 - `protocol.badPipeline`
 - `protocol.badPath`

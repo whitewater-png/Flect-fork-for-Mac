@@ -317,7 +317,7 @@
  "msg.renameFailed": "{0} の名前を変更できませんでした: {1}",
  "msg.renamed": "{0} の名前を変更しました。",
  "msg.reportSaved": "レポートを保存しました: {0}",
- "msg.sandboxUnavailable": "サンドボックスを使えなかったため、サンドボックスなしで実行しました。",
+ "msg.sandboxFailed": "サンドボックス（sandbox-exec）を準備できなかったため、逆コンパイルしませんでした（サンドボックスなしでは実行しません）。{0}",
  "msg.scanning": "スキャンしています...",
  "msg.scanningCount": "スキャン中 - {0}",
  "msg.separator.tab": "タブ",

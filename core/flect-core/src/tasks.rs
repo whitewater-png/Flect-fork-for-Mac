@@ -669,19 +669,17 @@ pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
         let root = Some(ctx.settings.code.decompile.output_path.trim())
             .filter(|r| !r.is_empty())
             .map(Path::new);
-        let sandbox = Some(Path::new("/usr/bin/sandbox-exec")).filter(|p| p.is_file());
+        // Never run without the sandbox: decompile fails (msg.sandboxFailed) when it is missing or refused.
+        let sandbox = Some(Path::new(crate::jar::SANDBOX_EXEC)).filter(|p| p.is_file());
         let out = crate::jar::decompile(input, java, cfr, root, sandbox, &|| {
             ctx.progress.cancelled()
         })?;
-        let mut warnings: Vec<_> = out
+        let warnings: Vec<_> = out
             .report
             .warnings
             .into_iter()
             .map(|(k, a)| (k, vec![a]))
             .collect();
-        if out.unsandboxed {
-            warnings.push(("msg.sandboxUnavailable", vec![]));
-        }
         Ok(Done {
             output: out.destination,
             warnings,

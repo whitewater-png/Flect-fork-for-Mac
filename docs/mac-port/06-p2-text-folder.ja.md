@@ -47,7 +47,7 @@
 | `foldertasks` + `batch` | リネーム（2 相適用・上書きしない・失敗時ロールバック）、解析レポート（CSV/JSON/HTML/TXT）、重複/空フォルダの削除計画 | 削除はごみ箱依頼（`needs:trash`）。Permanent 設定でも選択フォルダの外は拒否。HTML レポートはファイル名をエスケープ |
 | `media` + `mediatasks` | ffmpeg/ffprobe を固定ディレクトリから探索、`-protocol_whitelist file,pipe` `-nostdin` `-n`、絶対 `file:` 入力、コンテナ許可リスト（HLS 等を拒否）。リサイズ/回転/変換/トリム/サムネ/音声抽出/GIF/目標サイズ圧縮 | HLS プレイリスト経由のローカルファイル読み取りを実 ffmpeg で拒否確認。VideoToolbox は試験エンコード成功後のみ使用 |
 | `pdf` | 結合（lopdf）。継承属性を各ページへ展開してから付け替え | 暗号化・壊れた PDF・ページツリーのループで停止/panic しない |
-| `jar` | CFR 実行。**SHA-256 固定の jar のみ**使用、`sandbox-exec`（ネットワーク禁止・書込は出力先のみ）に包む | sandbox は Mac 未検証。プロファイル自体が拒否された場合のみ 1 回だけ無しで再試行し警告を出す |
+| `jar` | CFR 実行。**SHA-256 固定の jar のみ**使用、`sandbox-exec`（ネットワーク禁止・書込は出力先のみ）に包む | 実行前に同じプロファイルで試し、使えなければ `msg.sandboxFailed` で失敗（サンドボックスなしの再試行はしない） |
 | `flect-engine` | 読み取りスレッド分離で処理中の `cancel` が効く（150 ファイルのバッチが数百 ms で停止）。単一のディスパッチ | stdio の e2e テスト |
 
 テスト合計: **155 件成功**（core 145 + engine 2+3 + tools 5。JAR の実 CFR テストは `FLECT_TEST_CFR_JAR` を設定した場合のみ実行、ffmpeg の E2E は `/usr/bin/ffmpeg` がある場合のみ実行）。

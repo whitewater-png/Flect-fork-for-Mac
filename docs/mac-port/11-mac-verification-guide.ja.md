@@ -129,7 +129,7 @@ scripts/fetch-whisper-model.sh small           # モデルを入れる（約 480
 
 ## 8. アーカイブ・JAR（必要な人のみ）
 - ZIP / 7z を右クリック → 展開。展開先は同じフォルダ内の新しい名前のフォルダ。上書きされないこと。
-- JAR のデコンパイル: `scripts/fetch-cfr.sh` を実行 → `.jar` を右クリック → デコンパイル。`sandbox-exec` が使えない場合は警告が出てサンドボックスなしで実行される（警告の文面を報告）。
+- JAR のデコンパイル: `scripts/fetch-cfr.sh` を実行 → `.jar` を右クリック → デコンパイル。`sandbox-exec` が使えない場合はエラー（`msg.sandboxFailed`）になり、何も実行されない（文面を報告）。
 
 ## 9. セキュリティの簡易確認
 - 実行後、`ls -l ~/Library/Application\ Support/Flect-for-Mac/settings.json` が `-rw-------`（0600）。

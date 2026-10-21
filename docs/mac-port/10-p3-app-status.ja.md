@@ -23,7 +23,7 @@
 2. `scripts/build.sh --install` → `killall Finder` → Finder で画像を右クリック → クイックアクション → Flect の項目が出るか。
 3. 画像のリサイズ、動画の変換（VideoToolbox を含む）、フォルダの重複削除（ごみ箱に移動されるか）、PDF の画像化、OCR、HEIC 変換。
 4. `swift poc/mac/ocr.swift` / `heic.swift` が通るか。mkv / webm / flv が右クリック対象になるか（UTI）。
-5. JAR のデコンパイル（`java -version` と `scripts/fetch-cfr.sh`）。`sandbox-exec` が拒否される場合は警告が出て、サンドボックスなしで再実行される。
+5. JAR のデコンパイル（`java -version` と `scripts/fetch-cfr.sh`）。`sandbox-exec` が拒否される場合はエラー（`msg.sandboxFailed`）になり、サンドボックスなしでは実行しない。
 
 ## 残作業
 設定画面の残り、字幕と背景除去、README / NOTICES / CONTRIBUTING の書き直し、ライセンス・名称・bundle id の決定、アセット（アイコン等）の新規作成。

@@ -325,7 +325,7 @@
  "msg.renameFailed": "Could not rename {0}: {1}",
  "msg.renamed": "Renamed {0}.",
  "msg.reportSaved": "Report saved: {0}",
- "msg.sandboxUnavailable": "The sandbox could not be used; the decompiler ran without it.",
+ "msg.sandboxFailed": "Not decompiled: the sandbox (sandbox-exec) could not be set up, and the decompiler never runs without it. {0}",
  "msg.scanning": "Scanning",
  "msg.scanningCount": "Scanning - {0}",
  "msg.separator.tab": "tab",

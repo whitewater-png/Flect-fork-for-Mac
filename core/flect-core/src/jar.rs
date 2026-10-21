@@ -1,8 +1,12 @@
 //! JAR decompilation with CFR. CFR only reads class files, but the JVM is a big program and the
-//! output paths come from names inside the file, so it runs under `sandbox-exec` (no network,
-//! writes only into a fresh staging folder) whenever that exists.
+//! output paths come from names inside the file, so it only ever runs under `sandbox-exec`: no
+//! network, writes only into a fresh staging folder and a private temporary folder, and no program
+//! but the JVM may be started. Whether the sandbox works is decided by a probe with the same profile
+//! and parameters before CFR starts; if it does not, the task fails (`msg.sandboxFailed`). There is
+//! no fallback that runs the decompiler without the sandbox.
 use std::fs;
 use std::io::{self, Read};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -29,6 +33,8 @@ pub enum JarError {
     Empty,
     Cancelled,
     Unsafe(String),
+    /// sandbox-exec is missing or refused the profile: CFR was not started.
+    NoSandbox(String),
     Io(io::Error),
 }
 
@@ -42,6 +48,7 @@ impl JarError {
             Self::Empty => "msg.decompileEmpty",
             Self::Cancelled => "msg.cancelled",
             Self::Unsafe(_) => "msg.archiveUnsafePath",
+            Self::NoSandbox(_) => "msg.sandboxFailed",
             Self::Io(e) => crate::paths::io_error_key(e),
         }
     }
@@ -101,19 +108,41 @@ pub fn verify_cfr(path: &Path) -> Result<(), JarError> {
     }
 }
 
-const SANDBOX_PROFILE: &str = "(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n(allow file-write* (subpath (param \"OUT\")) (subpath (param \"TMP\")) (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))\n";
+pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+/// What the probe runs inside the sandbox; the profile allows exactly this and the JVM to be started.
+const PROBE: &str = "/usr/bin/true";
+const SANDBOX_PROFILE: &str = "(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n(allow file-write* (subpath (param \"OUT\")) (subpath (param \"TMP\")) (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))\n(deny process-exec*)\n(allow process-exec (literal (param \"JAVA\")) (literal \"/usr/bin/true\"))\n";
 
-/// `java ... -jar cfr input --outputdir out`, wrapped in sandbox-exec when available.
+/// `sandbox-exec -D OUT=.. -D TMP=.. -D JAVA=.. -p PROFILE <program>`. All paths are passed as
+/// parameters (never spliced into the profile) and must already be canonical (`/private/var/...`,
+/// not `/var/...`), because the sandbox compares resolved paths.
+fn sandboxed(sandbox: &Path, java: &Path, out: &Path, tmp: &Path, program: &Path) -> Command {
+    let mut c = Command::new(sandbox);
+    c.arg("-D")
+        .arg(format!("OUT={}", out.display()))
+        .arg("-D")
+        .arg(format!("TMP={}", tmp.display()))
+        .arg("-D")
+        .arg(format!("JAVA={}", java.display()))
+        .arg("-p")
+        .arg(SANDBOX_PROFILE)
+        .arg(program)
+        .env("TMPDIR", tmp);
+    c
+}
+
+/// `sandbox-exec ... java ... -jar cfr input --outputdir out`. There is no unsandboxed form.
 pub fn build_command(
     java: &Path,
     cfr: &Path,
     input: &Path,
     out: &Path,
     tmp: &Path,
-    sandbox: Option<&Path>,
+    sandbox: &Path,
 ) -> Command {
-    let java_args = |c: &mut Command| {
-        c.args([
+    let mut c = sandboxed(sandbox, java, out, tmp, java);
+    c.arg(format!("-Djava.io.tmpdir={}", tmp.display()))
+        .args([
             "-Xmx2g",
             "-XX:-UsePerfData",
             "-Djava.awt.headless=true",
@@ -123,25 +152,33 @@ pub fn build_command(
         .arg(input)
         .arg("--outputdir")
         .arg(out);
-    };
-    match sandbox {
-        Some(sb) => {
-            let mut c = Command::new(sb);
-            c.arg("-D")
-                .arg(format!("OUT={}", out.display()))
-                .arg("-D")
-                .arg(format!("TMP={}", tmp.display()))
-                .arg("-p")
-                .arg(SANDBOX_PROFILE)
-                .arg(java);
-            java_args(&mut c);
-            c
-        }
-        None => {
-            let mut c = Command::new(java);
-            java_args(&mut c);
-            c
-        }
+    c
+}
+
+/// Check that sandbox-exec accepts the profile with these very parameters, by running a no-op
+/// program under it. CFR is only started when this succeeds.
+pub fn probe_sandbox(sandbox: &Path, java: &Path, out: &Path, tmp: &Path) -> Result<(), JarError> {
+    let failed = |why: String| Err(JarError::NoSandbox(why));
+    if !sandbox.is_file() {
+        return failed(format!("{} not found", sandbox.display()));
+    }
+    let probe = sandboxed(sandbox, java, out, tmp, Path::new(PROBE))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+    match probe {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => failed(
+            String::from_utf8_lossy(&o.stderr)
+                .lines()
+                .next()
+                .unwrap_or("sandbox-exec failed")
+                .chars()
+                .take(300)
+                .collect(),
+        ),
+        Err(e) => failed(e.to_string()),
     }
 }
 
@@ -185,11 +222,10 @@ fn run_with_timeout(
 pub struct Decompiled {
     pub destination: PathBuf,
     pub report: Report,
-    /// The sandbox could not be used and the run happened without it.
-    pub unsandboxed: bool,
 }
 
 /// Decompile `input` into a new folder: beside the jar, or under `output_root` when configured.
+/// `sandbox` is sandbox-exec; without it (or when it refuses the profile) nothing is run.
 pub fn decompile(
     input: &Path,
     java: &Path,
@@ -215,29 +251,23 @@ pub fn decompile(
         ),
     };
     let _ = base;
+    let sandbox =
+        sandbox.ok_or_else(|| JarError::NoSandbox(format!("{SANDBOX_EXEC} not found")))?;
     let scratch = ScratchDirectory::new(&anchor)?;
     let staging = scratch.path_for("out");
     fs::create_dir(&staging)?;
+    // A private temporary folder for the JVM (not the shared per-user one), inside the scratch folder.
+    let tmp = scratch.path_for("tmp");
+    fs::DirBuilder::new().mode(0o700).create(&tmp)?;
+    // The sandbox matches resolved paths (/var -> /private/var), so hand it resolved ones.
+    let (staging, tmp) = (fs::canonicalize(&staging)?, fs::canonicalize(&tmp)?);
+    let java = fs::canonicalize(java)?;
     let input_abs = fs::canonicalize(input)?;
-    let tmp = std::env::temp_dir();
-    let mut unsandboxed = false;
+    probe_sandbox(sandbox, &java, &staging, &tmp)?;
     let (ok, err) = run_with_timeout(
-        build_command(java, cfr, &input_abs, &staging, &tmp, sandbox),
+        build_command(&java, cfr, &input_abs, &staging, &tmp, sandbox),
         cancelled,
     )?;
-    let (ok, err) = if !ok
-        && sandbox.is_some()
-        && (err.contains("sandbox") || err.contains("Operation not permitted"))
-    {
-        // The profile itself was rejected (not a decompile error): retry once without it, and say so.
-        unsandboxed = true;
-        run_with_timeout(
-            build_command(java, cfr, &input_abs, &staging, &tmp, None),
-            cancelled,
-        )?
-    } else {
-        (ok, err)
-    };
     if !ok {
         return Err(JarError::Failed(
             err.lines()
@@ -285,7 +315,6 @@ pub fn decompile(
                 return Ok(Decompiled {
                     destination: dest,
                     report,
-                    unsandboxed,
                 });
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -339,22 +368,37 @@ mod tests {
 
     #[test]
     fn command_lines() {
-        let c = build_command(
+        let sb = build_command(
             Path::new("/j/java"),
             Path::new("/c/cfr.jar"),
             Path::new("/in/a b.jar"),
-            Path::new("/out"),
-            Path::new("/tmp"),
-            None,
+            Path::new("/out dir"),
+            Path::new("/priv/tmp"),
+            Path::new(SANDBOX_EXEC),
         );
-        let args: Vec<_> = c
+        let sargs: Vec<_> = sb
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(c.get_program(), "/j/java");
+        assert_eq!(sb.get_program(), SANDBOX_EXEC, "always wrapped");
+        let java_at = sargs.iter().position(|a| a == "/j/java").unwrap();
         assert_eq!(
-            args,
+            &sargs[..java_at],
             [
+                "-D",
+                "OUT=/out dir",
+                "-D",
+                "TMP=/priv/tmp",
+                "-D",
+                "JAVA=/j/java",
+                "-p",
+                SANDBOX_PROFILE
+            ]
+        );
+        assert_eq!(
+            &sargs[java_at + 1..],
+            [
+                "-Djava.io.tmpdir=/priv/tmp",
                 "-Xmx2g",
                 "-XX:-UsePerfData",
                 "-Djava.awt.headless=true",
@@ -362,35 +406,83 @@ mod tests {
                 "/c/cfr.jar",
                 "/in/a b.jar",
                 "--outputdir",
-                "/out"
+                "/out dir"
             ]
         );
-        let sb = build_command(
-            Path::new("/j/java"),
-            Path::new("/c/cfr.jar"),
-            Path::new("/in/a.jar"),
-            Path::new("/out dir"),
-            Path::new("/tmp"),
-            Some(Path::new("/usr/bin/sandbox-exec")),
-        );
-        let sargs: Vec<_> = sb
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(sb.get_program(), "/usr/bin/sandbox-exec");
-        assert_eq!(&sargs[..2], ["-D", "OUT=/out dir"]);
+        assert!(sb
+            .get_envs()
+            .any(|(k, v)| k == "TMPDIR" && v == Some(std::ffi::OsStr::new("/priv/tmp"))));
         assert!(
-            sargs.contains(&SANDBOX_PROFILE.to_owned())
-                && SANDBOX_PROFILE.contains("(deny network*)")
+            SANDBOX_PROFILE.contains("(deny network*)")
+                && SANDBOX_PROFILE.contains("(deny process-exec*)")
         );
         assert!(
-            SANDBOX_PROFILE.contains("(param \"OUT\")"),
+            SANDBOX_PROFILE.contains("(param \"OUT\")") && !SANDBOX_PROFILE.contains("/out"),
             "paths are passed as parameters, never spliced into the profile"
         );
-        assert!(
-            sargs.iter().position(|a| a == "/j/java").unwrap()
-                > sargs.iter().position(|a| a == "-p").unwrap()
+    }
+
+    /// The real sandbox-exec with the real profile: the probe passes, and the profile denies writes
+    /// outside OUT/TMP, the network and starting other programs. Skipped where sandbox-exec is absent.
+    #[test]
+    fn the_profile_works_and_confines() {
+        let sb = Path::new(SANDBOX_EXEC);
+        if !sb.is_file() {
+            eprintln!("SKIPPED: no {SANDBOX_EXEC}");
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let (out, tmp) = (d.path().join("out"), d.path().join("tmp"));
+        fs::create_dir(&out).unwrap();
+        fs::create_dir(&tmp).unwrap();
+        let (out, tmp) = (
+            fs::canonicalize(out).unwrap(),
+            fs::canonicalize(tmp).unwrap(),
         );
+        // "java" here is bash (a real binary; /bin/sh is a trampoline that starts another program),
+        // so the one allowed program can try what the JVM must not do
+        let sh = Path::new("/bin/bash");
+        probe_sandbox(sb, sh, &out, &tmp).expect("sandbox-exec accepts the profile");
+        let run = |out: &Path, script: &str| {
+            sandboxed(sb, sh, out, &tmp, sh)
+                .arg("-c")
+                .arg(script)
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(run(&out, &format!("echo x > '{}/a'", out.display())));
+        assert!(run(
+            &out,
+            &format!(
+                "echo x > \"$TMPDIR/b\" && [ \"$TMPDIR\" = '{}' ]",
+                tmp.display()
+            )
+        ));
+        assert!(!run(
+            &out,
+            &format!("echo x > '{}/escape'", d.path().display())
+        ));
+        assert!(!d.path().join("escape").exists());
+        assert!(
+            !run(&out, "/bin/echo started another program"),
+            "process-exec is limited to the JVM"
+        );
+        // The sandbox compares resolved paths: an unresolved spelling of OUT (/var/... for
+        // /private/var/...) would make every write fail, which is why decompile canonicalizes.
+        let unresolved = d.path().join("out");
+        if unresolved != out {
+            assert!(!run(
+                &unresolved,
+                &format!("echo x > '{}/c'", out.display())
+            ));
+        }
+        // a missing sandbox-exec is an error, never a reason to run without it
+        assert!(matches!(
+            probe_sandbox(Path::new("/nonexistent/sandbox-exec"), sh, &out, &tmp),
+            Err(JarError::NoSandbox(_))
+        ));
     }
 
     #[test]
@@ -408,29 +500,27 @@ mod tests {
         assert!(matches!(r, Err(JarError::CfrMismatch)));
     }
 
-    /// Full run with the real pinned CFR and a real JDK. Needs `FLECT_TEST_CFR_JAR` (see scripts/fetch-cfr.sh).
+    /// Full run with the real pinned CFR, a real JDK and the real sandbox. Needs `FLECT_TEST_CFR_JAR`
+    /// (see scripts/fetch-cfr.sh) and a JDK that `find_java` finds (with javac and jar beside it).
     #[test]
     fn decompiles_a_real_jar() {
         let (Some(cfr), Some(java)) = (
             std::env::var_os("FLECT_TEST_CFR_JAR").map(PathBuf::from),
-            ["/usr/bin/java"]
-                .iter()
-                .map(PathBuf::from)
-                .find(|p| p.is_file()),
+            find_java(),
         ) else {
             eprintln!("SKIPPED: set FLECT_TEST_CFR_JAR to the pinned cfr-0.152.jar and have a JDK");
             return;
         };
-        let (Some(javac), Some(jar)) = (
-            ["/usr/bin/javac"]
-                .iter()
-                .map(Path::new)
-                .find(|p| p.is_file()),
-            ["/usr/bin/jar"].iter().map(Path::new).find(|p| p.is_file()),
-        ) else {
-            eprintln!("SKIPPED: no javac/jar");
+        let bin = java.parent().unwrap().to_path_buf();
+        let (javac, jar) = (bin.join("javac"), bin.join("jar"));
+        if !javac.is_file() || !jar.is_file() || !Path::new(SANDBOX_EXEC).is_file() {
+            eprintln!(
+                "SKIPPED: no javac/jar beside {} or no sandbox-exec",
+                java.display()
+            );
             return;
-        };
+        }
+        let sandbox = Some(Path::new(SANDBOX_EXEC));
         let d = tempfile::tempdir().unwrap();
         let src = d.path().join("src");
         fs::create_dir_all(src.join("demo")).unwrap();
@@ -454,16 +544,15 @@ mod tests {
             .unwrap()
             .success());
 
-        let out = decompile(&jar_path, &java, &cfr, None, None, &|| false).unwrap();
+        let out = decompile(&jar_path, &java, &cfr, None, sandbox, &|| false).unwrap();
         assert_eq!(out.destination, d.path().join("hello app"));
         let java_src = fs::read_to_string(out.destination.join("demo/Hello.java")).unwrap();
         assert!(
             java_src.contains("class Hello") && java_src.contains("greet"),
             "{java_src}"
         );
-        assert!(!out.unsandboxed);
         // second run gets a new folder; the jar is untouched; no scratch litter
-        let again = decompile(&jar_path, &java, &cfr, None, None, &|| false).unwrap();
+        let again = decompile(&jar_path, &java, &cfr, None, sandbox, &|| false).unwrap();
         assert_eq!(again.destination, d.path().join("hello app (2)"));
         assert!(fs::read_dir(d.path())
             .unwrap()
@@ -471,13 +560,13 @@ mod tests {
             .all(|e| !e.file_name().to_string_lossy().starts_with(".Flect")));
         // configured output root
         let root = d.path().join("elsewhere");
-        let r = decompile(&jar_path, &java, &cfr, Some(&root), None, &|| false).unwrap();
+        let r = decompile(&jar_path, &java, &cfr, Some(&root), sandbox, &|| false).unwrap();
         assert_eq!(r.destination, root.join("hello app"));
         // garbage jar
         let bad = d.path().join("bad.jar");
         fs::write(&bad, b"nope").unwrap();
         let before = fs::read_dir(d.path()).unwrap().count();
-        let e = decompile(&bad, &java, &cfr, None, None, &|| false).unwrap_err();
+        let e = decompile(&bad, &java, &cfr, None, sandbox, &|| false).unwrap_err();
         assert!(matches!(e, JarError::Failed(_) | JarError::Empty), "{e:?}");
         assert_eq!(
             fs::read_dir(d.path()).unwrap().count(),
@@ -486,8 +575,58 @@ mod tests {
         );
     }
 
+    /// When sandbox-exec failed with "sandbox" / "Operation not permitted" on stderr, CFR was run a
+    /// second time without any sandbox. It must never run unsandboxed. Needs the pinned CFR jar
+    /// (`FLECT_TEST_CFR_JAR`) to get past the hash gate; the JVM and sandbox-exec are fakes.
     #[test]
-    fn fake_java_flow_cancellation_and_sandbox_retry() {
+    fn a_failing_sandbox_is_never_downgraded_to_no_sandbox() {
+        let Some(cfr) = std::env::var_os("FLECT_TEST_CFR_JAR").map(PathBuf::from) else {
+            eprintln!("SKIPPED: set FLECT_TEST_CFR_JAR to the pinned cfr-0.152.jar");
+            return;
+        };
+        let d = tempfile::tempdir().unwrap();
+        let marker = d.path().join("java-ran");
+        // a "JVM" that leaves a marker and some output, so a run without the sandbox would succeed
+        let java = fake_java(
+            d.path(),
+            &format!(
+                "touch '{}'; for a; do out=\"$a\"; done; echo 'class A {{}}' > \"$out/A.java\"",
+                marker.display()
+            ),
+        );
+        let sandbox = d.path().join("sandbox-exec");
+        fs::write(
+            &sandbox,
+            "#!/bin/sh\necho 'sandbox-exec: sandbox_apply: Operation not permitted' >&2\nexit 71\n",
+        )
+        .unwrap();
+        fs::set_permissions(&sandbox, fs::Permissions::from_mode(0o755)).unwrap();
+        let jar = d.path().join("app.jar");
+        fs::write(&jar, b"PK\x05\x06").unwrap();
+        let before: Vec<_> = fs::read_dir(d.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        let r = decompile(&jar, &java, &cfr, None, Some(&sandbox), &|| false);
+        assert!(r.is_err(), "decompiled without a sandbox: {r:?}");
+        assert!(
+            !marker.exists(),
+            "the JVM ran although the sandbox could not be used"
+        );
+        let after: Vec<_> = fs::read_dir(d.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(before, after, "nothing is left behind");
+        // no sandbox-exec at all: refused the same way
+        let r = decompile(&jar, &java, &cfr, None, None, &|| false);
+        assert!(r.is_err() && !marker.exists(), "{r:?}");
+    }
+
+    #[test]
+    fn fake_java_flow_and_cancellation() {
         // The pinned-hash gate cannot be passed by a fake jar, so exercise the process runner directly.
         let d = tempfile::tempdir().unwrap();
         let slow = fake_java(d.path(), "sleep 30");
@@ -500,5 +639,20 @@ mod tests {
         let failing = fake_java(d.path(), "echo 'sandbox: bad profile' >&2; exit 65");
         let (ok, err) = run_with_timeout(Command::new(&failing), &|| false).unwrap();
         assert!(!ok && err.contains("sandbox"));
+        // a sandbox-exec that refuses: the probe reports it, with its message
+        let refusing = fake_java(
+            d.path(),
+            "echo 'sandbox_apply: Operation not permitted' >&2; exit 71",
+        );
+        match probe_sandbox(&refusing, Path::new("/bin/sh"), d.path(), d.path()) {
+            Err(JarError::NoSandbox(why)) => {
+                assert!(why.contains("Operation not permitted"), "{why}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            JarError::NoSandbox(String::new()).key(),
+            "msg.sandboxFailed"
+        );
     }
 }
