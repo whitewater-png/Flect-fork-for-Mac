@@ -2,7 +2,7 @@
 
 **Finder で右クリックして、変換・圧縮・リサイズなどができます。** [Flect](https://github.com/Konayukiw/Flect)（Windows 版）を、Rust の処理コアと Swift の画面で macOS 向けに作り直したものです。
 
-> **状況: 初回リリース（0.1.0）。** MacBook（macOS 26・Apple Silicon）で 2 回の実機確認を行いました（[`docs/mac-port/`](docs/mac-port/)）。ビルドは ad-hoc 署名で、**公証していません**。既知の制限は [`CHANGELOG.md`](CHANGELOG.md) とリリースノートを参照してください。
+> **状況: 0.2.0。** MacBook（macOS 26・Apple Silicon）で実機確認を行いました（[`docs/mac-port/`](docs/mac-port/)）。ビルドは ad-hoc 署名で、**公証していません**。既知の制限は [`CHANGELOG.md`](CHANGELOG.md) とリリースノートを参照してください。
 
 English: [README.md](README.md)
 

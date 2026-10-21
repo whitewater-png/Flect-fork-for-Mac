@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - share safely, presets, command line
 
 - Share safely (images): **Privacy Check** shows what personal data a JPEG, PNG or WebP carries (GPS location, camera and lens serial numbers, owner/author, timestamps, software, embedded thumbnails, XMP/IPTC, comments, hidden blocks) and changes nothing. **Make Safe to Share** writes a new `_safe` copy without it (lossless for JPEG/PNG/WebP unless the rotation has to be applied; optionally with a maximum long edge via **Make Safe to Share (Resize)**). The copy is re-checked before it is written and the original is never touched or overwritten. Both appear as Finder Quick Actions. HEIC, PDF and video are not covered yet.
 - Duplicate removal now shows a preview first: for each group the copy that stays and the copies that would go. Nothing is moved until you confirm (Trash by default; Cancel is the default button).
@@ -9,6 +9,13 @@
 - Action picker: pin up to 6 tasks or presets to the top (right-click → Pin to top), and **Run again** repeats the last operation on a new selection when it applies.
 - Fixed: Text → Convert (to JSON, CSV, XML...) was answered "not available yet" by the engine.
 - Zip files made on Windows with Japanese or Chinese names (Shift_JIS / GBK, no UTF-8 flag) now extract with readable names instead of mojibake. All path, link and size checks still apply.
+- Command line: the app now bundles `flect` (`Flect-for-Mac.app/Contents/Resources/flect`) that runs the same tasks as the menu: `flect list`, `flect run <task> [-o key=value] [--json] <paths>`, `flect run --preset NAME`, `flect settings path`. Exit codes 0 / 1 / 2 / 130 (cancelled). Tasks that delete (**Remove Duplicate**, **Remove Empty**) only preview unless you pass `--apply` (and `--permanent` when the saved setting is permanent deletion). See `docs/cli.md`.
+- More ways to start: drop files on the Dock icon or on Flect.app, **File → Open…** (⌘O), and the **Services** entry "Process with Flect…". All of them open the same action picker and go through the same checks as the Quick Actions. macOS leaves the Services entry and notifications **off** until you switch them on; see the README.
+- Results and Undo: after a run the window lists the files it created, with **Show in Finder** and **Undo** (moves only the files that run created to the Trash, and only if they are unchanged). **File → Recent Runs…** (⌘Y) keeps the last 20 runs. A notification tells you when a run finishes (once you allow it in System Settings).
+- Faster batches: many images or text files are processed side by side (4 workers by default; `jobs` option or `FLECT_JOBS` to change). Results are reported in input order and cancel still stops promptly. Video, audio, archives and folder tasks are unchanged.
+- Shortcuts: App Intents for Shortcuts.app are included in the source (`Run a Flect Task on Files`, `Resize Images`, `Convert Images`, `Make Images Safe to Share`), but this build cannot register them with Shortcuts (that needs a build with full Xcode). Until then use the `flect` command in a **Run Shell Script** action; see `docs/shortcuts.md`.
+- Fixed: the results header showed "1 file created" in English in a Japanese or Chinese UI when exactly one file was created.
+- Security hardening found in review: output folders that are symbolic links are refused; the copy fallback when hard links are unavailable no longer leaves a truncated file under the final name; a closed output pipe stops a parallel batch; metadata hidden between the scans of a progressive JPEG is found and removed; control characters in file names are not printed raw by the CLI.
 
 ## 0.1.2 - update check
 
