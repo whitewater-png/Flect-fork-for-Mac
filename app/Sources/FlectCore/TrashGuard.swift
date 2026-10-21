@@ -20,7 +20,7 @@ public enum TrashGuard {
     }
 
     public enum Refusal: String, Error, Equatable, CaseIterable {
-        case invalidPath, outsideSelection, isSelected, holdsSelected, missing, symlink, unexpectedType, notEmpty, unreadable
+        case invalidPath, outsideSelection, isSelected, holdsSelected, changed, missing, symlink, unexpectedType, notEmpty, unreadable
         /// The request came from a run that is not the current one.
         case staleRun
         /// The localized reason (`strings.ux.*.json`).
@@ -38,9 +38,29 @@ public enum TrashGuard {
     }
 
     /// `check` for a request of the run `scope` belongs to; `.staleRun` when that run is not `currentRun`.
-    public static func check(_ path: String, scope: Scope, currentRun: UUID?, litter: LitterRules = LitterRules()) -> Refusal? {
+    /// `fingerprint`: what the engine verified for this path (`needs` item). The item is moved only while `lstat`
+    /// still gives exactly that (`fingerprint(of:)`); a request without one is refused.
+    public static func check(_ path: String, scope: Scope, currentRun: UUID?, litter: LitterRules = LitterRules(),
+                             fingerprint: String?) -> Refusal? {
         guard scope.run == currentRun else { return .staleRun }
-        return check(path, inputs: scope.inputs, kind: scope.kind, litter: litter)
+        if let r = check(path, inputs: scope.inputs, kind: scope.kind, litter: litter) { return r }
+        guard let want = fingerprint, Self.fingerprint(of: path) == want else { return .changed }
+        return nil
+    }
+
+    /// The engine's fingerprint of `path` as `lstat` sees it now: `f:dev:ino:size:mtime_s.mtime_ns:ctime_s.ctime_ns`
+    /// for a regular file, `d:dev:ino` for a folder, nil for anything else (`docs/mac-port/08-engine-protocol.ja.md`).
+    public static func fingerprint(of path: String) -> String? {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return nil }
+        let dev = UInt64(bitPattern: Int64(st.st_dev)), ino = UInt64(st.st_ino)
+        switch st.st_mode & S_IFMT {
+        case S_IFDIR: return "d:\(dev):\(ino)"
+        case S_IFREG:
+            let m = st.st_mtimespec, c = st.st_ctimespec
+            return "f:\(dev):\(ino):\(UInt64(st.st_size)):\(m.tv_sec).\(m.tv_nsec):\(c.tv_sec).\(c.tv_nsec)"
+        default: return nil
+        }
     }
 
     /// What a run's Trash requests came to.

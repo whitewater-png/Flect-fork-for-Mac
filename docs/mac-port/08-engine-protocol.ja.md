@@ -26,7 +26,7 @@
 | `step` | `done`, `total` | **ファイル単位**の全体進捗 |
 | `file_step` | `permille` (0–1000) | 現在のファイル内の進捗（動画のみ） |
 | `info` / `warn` / `error` | `key`, `args[]` | 表示用メッセージ。`error` は 1 ファイルの失敗で、バッチは継続する |
-| `needs` | `what`, `paths[]` | アプリに OS 操作を依頼。現在は `what:"trash"` のみ（`paths` をごみ箱へ移動。エンジンは移動後の応答を待たない） |
+| `needs` | `what`, `paths[]`, `items[]`（省略可） | アプリに OS 操作を依頼。現在は `what:"trash"` のみ（`paths` をごみ箱へ移動。エンジンは移動後の応答を待たない）。`trash` では項目ごとに確認した直後に 1 件ずつ送り、`items` に `{path, fingerprint}` を付ける。`fingerprint` はファイルなら `f:dev:ino:size:mtime秒.ナノ秒:ctime秒.ナノ秒`、フォルダなら `d:dev:ino`（lstat、リンクは辿らない）。アプリは移動の直前に lstat し、完全一致したものだけ移動する（フォルダはさらに OS のゴミだけかを再確認）。`items` の無い要求・一致しない項目は移動しない。`items` は追加フィールドなので、知らない受け手は無視できる |
 | `data` | `name`, `data` | 結果の提示用データ（下表） |
 | `menu` | `menu` | `export-menu` の応答 |
 | `done` | `outcome` (`succeeded`/`failed`/`cancelled`), `summary_key`, `summary_args[]` | 1 つの `run` の終わり。必ず 1 回届く |

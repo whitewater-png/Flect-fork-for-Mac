@@ -3,6 +3,7 @@
  "app.trashPartial.left.one": "Moved {0} of {1} items to the Trash; 1 was left in place (see the list below).",
  "app.trashPartial.one": "The item was not moved to the Trash; it was left in place (see the list below).",
  "app.trashRefused": "Not moved to the Trash: {0} ({1})",
+ "app.trashWhy.changed": "it changed after Flect checked it",
  "app.trashWhy.holdsSelected": "it holds one of the selected items",
  "app.trashWhy.invalidPath": "not a valid path",
  "app.trashWhy.isSelected": "it is one of the selected items",

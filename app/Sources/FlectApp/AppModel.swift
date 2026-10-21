@@ -201,9 +201,9 @@ final class AppModel: ObservableObject {
                 case .info(let k, let a): log.append(LogLine(kind: .info, text: loc.f(k, a)))
                 case .warn(let k, let a): log.append(LogLine(kind: .warn, text: loc.f(k, a))); sawProblem = true
                 case .error(let k, let a): log.append(LogLine(kind: .error, text: loc.f(k, a))); sawProblem = true
-                case .needs(let what, let ps):
+                case .needs(let what, let ps, let fingerprints):
                     if what == "trash" {
-                        trashed.add(trash(ps, scope: scope))
+                        trashed.add(trash(ps, fingerprints: fingerprints, scope: scope))
                         if trashed.notMoved > 0 { sawProblem = true }
                     }
                 case .data(let n, let d):
@@ -307,12 +307,14 @@ final class AppModel: ObservableObject {
     /// Every path is checked by `TrashGuard` right before it is moved (inside the run's selection, not a link, and for
     /// Remove Empty still nothing but OS litter); one that fails is skipped and reported. Returns how many were asked
     /// for and how many were moved, so the run is marked as having a problem and its summary does not claim more.
-    private func trash(_ ps: [String], scope: TrashGuard.Scope) -> TrashGuard.Tally {
+    /// The engine sends each item as soon as it has checked it, with its fingerprint; it is moved only while it still
+    /// has exactly that fingerprint.
+    private func trash(_ ps: [String], fingerprints: [String: String], scope: TrashGuard.Scope) -> TrashGuard.Tally {
         let litter = TrashGuard.LitterRules(settings: settings)
         var tally = TrashGuard.Tally()
         for p in ps {
             tally.requested += 1
-            if let why = TrashGuard.check(p, scope: scope, currentRun: currentRun, litter: litter) {
+            if let why = TrashGuard.check(p, scope: scope, currentRun: currentRun, litter: litter, fingerprint: fingerprints[p]) {
                 log.append(LogLine(kind: .warn, text: loc.f("app.trashRefused", [p, loc.t(why.key)])))
                 continue
             }

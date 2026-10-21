@@ -27,6 +27,13 @@ pub enum Request {
     ExportMenu,
 }
 
+/// One item of a `needs` event: a path and the fingerprint it had when the engine checked it.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct NeedsItem {
+    pub path: String,
+    pub fingerprint: String,
+}
+
 /// Localization is the UI's job: events carry message keys and arguments only.
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -59,6 +66,11 @@ pub enum Event {
     Needs {
         what: String,
         paths: Vec<String>,
+        /// For `trash`: per path, the fingerprint the engine verified right before handing it on
+        /// (`crate::fsat::Fingerprint` for a file, `d:dev:ino` for a folder). The app moves an item
+        /// only while it still has exactly this fingerprint. Omitted when empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        items: Vec<NeedsItem>,
     },
     Menu {
         menu: Value,

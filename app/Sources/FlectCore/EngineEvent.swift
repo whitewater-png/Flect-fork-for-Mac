@@ -12,7 +12,8 @@ public enum EngineEvent: Equatable {
     case info(key: String, args: [String])
     case warn(key: String, args: [String])
     case error(key: String, args: [String])
-    case needs(what: String, paths: [String])
+    /// `fingerprints`: for `trash`, path -> the fingerprint the engine verified (see `TrashGuard.fingerprint`).
+    case needs(what: String, paths: [String], fingerprints: [String: String])
     case menu(JSONValue)
     case data(name: String, data: JSONValue)
     case done(outcome: Outcome, summaryKey: String?, summaryArgs: [String])
@@ -30,7 +31,12 @@ public enum EngineEvent: Equatable {
         case "info": return .info(key: key, args: args)
         case "warn": return .warn(key: key, args: args)
         case "error": return .error(key: key, args: args)
-        case "needs": return .needs(what: v["what"]?.string ?? "", paths: (v["paths"]?.array ?? []).compactMap { $0.string })
+        case "needs":
+            var fps: [String: String] = [:]
+            for item in v["items"]?.array ?? [] {
+                if let p = item["path"]?.string, let f = item["fingerprint"]?.string { fps[p] = f }
+            }
+            return .needs(what: v["what"]?.string ?? "", paths: (v["paths"]?.array ?? []).compactMap { $0.string }, fingerprints: fps)
         case "menu": return v["menu"].map { .menu($0) }
         case "data": return .data(name: v["name"]?.string ?? "", data: v["data"] ?? .null)
         case "done":

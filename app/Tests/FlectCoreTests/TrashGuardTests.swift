@@ -244,14 +244,41 @@ final class TrashGuardTests: XCTestCase {
         let first = TrashGuard.Scope(inputs: [sel.path], kind: .files)
         let second = TrashGuard.Scope(inputs: [other.path], kind: .files)
         XCTAssertNotEqual(first.run, second.run)
-        XCTAssertNil(TrashGuard.check(target.path, scope: first, currentRun: first.run))
+        XCTAssertNil(TrashGuard.check(target.path, scope: first, currentRun: first.run, fingerprint: TrashGuard.fingerprint(of: target.path)))
         // a new run started: the first run's requests are refused, the second's are checked against its own inputs
-        XCTAssertEqual(TrashGuard.check(target.path, scope: first, currentRun: second.run), .staleRun)
-        XCTAssertNil(TrashGuard.check(otherTarget.path, scope: second, currentRun: second.run))
-        XCTAssertEqual(TrashGuard.check(target.path, scope: second, currentRun: second.run), .outsideSelection)
+        XCTAssertEqual(TrashGuard.check(target.path, scope: first, currentRun: second.run, fingerprint: TrashGuard.fingerprint(of: target.path)), .staleRun)
+        XCTAssertNil(TrashGuard.check(otherTarget.path, scope: second, currentRun: second.run, fingerprint: TrashGuard.fingerprint(of: otherTarget.path)))
+        XCTAssertEqual(TrashGuard.check(target.path, scope: second, currentRun: second.run, fingerprint: TrashGuard.fingerprint(of: target.path)), .outsideSelection)
         // no run current
-        XCTAssertEqual(TrashGuard.check(otherTarget.path, scope: second, currentRun: nil), .staleRun)
+        XCTAssertEqual(TrashGuard.check(otherTarget.path, scope: second, currentRun: nil, fingerprint: TrashGuard.fingerprint(of: otherTarget.path)), .staleRun)
         XCTAssertEqual(TrashGuard.kind(task: "folder.removeEmpty?confirm=1", steps: nil), TrashGuard.Scope(inputs: [], kind: .emptyFolders).kind)
+    }
+
+    /// The engine hands each item on with the fingerprint it verified; the app moves it only while it still matches.
+    func testItemsAreMovedOnlyWhileTheirFingerprintMatches() throws {
+        let sel = scratch()
+        let f = sel.appendingPathComponent("dup.txt"), d = sel.appendingPathComponent("empty")
+        file(f); dir(d)
+        let files = TrashGuard.Scope(inputs: [sel.path], kind: .files), folders = TrashGuard.Scope(inputs: [sel.path], kind: .emptyFolders)
+        let fp = try XCTUnwrap(TrashGuard.fingerprint(of: f.path)), dp = try XCTUnwrap(TrashGuard.fingerprint(of: d.path))
+        XCTAssertTrue(fp.hasPrefix("f:") && fp.split(separator: ":").count == 6, fp)
+        XCTAssertTrue(dp.hasPrefix("d:") && dp.split(separator: ":").count == 3, dp)
+        XCTAssertNil(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp))
+        XCTAssertNil(TrashGuard.check(d.path, scope: folders, currentRun: folders.run, fingerprint: dp))
+        // no fingerprint (an older engine, or a forged request): refused
+        XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: nil), .changed)
+        // rewritten in place (same size), replaced, or a folder swapped for another: refused
+        try "y".write(to: f, atomically: false, encoding: .utf8)
+        XCTAssertEqual(TrashGuard.check(f.path, scope: files, currentRun: files.run, fingerprint: fp), .changed)
+        try FileManager.default.removeItem(at: d); dir(d)
+        XCTAssertEqual(TrashGuard.check(d.path, scope: folders, currentRun: folders.run, fingerprint: dp), .changed)
+        XCTAssertNil(TrashGuard.fingerprint(of: sel.appendingPathComponent("gone").path))
+        // the format the engine writes: device, inode, size, then times as seconds.nanoseconds
+        let now = try XCTUnwrap(TrashGuard.fingerprint(of: f.path)).split(separator: ":")
+        let attrs = try FileManager.default.attributesOfItem(atPath: f.path)
+        XCTAssertEqual(UInt64(now[2]), (attrs[.systemFileNumber] as? NSNumber)?.uint64Value)
+        XCTAssertEqual(UInt64(now[3]), (attrs[.size] as? NSNumber)?.uint64Value)
+        XCTAssertTrue(now[4].contains(".") && now[5].contains("."))
     }
 
     func testRefusalMessagesExistInEveryLanguage() throws {

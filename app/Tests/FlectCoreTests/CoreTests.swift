@@ -13,7 +13,9 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(EngineEvent.parse(line: Data(line.utf8)), .done(outcome: .cancelled, summaryKey: nil, summaryArgs: ["a"]))
         XCTAssertEqual(EngineEvent.parse(line: Data(#"{"event":"step","done":2,"total":5}"#.utf8)), .step(done: 2, total: 5))
         XCTAssertEqual(EngineEvent.parse(line: Data(#"{"event":"file_step","permille":500}"#.utf8)), .fileStep(permille: 500))
-        XCTAssertEqual(EngineEvent.parse(line: Data(#"{"event":"needs","what":"trash","paths":["/a","/b"]}"#.utf8)), .needs(what: "trash", paths: ["/a", "/b"]))
+        XCTAssertEqual(EngineEvent.parse(line: Data(#"{"event":"needs","what":"trash","paths":["/a","/b"]}"#.utf8)), .needs(what: "trash", paths: ["/a", "/b"], fingerprints: [:]))
+        XCTAssertEqual(EngineEvent.parse(line: Data(#"{"event":"needs","what":"trash","paths":["/a"],"items":[{"path":"/a","fingerprint":"f:1:2:3:4.5:6.7"}]}"#.utf8)),
+                       .needs(what: "trash", paths: ["/a"], fingerprints: ["/a": "f:1:2:3:4.5:6.7"]))
         XCTAssertEqual(EngineEvent.parse(line: Data(#"{"event":"error","key":"msg.ioError","args":["x"]}"#.utf8)), .error(key: "msg.ioError", args: ["x"]))
         XCTAssertNil(EngineEvent.parse(line: Data("garbage".utf8)))
         XCTAssertNil(EngineEvent.parse(line: Data(#"{"event":"nope"}"#.utf8)))

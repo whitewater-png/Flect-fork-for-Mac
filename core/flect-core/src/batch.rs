@@ -281,7 +281,12 @@ fn remove_duplicates_with(
                 });
                 continue;
             }
-            Ok(folder::Removal::Removed | folder::Removal::Verified) => {}
+            Ok(folder::Removal::Verified) => {
+                // Handed on at once, with the fingerprint just verified, so the app moves it while
+                // the check is fresh (and only if it still matches), not after the whole run.
+                trash_one(ctx, &d.path, d.fingerprint().to_string());
+            }
+            Ok(folder::Removal::Removed) => {}
         }
         handed.push(d.path.clone());
         bytes += d.size;
@@ -294,21 +299,22 @@ fn remove_duplicates_with(
         return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
     }
     let args = vec![handed.len().to_string(), bytes.to_string()];
-    if permanent {
-        done(
-            ctx,
-            Outcome::Succeeded,
-            Some("msg.deletedPermanently"),
-            args,
-        );
+    let key = if permanent {
+        "msg.deletedPermanently"
     } else {
-        // The app moves these to the Trash (undoable); the engine never does it itself.
-        (ctx.emit)(Event::Needs {
-            what: "trash".into(),
-            paths: path_list(&handed),
-        });
-        done(ctx, Outcome::Succeeded, Some("msg.recycled"), args);
-    }
+        "msg.recycled"
+    };
+    done(ctx, Outcome::Succeeded, Some(key), args);
+}
+
+/// Ask the app to move one checked item to the Trash (undoable; the engine never does it itself).
+fn trash_one(ctx: &Ctx<'_>, path: &Path, fingerprint: String) {
+    let path = path.to_string_lossy().into_owned();
+    (ctx.emit)(Event::Needs {
+        what: "trash".into(),
+        paths: vec![path.clone()],
+        items: vec![crate::protocol::NeedsItem { path, fingerprint }],
+    });
 }
 
 /// Carry out a confirmed empty-folder plan. Every folder is re-checked right before it is handed on
@@ -347,17 +353,22 @@ fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
             }
         }
     } else {
-        let (keep, total, skipped) = ft::recheck_empty(planned, f);
-        for p in &skipped {
-            skipped_event(p, None);
+        // One folder at a time: checked, then handed on with its (device, inode) right away.
+        let (mut handed, mut total) = (0usize, 0usize);
+        for p in planned {
+            let (keep, n, _) = ft::recheck_empty(std::slice::from_ref(p), f);
+            match (keep.first(), folder::dir_id(p)) {
+                (Some(_), Some(id)) => {
+                    trash_one(ctx, p, crate::fsat::dir_fingerprint(id));
+                    handed += 1;
+                    total += n;
+                }
+                _ => skipped_event(p, None),
+            }
         }
-        if keep.is_empty() {
+        if handed == 0 {
             return done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]);
         }
-        (ctx.emit)(Event::Needs {
-            what: "trash".into(),
-            paths: path_list(&keep),
-        });
         done(
             ctx,
             Outcome::Succeeded,
@@ -619,6 +630,25 @@ mod tests {
         events.into_inner().unwrap()
     }
 
+    /// Every path handed on for the Trash, over all `needs` events, with its fingerprint.
+    fn trash_paths(ev: &[serde_json::Value]) -> Vec<String> {
+        ev.iter()
+            .filter(|e| e["event"] == "needs" && e["what"] == "trash")
+            .flat_map(|e| {
+                let items = e["items"].as_array().cloned().unwrap_or_default();
+                let paths = e["paths"].as_array().cloned().unwrap_or_default();
+                assert_eq!(items.len(), paths.len(), "{e}");
+                for (i, p) in items.iter().zip(&paths) {
+                    assert_eq!(&i["path"], p, "{e}");
+                    let fp = i["fingerprint"].as_str().unwrap();
+                    assert!(fp.starts_with("f:") || fp.starts_with("d:"), "{e}");
+                }
+                paths
+            })
+            .map(|p| p.as_str().unwrap().to_owned())
+            .collect()
+    }
+
     fn find<'a>(ev: &'a [serde_json::Value], kind: &str) -> Option<&'a serde_json::Value> {
         ev.iter().find(|e| e["event"] == kind)
     }
@@ -655,9 +685,7 @@ mod tests {
         );
 
         let ev = run("folder.removeDuplicate?mode=newest", &[d.path()], &s);
-        let needs = find(&ev, "needs").unwrap();
-        assert_eq!(needs["what"], "trash");
-        assert_eq!(needs["paths"].as_array().unwrap().len(), 1);
+        assert_eq!(trash_paths(&ev).len(), 1);
         let done = find(&ev, "done").unwrap();
         assert_eq!(
             (
@@ -733,13 +761,7 @@ mod tests {
             &[d.path()],
             &Settings::default(),
         );
-        assert_eq!(
-            find(&ev, "needs").unwrap()["paths"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
+        assert_eq!(trash_paths(&ev).len(), 2);
         let none = tempfile::tempdir().unwrap();
         fs::write(none.path().join("only.txt"), "u").unwrap();
         let ev = run(
@@ -1214,10 +1236,7 @@ mod tests {
                     "msg.deletedPermanently"
                 );
             } else {
-                assert_eq!(
-                    find(&ev, "needs").unwrap()["paths"][0],
-                    d.path().join("b.txt").to_string_lossy().as_ref()
-                );
+                assert_eq!(trash_paths(&ev), [d.path().join("b.txt").to_string_lossy()]);
             }
             assert!(d.path().join("a.txt").exists());
         }
@@ -1261,16 +1280,10 @@ mod tests {
                     &[r, &chosen],
                     settings,
                 );
-                if let Some(n) = find(&ev, "needs") {
-                    assert!(
-                        !n["paths"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .any(|p| p.as_str().unwrap().ends_with("chosen.txt")),
-                        "{mode}: {ev:?}"
-                    );
-                }
+                assert!(
+                    !trash_paths(&ev).iter().any(|p| p.ends_with("chosen.txt")),
+                    "{mode}: {ev:?}"
+                );
                 assert!(chosen.exists(), "{mode}: {ev:?}");
             }
 
@@ -1289,8 +1302,9 @@ mod tests {
             );
             let ev = run("folder.removeEmpty?confirm=1", &[r, &e, &inner], settings);
             assert!(e.is_dir() && inner.is_dir(), "{ev:?}");
-            if let Some(n) = find(&ev, "needs") {
-                assert_eq!(n["paths"], json!([r.join("free").to_string_lossy()]));
+            let t = trash_paths(&ev);
+            if !t.is_empty() {
+                assert_eq!(t, [r.join("free").to_string_lossy()]);
             } else {
                 assert!(!r.join("free").exists(), "{ev:?}");
             }
@@ -1359,12 +1373,10 @@ mod tests {
                     settings,
                 );
                 assert!(d.join("chosen.txt").exists(), "{mode}: {ev:?}");
-                if let Some(n) = find(&ev, "needs") {
-                    assert!(
-                        !n["paths"].to_string().contains("chosen.txt"),
-                        "{mode}: {ev:?}"
-                    );
-                }
+                assert!(
+                    !trash_paths(&ev).iter().any(|p| p.contains("chosen.txt")),
+                    "{mode}: {ev:?}"
+                );
             }
             let listed = run("folder.removeEmpty", &[&d, &ld], settings);
             assert!(find(&listed, "data").is_none(), "{listed:?}");
@@ -1444,13 +1456,7 @@ mod tests {
         assert_eq!(targets, want, "{listed:?}");
 
         let ev = run("folder.removeEmpty?confirm=1", &[r], &s);
-        let trash: Vec<&str> = find(&ev, "needs").unwrap()["paths"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p.as_str().unwrap())
-            .collect();
-        assert_eq!(trash, want.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(trash_paths(&ev), want);
 
         let ev = run("folder.removeEmpty?confirm=1", &[r], &perm);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1536,13 +1542,9 @@ mod tests {
         assert_eq!(find(&ev, "done").unwrap()["summary_key"], "msg.emptyFound");
         assert!(d.path().join("hollow").exists());
         let ev = run("folder.removeEmpty?confirm=1", &[d.path()], &s);
-        let t = find(&ev, "needs").unwrap();
-        assert_eq!(
-            t["paths"].as_array().unwrap().len(),
-            1,
-            "only the outermost empty folder is trashed"
-        );
-        assert!(t["paths"][0].as_str().unwrap().ends_with("/hollow"));
+        let t = trash_paths(&ev);
+        assert_eq!(t.len(), 1, "only the outermost empty folder is trashed");
+        assert!(t[0].ends_with("/hollow"));
     }
 
     #[test]
