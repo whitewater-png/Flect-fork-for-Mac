@@ -65,7 +65,6 @@ final class AppModel: ObservableObject {
     let pickerStore = PickerMemoryStore()
     @Published var presets: [Preset] = []
     @Published var memory = PickerMemory()
-    var rememberOverride: PickerRef?
 
     // MARK: start
 
@@ -121,13 +120,14 @@ final class AppModel: ObservableObject {
     // MARK: engine runs
 
     /// `steps`: run them as one pipeline instead of `task`. `label`: what the run history shows (a preset's name).
-    func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil) {
+    /// `remembering`: what "Run again" should repeat, when it is not `task` itself (a preset).
+    func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil, remembering: PickerRef? = nil) {
         guard let engine = engine else { screen = .message(loc.t("app.engineMissing")); return }
         resetProgress()
         screen = .running
         pendingData = []
         tracker.begin(task: label ?? task, inputs: runPaths)
-        remember(task: task)
+        remember(task: task, as: remembering)
         let events = steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
         Task {
             var outcome = Outcome.failed

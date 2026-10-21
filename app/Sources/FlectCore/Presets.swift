@@ -57,13 +57,18 @@ public enum PresetFile {
         return n.intValue
     }
 
+    /// What two names are compared by: lower case, scalar by scalar. Swift's `==` treats canonically equivalent
+    /// strings ("é" and "e" + U+0301) as equal; the engine compares code points, so this side must too, or a file the
+    /// CLI accepts would be "broken" here.
+    public static func nameKey(_ name: String) -> [UInt32] { name.lowercased().unicodeScalars.map { $0.value } }
+
     /// The rules for a list about to be saved (also applied to every loaded file).
     public static func problem(in presets: [Preset]) -> String? {
         if presets.count > maxPresets { return "too many presets" }
-        var ids = Set<UUID>(), names = Set<String>()
+        var ids = Set<UUID>(), names = Set<[UInt32]>()
         for (i, p) in presets.enumerated() {
             if !ids.insert(p.id).inserted { return "preset \(i + 1): duplicate id" }
-            if !isValidName(p.name) || !names.insert(p.name.lowercased()).inserted { return "preset \(i + 1): bad or duplicate name" }
+            if !isValidName(p.name) || !names.insert(nameKey(p.name)).inserted { return "preset \(i + 1): bad or duplicate name" }
             if case .failure(let e) = Pipeline.plan(p.steps) { return "preset \(i + 1): \(e.key) \(e.args)" }
         }
         return nil

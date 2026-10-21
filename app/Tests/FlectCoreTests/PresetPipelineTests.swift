@@ -193,6 +193,17 @@ final class PresetPipelineTests: XCTestCase {
         XCTAssertEqual(h.favorites, [.task("image.strip")])
         XCTAssertNil(h.last)
         XCTAssertNil(PickerRef(raw: "task:folder.removeEmpty?confirm=1"))
+
+        // deleting tasks are never pinned or remembered: with Keep = Oldest the first pass already deletes
+        var d = PickerMemory()
+        d.remember(.task("image.strip"))
+        for id in ["folder.removeDuplicate", "folder.removeEmpty"] {
+            XCTAssertFalse(d.pin(.task(id)), id)
+            d.remember(.task(id))
+            XCTAssertEqual(d.last, .task("image.strip"), id)
+            XCTAssertNil(PickerRef(raw: "task:\(id)"), id)
+        }
+        XCTAssertNil(PickerMemory.decode(Data(#"{"version":1,"favorites":["task:folder.removeDuplicate"],"last":"task:folder.removeDuplicate"}"#.utf8)).last)
         XCTAssertEqual(PickerRef(raw: "step:image.resize?scale=50"), .step("image.resize?scale=50"))
         XCTAssertEqual(PickerMemory.decode(Data("garbage".utf8)), PickerMemory())
     }

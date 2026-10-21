@@ -31,13 +31,12 @@ extension AppModel {
     }
 
     /// Remembers what was just started for "Run again". A catalog id is replayed through Planner (like a Quick Action),
-    /// a step only if it passes the engine's allow-list; anything else (a confirmed delete, for one) is not remembered.
-    func remember(task: String) {
+    /// a step only if it passes the engine's allow-list; anything that can delete is never remembered.
+    func remember(task: String, as given: PickerRef? = nil) {
         let ref: PickerRef?
-        if let o = rememberOverride {
-            ref = o
-            rememberOverride = nil
-        } else if PickerRef.isCatalogID(task), Planner.resolve(task, settings: settings) != .unknown {
+        if let g = given {
+            ref = g
+        } else if PickerRef.isReplayable(task), Planner.resolve(task, settings: settings) != .unknown {
             ref = .task(task)
         } else if Pipeline.isValidStep(task) {
             ref = .step(task)
@@ -87,11 +86,10 @@ extension AppModel {
     /// Runs a preset on `paths`: one step as an ordinary run, several as one pipeline (the engine checks them again).
     func runPreset(_ p: Preset) {
         guard case .success = Pipeline.plan(p.steps) else { screen = .message(loc.t("ux.presets.missing")); return }
-        rememberOverride = .preset(p.id)
         if p.steps.count == 1 {
-            runEngine(p.steps[0], paths: paths, label: "preset:\(p.name)")
+            runEngine(p.steps[0], paths: paths, label: "preset:\(p.name)", remembering: .preset(p.id))
         } else {
-            runEngine("pipeline", paths: paths, steps: p.steps, label: "preset:\(p.name)")
+            runEngine("pipeline", paths: paths, steps: p.steps, label: "preset:\(p.name)", remembering: .preset(p.id))
         }
     }
 
@@ -154,7 +152,9 @@ extension AppModel {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        Button(model.loc.t(model.memory.isPinned(ref) ? "ux.picker.unpin" : "ux.picker.pin")) { model.togglePin(ref) }
+        if model.memory.isPinned(ref) || PickerMemory.canPin(ref) {
+            Button(model.loc.t(model.memory.isPinned(ref) ? "ux.picker.unpin" : "ux.picker.pin")) { model.togglePin(ref) }
+        }
     }
 }
 
@@ -241,7 +241,7 @@ extension AppModel {
     private var steps: [String] { rows.map { $0.draft.build() } }
     private var planError: PipelineError? { if case .failure(let e) = Pipeline.plan(steps) { return e }; return nil }
     private var nameOK: Bool {
-        PresetFile.isValidName(name) && !model.presets.contains { $0.id != original.id && $0.name.lowercased() == name.lowercased() }
+        PresetFile.isValidName(name) && !model.presets.contains { $0.id != original.id && PresetFile.nameKey($0.name) == PresetFile.nameKey(name) }
     }
 
     /// The first task that can read what the last step makes.

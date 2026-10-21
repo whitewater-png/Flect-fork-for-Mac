@@ -3,8 +3,9 @@ import Foundation
 // Favorites and "Run again" for the action picker. Pure logic plus a small store (`picker.json`, 0600). Everything
 // read back from the file is checked again: a `task:` is only ever a catalog id (run through Planner.resolve like a
 // Quick Action), a `step:` must pass Pipeline.parse (the engine's allow-list), a `preset:` must name a saved preset.
-// The confirmed second pass of a destructive task (`folder.removeDuplicate?mode=all`, `...?confirm=1`) is neither, so
-// it is never remembered and can never be replayed by one click.
+// Nothing that can delete is ever remembered or pinned: the confirmed second pass of a destructive task
+// (`folder.removeDuplicate?mode=all`, `...?confirm=1`) is neither a catalog id nor a step, and the deleting tasks
+// themselves are excluded by name (`deletingTasks`), so no delete can be replayed by one click.
 
 /// Something the picker can offer again.
 public enum PickerRef: Hashable {
@@ -28,10 +29,17 @@ public enum PickerRef: Hashable {
             && s.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || $0 == 46 }
     }
 
+    /// Tasks that can delete. `folder.removeDuplicate` deletes on its first pass when the "keep" setting is Oldest or
+    /// Newest, so it must never sit behind a one-click "Run again" or a pin; `folder.removeEmpty` is kept out with it.
+    public static let deletingTasks: Set<String> = ["folder.removeDuplicate", "folder.removeEmpty"]
+
+    /// A catalog id that may be remembered or pinned.
+    public static func isReplayable(_ id: String) -> Bool { isCatalogID(id) && !deletingTasks.contains(id) }
+
     public init?(raw: String) {
         if raw.hasPrefix("task:") {
             let id = String(raw.dropFirst(5))
-            guard PickerRef.isCatalogID(id) else { return nil }
+            guard PickerRef.isReplayable(id) else { return nil }
             self = .task(id)
         } else if raw.hasPrefix("step:") {
             let s = String(raw.dropFirst(5))
@@ -66,10 +74,16 @@ public struct PickerMemory: Equatable {
 
     public init(favorites: [PickerRef] = [], last: PickerRef? = nil) {
         for f in favorites { _ = pin(f) }
-        self.last = last
+        if let l = last { remember(l) }
     }
 
-    public static func canPin(_ ref: PickerRef) -> Bool { if case .step = ref { return false }; return true }
+    public static func canPin(_ ref: PickerRef) -> Bool {
+        switch ref {
+        case .step: return false
+        case .task(let id): return PickerRef.isReplayable(id)
+        case .preset: return true
+        }
+    }
 
     public func isPinned(_ ref: PickerRef) -> Bool { favorites.contains(ref) }
 
@@ -98,7 +112,11 @@ public struct PickerMemory: Equatable {
         favorites.insert(ref, at: j)
     }
 
-    public mutating func remember(_ ref: PickerRef) { last = ref }
+    /// Ignores what must not be replayed by one click (a deleting task).
+    public mutating func remember(_ ref: PickerRef) {
+        if case .task(let id) = ref, !PickerRef.isReplayable(id) { return }
+        last = ref
+    }
 
     /// Drops references to presets that no longer exist.
     public mutating func keepPresets(_ ids: Set<UUID>) {
@@ -108,8 +126,10 @@ public struct PickerMemory: Equatable {
 
     // MARK: file form
 
+    static let maxFileBytes = 64 * 1024
+
     public static func decode(_ data: Data) -> PickerMemory {
-        guard data.count <= 64 * 1024, let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+        guard data.count <= maxFileBytes, let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               (root["version"] as? NSNumber)?.intValue == 1 else { return PickerMemory() }
         let favorites = ((root["favorites"] as? [Any]) ?? []).compactMap { ($0 as? String).flatMap(PickerRef.init(raw:)) }
         return PickerMemory(favorites: favorites, last: (root["last"] as? String).flatMap(PickerRef.init(raw:)))
@@ -130,9 +150,11 @@ public final class PickerMemoryStore {
     public init(url: URL = PickerMemoryStore.defaultURL) { self.url = url }
 
     public func load() -> PickerMemory {
+        // A regular file only (never a FIFO that would block), and never more than the decoder accepts.
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path), attrs[.type] as? FileAttributeType == .typeRegular,
-              let data = try? Data(contentsOf: url) else { return PickerMemory() }
-        return PickerMemory.decode(data)
+              let handle = FileHandle(forReadingAtPath: url.path) else { return PickerMemory() }
+        defer { try? handle.close() }
+        return PickerMemory.decode((try? handle.read(upToCount: PickerMemory.maxFileBytes + 1)) ?? Data())
     }
 
     public func save(_ memory: PickerMemory) throws {
