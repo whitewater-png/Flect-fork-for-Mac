@@ -7,10 +7,10 @@
 #
 # What it can run, and nothing else:
 #   brew install ffmpeg-full | sevenzip | openjdk      (Homebrew; no sudo)
-#   scripts/fetch-cfr.sh                                (pinned SHA-256)
-#   scripts/fetch-whisper-model.sh <model>              (pinned SHA-256)
+#   fetch-cfr.sh                                        (pinned SHA-256; next to this script)
+#   fetch-whisper-model.sh <model>                      (pinned SHA-256; next to this script)
 set -uo pipefail
-cd "$(dirname "$0")/.."
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 mode=ask; whisper=""
 while [ $# -gt 0 ]; do
@@ -74,11 +74,11 @@ fi
 [ "$have_7z" = no ] && brew_install sevenzip "7z archives"
 [ "$have_java" = no ] && brew_install openjdk "JAR decompile (optional)"
 if [ "$have_cfr" = no ]; then
-  confirm "Download the pinned CFR decompiler (verified by SHA-256)?" && scripts/fetch-cfr.sh
+  confirm "Download the pinned CFR decompiler (verified by SHA-256)?" && "$HERE/fetch-cfr.sh"
 fi
 if [ -n "$whisper" ]; then
-  scripts/fetch-whisper-model.sh "$whisper"
+  "$HERE/fetch-whisper-model.sh" "$whisper"
 elif [ "$have_whisper" = yes ] && [ ! -d "$data/deps/whisper" ]; then
-  confirm "Download the 'small' subtitle model (about 480 MB, verified by SHA-256)?" && scripts/fetch-whisper-model.sh small
+  confirm "Download the 'small' subtitle model (about 480 MB, verified by SHA-256)?" && "$HERE/fetch-whisper-model.sh" small
 fi
 echo; echo "Done. Run 'scripts/setup-deps.sh --check' to see the result."

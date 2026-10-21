@@ -8,6 +8,24 @@ final class SettingsEditor: ObservableObject {
     @Published var dirty = false
     @Published var message: String?
     @Published var leaves: [MenuEntry] = []
+    @Published var deps: [DependencyStatus] = []
+    var requiredMissing: Bool { deps.contains { $0.required && !$0.ok } }
+
+    /// Where the fetch scripts are: inside the app bundle, or the repository's scripts folder when run from a build.
+    static var scriptsFolder: String {
+        if let r = Bundle.main.resourcePath, FileManager.default.fileExists(atPath: r + "/scripts") { return r + "/scripts" }
+        return "scripts"
+    }
+
+    func refreshDependencies() async {
+        let dir = store.directory
+        let model = store.string("Video", "Subtitles", "Model", default: "Small")
+        let scripts = SettingsEditor.scriptsFolder
+        let result = await Task.detached(priority: .utility) {
+            DependencyCheck.check(dataDir: dir, modelSetting: model, scripts: scripts)
+        }.value
+        deps = result
+    }
 
     init(store: SettingsStore) { self.store = store }
 
@@ -70,6 +88,9 @@ struct SettingsView: View {
     var body: some View {
         let loc = Loc.shared
         VStack(spacing: 0) {
+            if editor.requiredMissing {
+                Text(loc.t("deps.banner")).font(.callout).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8)
+            }
             TabView(selection: $tab) {
                 ForEach(SettingsSchema.sections) { section in
                     Form {
@@ -79,6 +100,9 @@ struct SettingsView: View {
                     .tabItem { Text(text(loc, section.key, section.fallback)) }
                     .tag(section.id)
                 }
+                DependenciesView(editor: editor)
+                    .tabItem { Text(text(loc, "deps.tab", "Required tools")) }
+                    .tag("deps")
                 MenuItemsView(editor: editor, model: model)
                     .tabItem { Text(text(loc, "settings.general.menu", "Menu items")) }
                     .tag("menu")
@@ -98,6 +122,7 @@ struct SettingsView: View {
             Button(loc.t("common.cancel"), role: .cancel) {}
         }
         .frame(minWidth: 620, minHeight: 460)
+        .task { await editor.refreshDependencies() }
     }
 }
 
@@ -132,6 +157,42 @@ struct FieldRow: View {
                 ForEach(options, id: \.value) { o in Text(text(loc, o.key, o.fallback)).tag(o.value) }
             }
         }
+    }
+}
+
+@MainActor
+struct DependenciesView: View {
+    @ObservedObject var editor: SettingsEditor
+
+    var body: some View {
+        let loc = Loc.shared
+        VStack(alignment: .leading, spacing: 8) {
+            Text(loc.t("deps.hint")).font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+            List(editor.deps) { d in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: d.ok ? "checkmark.circle.fill" : "xmark.circle.fill").foregroundStyle(d.ok ? Color.green : (d.required ? Color.red : Color.orange))
+                        Text(d.name).font(.headline)
+                        Text("· " + loc.t(d.neededForKey) + " · " + loc.t(d.required ? "deps.required" : "deps.optional")).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(loc.t(d.ok ? "deps.ok" : "deps.missing")).font(.caption)
+                    }
+                    if !d.ok {
+                        HStack {
+                            Text(d.command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            Spacer()
+                            Button(loc.t("deps.copy")) {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(d.command, forType: .string)
+                            }
+                        }
+                    }
+                }.padding(.vertical, 2)
+            }
+            HStack { Spacer(); Button(loc.t("deps.recheck")) { Task { await editor.refreshDependencies() } } }.padding(.horizontal)
+        }
+        .padding(.vertical, 8)
+        .task { await editor.refreshDependencies() }
     }
 }
 

@@ -201,4 +201,40 @@ final class CoreTests: XCTestCase {
         for _ in 0..<3 { client.cancel() }
         try await Task.sleep(nanoseconds: 300_000_000)
     }
+
+    // MARK: dependency check
+
+    func testDependencyCheckReportsWhatIsInstalled() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("flect-deps-\(UUID().uuidString)")
+        let bin = root.appendingPathComponent("bin"), data = root.appendingPathComponent("data")
+        try fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        try fm.createDirectory(at: data.appendingPathComponent("deps/whisper"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        for t in ["ffmpeg", "ffprobe"] {
+            let p = bin.appendingPathComponent(t).path
+            fm.createFile(atPath: p, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        }
+        fm.createFile(atPath: data.appendingPathComponent("deps/whisper/ggml-tiny.bin").path, contents: Data("x".utf8))
+        let r = DependencyCheck.check(dataDir: data, modelSetting: "Tiny", scripts: "/app/scripts", dirs: [bin.path], hasWhisper: { _ in true }, hasJava: { false })
+        func item(_ id: String) -> DependencyStatus { r.first { $0.id == id }! }
+        XCTAssertTrue(item("ffmpeg").ok)
+        XCTAssertTrue(item("whisper").ok)
+        XCTAssertTrue(item("model").ok)
+        XCTAssertFalse(item("7zz").ok)
+        XCTAssertTrue(item("7zz").required)
+        XCTAssertFalse(item("java").ok)
+        XCTAssertFalse(item("cfr").ok)
+        XCTAssertEqual(item("cfr").command, "\"/app/scripts/fetch-cfr.sh\"")
+        XCTAssertEqual(item("model").command, "\"/app/scripts/fetch-whisper-model.sh\" tiny")
+        XCTAssertEqual(item("7zz").command, "brew install sevenzip")
+    }
+
+    func testFilterListingParsing() {
+        let listing = " T. adelay            A->A       Delay one or more audio channels.\n .. whisper           A->A       Transcribe audio using whisper.cpp.\n"
+        XCTAssertTrue(DependencyCheck.hasFilter(in: listing, "whisper"))
+        XCTAssertFalse(DependencyCheck.hasFilter(in: listing, "delay"))
+        XCTAssertTrue(DependencyCheck.hasFilter(in: listing, "adelay"))
+        XCTAssertFalse(DependencyCheck.hasFilter(in: "", "whisper"))
+    }
 }

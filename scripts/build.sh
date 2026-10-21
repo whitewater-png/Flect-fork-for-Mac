@@ -44,6 +44,11 @@ cp core/target/release/flect-tools "$APP/Contents/Resources/flect-tools"
 BIN="$(cd app && swift build -c release --show-bin-path)"
 for b in "$BIN"/*.bundle; do [ -e "$b" ] && cp -R "$b" "$APP/Contents/Resources/"; done
 
+# The dependency scripts travel with the app so a downloaded build can use them too.
+mkdir -p "$APP/Contents/Resources/scripts"
+cp scripts/setup-deps.sh scripts/fetch-cfr.sh scripts/fetch-whisper-model.sh "$APP/Contents/Resources/scripts/"
+chmod +x "$APP/Contents/Resources/scripts/"*.sh
+
 # App icon: assets/icon/AppIcon-1024.png (rendered from AppIcon.svg) -> AppIcon.icns
 ICON_KEY=""
 if [ -f assets/icon/AppIcon-1024.png ] && command -v iconutil >/dev/null && command -v sips >/dev/null; then
@@ -86,4 +91,11 @@ if [ "${1:-}" = "--install" ]; then
   cp -R "$APP" "$HOME/Applications/"
   "$HOME/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools" --out "$HOME/Library/Services"
   echo "Quick Actions installed to ~/Library/Services (restart Finder: killall Finder)"
+  echo
+  # Tools Flect calls but does not bundle: ask before installing anything (non-interactive runs only report).
+  if [ -t 0 ]; then
+    "$HOME/Applications/Flect-for-Mac.app/Contents/Resources/scripts/setup-deps.sh" || true
+  else
+    "$HOME/Applications/Flect-for-Mac.app/Contents/Resources/scripts/setup-deps.sh" --check || true
+  fi
 fi
