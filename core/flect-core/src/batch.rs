@@ -95,6 +95,49 @@ fn mode_from(
     }
 }
 
+fn file_json(f: &folder::ScannedFile) -> serde_json::Value {
+    json!({
+        "path": f.path.to_string_lossy(),
+        "size": f.size,
+        "modified": f.modified.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+    })
+}
+
+/// The dry-run view of a duplicate removal: per group the copy that stays (none for "delete all") and
+/// the copies that go, built from the same `doomed` list that a real run would hand on.
+fn duplicate_preview(
+    groups: &[Vec<folder::ScannedFile>],
+    doomed: &[folder::ScannedFile],
+    mode: DuplicateMode,
+    method: DeleteMethod,
+    bytes: u64,
+) -> serde_json::Value {
+    let gone: std::collections::HashSet<&Path> = doomed.iter().map(|d| d.path.as_path()).collect();
+    let listing: Vec<_> = groups
+        .iter()
+        .map(|g| {
+            let keep = g.iter().find(|f| !gone.contains(f.path.as_path()));
+            let remove: Vec<_> = g
+                .iter()
+                .filter(|f| gone.contains(f.path.as_path()))
+                .map(file_json)
+                .collect();
+            json!({"keep": keep.map(file_json), "remove": remove})
+        })
+        .collect();
+    json!({
+        "mode": match mode {
+            DuplicateMode::KeepOldest => "oldest",
+            DuplicateMode::KeepNewest => "newest",
+            DuplicateMode::DeleteAll => "all",
+        },
+        "groups": listing,
+        "removeCount": doomed.len(),
+        "reclaimBytes": bytes,
+        "permanent": method == DeleteMethod::Permanent,
+    })
+}
+
 /// Hand a delete plan to wherever it is carried out, and say what happened.
 fn carry_out(
     ctx: &Ctx<'_>,
@@ -207,6 +250,21 @@ pub fn run_batch(task: &str, paths: &[String], ctx: &Ctx<'_>) {
                 return done(ctx, Outcome::Succeeded, Some("msg.nothingToRemove"), vec![]);
             }
             let bytes: u64 = doomed.iter().map(|d| d.size).sum();
+            if params.get("dry").is_some_and(|v| v == "1") {
+                // Preview only: say which copy stays and which go, delete nothing. The app asks the user
+                // to confirm and then runs the task again without `dry`.
+                let data = duplicate_preview(&groups, &doomed, mode, f.delete_method, bytes);
+                (ctx.emit)(Event::Data {
+                    name: "duplicates_preview".into(),
+                    data,
+                });
+                return done(
+                    ctx,
+                    Outcome::Succeeded,
+                    Some("msg.duplicatesPreview"),
+                    vec![doomed.len().to_string(), bytes.to_string()],
+                );
+            }
             let count = doomed.len().to_string();
             carry_out(
                 ctx,
@@ -400,6 +458,87 @@ mod tests {
         assert!(
             d.path().join("a/one.bin").exists() && d.path().join("b/two.bin").exists(),
             "engine itself does not delete in Trash mode"
+        );
+    }
+
+    #[test]
+    fn duplicate_removal_previews_before_anything_is_moved() {
+        let d = setup();
+        // a second, unrelated duplicate pair, to see several groups
+        fs::write(d.path().join("a/x.txt"), "pair").unwrap();
+        fs::write(d.path().join("b/y.txt"), "pair").unwrap();
+        for permanent in [false, true] {
+            let mut s = Settings::default();
+            if permanent {
+                s.folder.delete_method = DeleteMethod::Permanent;
+            }
+            let ev = run("folder.removeDuplicate?mode=newest&dry=1", &[d.path()], &s);
+            let data = find(&ev, "data").unwrap();
+            assert_eq!(data["name"], "duplicates_preview");
+            let p = &data["data"];
+            assert_eq!(
+                (
+                    p["mode"].as_str(),
+                    p["removeCount"].as_u64(),
+                    p["reclaimBytes"].as_u64(),
+                    p["permanent"].as_bool()
+                ),
+                (Some("newest"), Some(2), Some(8), Some(permanent))
+            );
+            let groups = p["groups"].as_array().unwrap();
+            assert_eq!(groups.len(), 2);
+            for g in groups {
+                assert!(g["keep"]["path"].is_string());
+                assert_eq!(g["remove"].as_array().unwrap().len(), 1);
+                assert_ne!(g["keep"]["path"], g["remove"][0]["path"]);
+            }
+            let done = find(&ev, "done").unwrap();
+            assert_eq!(done["summary_key"], "msg.duplicatesPreview");
+            assert_eq!(done["summary_args"][0], "2");
+            // nothing was asked of the app and nothing was deleted, even in permanent mode
+            assert!(find(&ev, "needs").is_none());
+            for f in ["a/one.bin", "b/two.bin", "a/x.txt", "b/y.txt"] {
+                assert!(d.path().join(f).exists(), "{f}");
+            }
+        }
+        // "delete all" keeps nothing
+        let ev = run(
+            "folder.removeDuplicate?mode=all&dry=1",
+            &[d.path()],
+            &Settings::default(),
+        );
+        let p = &find(&ev, "data").unwrap()["data"];
+        assert_eq!(p["removeCount"], 4);
+        assert!(p["groups"][0]["keep"].is_null());
+        // the configured keep rule previews too; no duplicates / nothing to remove say so without data
+        let mut s = Settings::default();
+        s.folder.duplicates.keep = DuplicateKeep::Oldest;
+        let ev = run("folder.removeDuplicate?dry=1", &[d.path()], &s);
+        assert_eq!(find(&ev, "data").unwrap()["data"]["mode"], "oldest");
+        // confirming = the same task without dry: only now does the app get the Trash request
+        let ev = run(
+            "folder.removeDuplicate?mode=newest",
+            &[d.path()],
+            &Settings::default(),
+        );
+        assert_eq!(
+            find(&ev, "needs").unwrap()["paths"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let none = tempfile::tempdir().unwrap();
+        fs::write(none.path().join("only.txt"), "u").unwrap();
+        let ev = run(
+            "folder.removeDuplicate?mode=newest&dry=1",
+            &[none.path()],
+            &Settings::default(),
+        );
+        assert!(find(&ev, "data").is_none());
+        assert_eq!(
+            find(&ev, "done").unwrap()["summary_key"],
+            "msg.noDuplicates"
         );
     }
 

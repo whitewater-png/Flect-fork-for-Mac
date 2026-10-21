@@ -143,3 +143,117 @@ fn cancel_stops_a_long_batch_quickly() {
     ));
     assert_eq!(e.until_done().last().unwrap()["outcome"], "succeeded");
 }
+
+/// A tiny JPEG-shaped file with EXIF GPS (35.6586 N, 139.7453 E) in front of a fake scan.
+fn jpeg_with_gps() -> Vec<u8> {
+    let mut t = b"II*\0\x08\0\0\0".to_vec();
+    let w16 = |t: &mut Vec<u8>, v: u16| t.extend_from_slice(&v.to_le_bytes());
+    let w32 = |t: &mut Vec<u8>, v: u32| t.extend_from_slice(&v.to_le_bytes());
+    // IFD0 at 8: one entry, the GPS IFD pointer (26)
+    w16(&mut t, 1);
+    w16(&mut t, 0x8825);
+    w16(&mut t, 4);
+    w32(&mut t, 1);
+    w32(&mut t, 26);
+    w32(&mut t, 0);
+    // GPS IFD at 26: 4 entries, values at 80 and 104
+    w16(&mut t, 4);
+    for (tag, ty, count, value) in [
+        (1u16, 2u16, 2u32, u32::from(b'N')),
+        (2, 5, 3, 80),
+        (3, 2, 2, u32::from(b'E')),
+        (4, 5, 3, 104),
+    ] {
+        w16(&mut t, tag);
+        w16(&mut t, ty);
+        w32(&mut t, count);
+        w32(&mut t, value);
+    }
+    w32(&mut t, 0);
+    for (d, m, s) in [(35u32, 39u32, 31u32), (139, 44, 43)] {
+        for v in [d, m, s] {
+            w32(&mut t, v);
+            w32(&mut t, 1);
+        }
+    }
+    let mut body = b"Exif\0\0".to_vec();
+    body.extend_from_slice(&t);
+    let mut j = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    j.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+    j.extend_from_slice(&body);
+    j.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xAB, 0xCD, 0xFF, 0xD9]);
+    j
+}
+
+#[test]
+fn privacy_check_reports_findings_and_writes_nothing_then_make_safe_copies() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("trip.jpg");
+    let original = jpeg_with_gps();
+    std::fs::write(&f, &original).unwrap();
+    let mut e = Engine::start(&d.path().join("home"));
+
+    e.send(&format!(
+        r#"{{"op":"run","task":"image.privacy","paths":["{}"]}}"#,
+        f.display()
+    ));
+    let ev = e.until_done();
+    assert_eq!(ev.last().unwrap()["outcome"], "succeeded");
+    let report = ev
+        .iter()
+        .find(|x| x["event"] == "data" && x["name"] == "privacy_report")
+        .expect("privacy_report event");
+    assert_eq!(report["data"]["items"][0]["kind"], "gps");
+    assert_eq!(report["data"]["items"][0]["detail"], "35.6586, 139.7453");
+    assert!(ev
+        .iter()
+        .any(|x| x["event"] == "info" && x["key"] == "msg.privacyFound"));
+    assert!(
+        !ev.iter()
+            .any(|x| x["event"] == "data" && x["name"] == "outputs"),
+        "a read-only check creates nothing"
+    );
+    assert!(!d.path().join("trip_safe.jpg").exists());
+
+    e.send(&format!(
+        r#"{{"op":"run","task":"image.makeSafe","paths":["{}"]}}"#,
+        f.display()
+    ));
+    let ev = e.until_done();
+    assert_eq!(ev.last().unwrap()["outcome"], "succeeded");
+    let safe = d.path().join("trip_safe.jpg");
+    assert!(safe.exists());
+    let out = ev
+        .iter()
+        .find(|x| x["event"] == "data" && x["name"] == "outputs")
+        .expect("outputs event (powers Undo)");
+    assert_eq!(out["data"]["paths"][0], safe.to_str().unwrap());
+    assert_eq!(std::fs::read(&f).unwrap(), original, "source untouched");
+    let cleaned = std::fs::read(&safe).unwrap();
+    assert!(!cleaned.windows(4).any(|w| w == b"Exif"));
+}
+
+#[test]
+fn duplicate_preview_deletes_nothing_and_confirming_asks_for_the_trash() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.bin"), "same").unwrap();
+    std::fs::write(d.path().join("b.bin"), "same").unwrap();
+    let mut e = Engine::start(&d.path().join("home"));
+    e.send(&format!(
+        r#"{{"op":"run","task":"folder.removeDuplicate?mode=oldest&dry=1","paths":["{}"]}}"#,
+        d.path().display()
+    ));
+    let ev = e.until_done();
+    assert!(ev
+        .iter()
+        .any(|x| x["event"] == "data" && x["name"] == "duplicates_preview"));
+    assert!(!ev.iter().any(|x| x["event"] == "needs"));
+    assert!(d.path().join("a.bin").exists() && d.path().join("b.bin").exists());
+    e.send(&format!(
+        r#"{{"op":"run","task":"folder.removeDuplicate?mode=oldest","paths":["{}"]}}"#,
+        d.path().display()
+    ));
+    let ev = e.until_done();
+    let needs = ev.iter().find(|x| x["event"] == "needs").unwrap();
+    assert_eq!(needs["what"], "trash");
+}

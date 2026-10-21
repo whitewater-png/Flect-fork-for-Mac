@@ -164,7 +164,7 @@ pub fn orientation_jpeg(data: &[u8]) -> Option<u16> {
 }
 
 /// (marker, body) pairs up to the start of scan.
-fn jpeg_segments(data: &[u8]) -> Option<Vec<(u8, &[u8])>> {
+pub(crate) fn jpeg_segments(data: &[u8]) -> Option<Vec<(u8, &[u8])>> {
     if data.get(0..2)? != [0xFF, 0xD8] {
         return None;
     }
@@ -264,7 +264,7 @@ pub fn crc32(data: &[u8]) -> u32 {
     })
 }
 
-fn png_chunks(data: &[u8]) -> Option<Vec<([u8; 4], &[u8])>> {
+pub(crate) fn png_chunks(data: &[u8]) -> Option<Vec<([u8; 4], &[u8])>> {
     if data.get(0..8)? != PNG_SIG {
         return None;
     }
@@ -322,7 +322,7 @@ pub fn orientation_webp(data: &[u8]) -> Option<u16> {
         .and_then(|(_, b)| orientation(b.strip_prefix(b"Exif\0\0").unwrap_or(b)))
 }
 
-fn webp_chunks(data: &[u8]) -> Option<Vec<([u8; 4], &[u8])>> {
+pub(crate) fn webp_chunks(data: &[u8]) -> Option<Vec<([u8; 4], &[u8])>> {
     if data.get(0..4)? != b"RIFF" || data.get(8..12)? != b"WEBP" {
         return None;
     }

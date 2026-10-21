@@ -15,6 +15,7 @@ pub mod menu;
 pub mod metadata;
 pub mod paths;
 pub mod pool;
+pub mod privacy;
 pub mod protocol;
 pub mod settings;
 pub mod subtitles;

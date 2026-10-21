@@ -56,6 +56,8 @@ public final class Loc {
     private static func load(_ code: String, bundle: Bundle) -> [String: String] {
         var table = read("strings.\(code)", bundle: bundle)
         for (k, v) in read("strings.ux.\(code)", bundle: bundle) { table[k] = v }
+        // share-safe features (privacy check, safe copy, duplicate preview): their own file, so parallel work on the other tables cannot collide
+        for (k, v) in read("strings.share.\(code)", bundle: bundle) { table[k] = v }
         return table
     }
 

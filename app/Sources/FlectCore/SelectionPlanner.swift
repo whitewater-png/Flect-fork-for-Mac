@@ -135,6 +135,10 @@ public enum TaskPicker {
             return members.count == 1
         case "pdf.merge":
             return members.count >= 2
+        case "image.privacy":
+            return members.allSatisfy { ["JPG", "PNG", "WEBP"].contains($0.format ?? "") }
+        case "image.makeSafe", "image.makeSafe.resize":
+            return members.allSatisfy { ["JPG", "PNG", "WEBP", "GIF"].contains($0.format ?? "") }
         case "image.convert":
             return !members.contains { $0.format == "GIF" && isAnimatedGIF($0.path) }
         case "json.pretty", "json.sort":

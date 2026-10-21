@@ -11,6 +11,8 @@ enum Screen {
     case tree(String)
     case analyze(JSONValue)
     case duplicates([[DuplicateFile]])
+    case duplicatesPreview(DuplicatePreview)
+    case privacyReport([PrivacyReport], errors: [String])
     case emptyFolders(targets: [String], permanent: Bool)
     case renamePreview([String])
     case pdfPreview(URL)
@@ -23,6 +25,34 @@ struct DuplicateFile: Identifiable {
     let path: String
     let size: Int64
     let modified: String
+}
+
+/// The dry run of a duplicate removal: per group the copy that stays and the copies that would go.
+struct DuplicatePreview {
+    struct Group: Identifiable {
+        let id = UUID()
+        let keep: DuplicateFile?
+        let remove: [DuplicateFile]
+    }
+    let mode: String            // oldest / newest / all: sent back unchanged to confirm
+    let groups: [Group]
+    let removeCount: Int
+    let reclaimBytes: Int64
+    let permanent: Bool
+}
+
+/// What one image carries that identifies a place, a device or a person (engine `privacy_report`).
+struct PrivacyReport: Identifiable {
+    struct Item: Identifiable {
+        let id = UUID()
+        let kind: String
+        let high: Bool
+        let detail: String
+    }
+    let id = UUID()
+    let file: String
+    let format: String
+    let items: [Item]
 }
 
 struct LogLine: Identifiable {
@@ -149,7 +179,8 @@ final class AppModel: ObservableObject {
     func finishRun(outcome: Outcome, summary: String?, sawProblem: Bool) {
         cancelling = false
         recordFinished(outcome: outcome, summary: summary)
-        if let (name, data) = pendingData.first, outcome == .succeeded, showResult(name: name, data: data) { return }
+        // A privacy check with one unreadable file ends as failed, but the other reports are still worth showing.
+        if let (name, data) = pendingData.first, outcome == .succeeded || name == "privacy_report", showResult(name: name, data: data) { return }
         finished = true
         switch outcome {
         case .succeeded: finishedText = summary ?? loc.t("progress.done")
@@ -180,6 +211,24 @@ final class AppModel: ObservableObject {
                 (g.array ?? []).map { DuplicateFile(path: $0["path"]?.string ?? "", size: Int64($0["size"]?.double ?? 0), modified: $0["modified"]?.string ?? "") }
             }
             screen = .duplicates(groups)
+        case "duplicates_preview":
+            func file(_ v: JSONValue?) -> DuplicateFile? {
+                guard let v = v, let path = v["path"]?.string else { return nil }
+                return DuplicateFile(path: path, size: Int64(v["size"]?.double ?? 0), modified: "")
+            }
+            let groups = (data["groups"]?.array ?? []).map { g in
+                DuplicatePreview.Group(keep: file(g["keep"]), remove: (g["remove"]?.array ?? []).compactMap { file($0) })
+            }
+            guard let mode = data["mode"]?.string, ["oldest", "newest", "all"].contains(mode) else { return false }
+            screen = .duplicatesPreview(DuplicatePreview(mode: mode, groups: groups, removeCount: data["removeCount"]?.int ?? 0,
+                                                         reclaimBytes: Int64(data["reclaimBytes"]?.double ?? 0), permanent: data["permanent"]?.bool ?? false))
+        case "privacy_report":
+            let reports = pendingData.filter { $0.0 == "privacy_report" }.map { entry -> PrivacyReport in
+                let d = entry.1
+                let items = (d["items"]?.array ?? []).map { PrivacyReport.Item(kind: $0["kind"]?.string ?? "hidden", high: $0["level"]?.string == "high", detail: $0["detail"]?.string ?? "") }
+                return PrivacyReport(file: d["file"]?.string ?? "", format: d["format"]?.string ?? "", items: items)
+            }
+            screen = .privacyReport(reports, errors: log.filter { $0.kind == .error }.map { $0.text })
         case "empty_folders":
             screen = .emptyFolders(targets: (data["targets"]?.array ?? []).compactMap { $0.string }, permanent: data["permanent"]?.bool ?? false)
         case "rename_preview": screen = .renamePreview((data["lines"]?.array ?? []).compactMap { $0.string })

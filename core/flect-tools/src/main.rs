@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn one_action_per_second_level_entry_with_unique_titles() {
         let acts = actions();
-        assert_eq!(acts.len(), 35);
+        assert_eq!(acts.len(), 38);
         let mut titles: Vec<_> = acts.iter().map(|a| a.title.clone()).collect();
         titles.sort();
         titles.dedup();
@@ -316,6 +316,17 @@ mod tests {
             .iter()
             .any(|a| a.title == "Flect: Image Resize" && a.task == "image.resize"));
         assert!(acts.iter().any(|a| a.task == "image.ocr"));
+        // share-safe actions appear for images, with distinct titles
+        for (task, title) in [
+            ("image.privacy", "Flect: Image Privacy Check"),
+            ("image.makeSafe", "Flect: Image Make Safe to Share"),
+            (
+                "image.makeSafe.resize",
+                "Flect: Image Make Safe to Share (Resize)",
+            ),
+        ] {
+            assert!(acts.iter().any(|a| a.task == task && a.title == title));
+        }
         assert!(acts
             .iter()
             .all(|a| valid_token(&a.task) && !a.utis.is_empty()));
@@ -404,7 +415,7 @@ mod tests {
     fn writes_bundles_to_disk() {
         let d = tempfile::tempdir().unwrap();
         let list = write_all(d.path(), "Flect-for-Mac").unwrap();
-        assert_eq!(list.len(), 35);
+        assert_eq!(list.len(), 38);
         assert!(d
             .path()
             .join("Flect Image Resize.workflow/Contents/document.wflow")

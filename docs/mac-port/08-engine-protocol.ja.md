@@ -38,12 +38,14 @@
 | `duplicates` | `{groups:[[{path,size,modified}...]...], scanSeconds}` | `folder.removeDuplicate`（`mode` 未指定かつ設定が Ask） |
 | `empty_folders` | `{total, targets[], permanent}` | `folder.removeEmpty`（`confirm=1` なし） |
 | `rename_preview` | `{lines[]}` | `folder.rename`（ドライラン） |
+| `duplicates_preview` | `{mode:"oldest"\|"newest"\|"all", groups:[{keep:{path,size,modified}\|null, remove:[{path,size,modified}...]}...], removeCount, reclaimBytes, permanent}` | `folder.removeDuplicate?...&dry=1`（ドライラン。何も移動・削除しない。`mode` 未指定なら設定の Keep ルール。Ask かつ `mode` 未指定のときは従来どおり `duplicates`） |
+| `privacy_report` | `{path, file, format, personal, items:[{kind, level:"high"\|"medium", detail}...]}`（ファイル 1 件につき 1 回） | `image.privacy`（読み取り専用）。`kind` は `gps`/`serial`/`owner`/`camera`/`lens`/`timestamps`/`software`/`thumbnail`/`makernote`/`description`/`xmp`/`iptc`/`comment`/`hidden`/`extra`。1 種類につき 1 項目で、重要度の高い順 |
 | `outputs` | `{paths:[絶対パス...]}` | ファイルタスクが**実際に作成した**出力（ファイル 1 件ごとに 1 回）と `folder.analyze?save=1` のレポート。入力をそのまま返した場合（例 `msg.alreadySmall`）は送らない。アプリは結果ウィンドウと「元に戻す（ごみ箱へ）」にだけ使い、画面表示用ではない（`Info` の `msg.*` とは別。後方互換の追加で、知らないアプリは無視してよい） |
 
 ## 対話が必要なタスクの流れ（エンジンは質問しない。アプリが聞いて再実行する）
 | タスク | 1 回目 | アプリが尋ねる | 2 回目 |
 | --- | --- | --- | --- |
-| `folder.removeDuplicate` | `data:duplicates` + `done(msg.duplicatesFound)` | どれを残すか | `folder.removeDuplicate?mode=oldest\|newest\|all` → `needs:trash`（または Permanent 設定ならエンジンが削除） |
+| `folder.removeDuplicate`（プレビュー付き） | `folder.removeDuplicate?dry=1` → `data:duplicates`（Ask）または `data:duplicates_preview`（設定の Keep ルール） | どれを残すか → 実行内容の一覧を見せて**確認** | `mode=oldest\|newest\|all&dry=1` → `data:duplicates_preview` → 確認後 `mode=...`（`dry` なし）→ `needs:trash`。プレビューは何も変更せず、確認時に再スキャンして実行する（その間にファイルが変わっていれば実行時の内容が優先） |
 | `folder.removeEmpty` | `data:empty_folders` + `done(msg.emptyFound)` | 削除してよいか | `folder.removeEmpty?confirm=1` → `needs:trash` |
 | `folder.rename` | （アプリがダイアログで接頭辞/名前/接尾辞を取得） | — | `folder.rename?prefix=..&name=..&suffix=..&numbered=1&dry=0\|1` |
 | `pdf.merge` | （アプリが順序ダイアログで並べ替え） | — | `paths` を結合したい順で渡す（2 件以上） |
@@ -58,6 +60,8 @@
 | `image.convert` | `to=PNG\|JPG\|WEBP\|ICO\|GIF\|SVG`（`HEIC` はアプリ側） |
 | `image.compress` | `bytes=5242880` |
 | `image.strip` / `image.chromakey` | なし（設定 `Image.Metadata` / `Image.Background*` を使用） |
+| `image.privacy` | なし。読み取り専用で何も書かない。JPEG/PNG/WebP。`data:privacy_report` と `msg.privacyFound`/`msg.privacyClean`（info） |
+| `image.makeSafe` | `maxEdge=2048`（長辺の上限 px。省略または 0 でサイズ維持、大きい画像だけ縮小）。個人情報を削除した `_safe` コピーを書く（画像の出力フォルダ設定に従い、既存ファイルは上書きしない）。JPEG/PNG/WebP/GIF。`msg.safeRemoved`/`msg.safeNothing`/`msg.safeResized`（info）と `outputs` |
 | `video.convert` | `to=MP4\|MOV\|MKV\|M4A\|AVI\|WEBM\|FLV\|GIF` |
 | `video.compress` | `bytes=...` ／ `preset=discord` |
 | `video.extractAudio` / `audio.convert` | `to=MP3\|M4A\|WAV\|AIF\|AIFF\|AAC\|OGG\|WMA` |
@@ -93,6 +97,7 @@
 - `msg.compressStage`
 - `msg.decompileFailed`
 - `msg.duplicatesFound`
+- `msg.duplicatesPreview`
 - `msg.emptyFound`
 - `msg.ffmpegFailed`
 - `msg.ffmpegMissing`
@@ -112,9 +117,14 @@
 - `msg.pdfEncrypted`
 - `msg.pdfInvalid`
 - `msg.pdfNeedTwo`
+- `msg.privacyClean`
+- `msg.privacyFound`
 - `msg.processing`
 - `msg.renameFailed`
 - `msg.reportSaved`
+- `msg.safeNothing`
+- `msg.safeRemoved`
+- `msg.safeResized`
 - `msg.sandboxUnavailable`
 - `protocol.badJson`
 - `protocol.badPath`

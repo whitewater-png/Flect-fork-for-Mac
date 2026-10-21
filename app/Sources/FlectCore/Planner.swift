@@ -19,6 +19,8 @@ public enum Dialog: Equatable {
     case pdfOrder
     case trim
     case thumbnail
+    /// Long-edge limit for "Make safe to share + resize".
+    case maxEdge
 }
 
 /// What to do with a task ID received from a Quick Action.
@@ -87,7 +89,11 @@ public enum Planner {
             case "AiOnly": return .native(.removeBackground(fallback: false))
             default: return .native(.removeBackground(fallback: true))
             }
-        case "image.strip", "json.pretty", "json.sort", "folder.removeDuplicate", "folder.removeEmpty",
+        // Removing duplicates always starts as a preview: the user sees what would go to the Trash and confirms.
+        case "folder.removeDuplicate": return .engine("folder.removeDuplicate?dry=1")
+        case "image.makeSafe.resize": return .dialog(.maxEdge)
+        case "image.privacy", "image.makeSafe": return .engine(base)
+        case "image.strip", "json.pretty", "json.sort", "folder.removeEmpty",
              "folder.tree", "folder.analyze", "folder.compress", "archive.extract", "jar.decompile",
              "video.subtitles", "audio.subtitles":
             return .engine(base)
@@ -122,7 +128,10 @@ public enum Planner {
 
     public static func trim(start: Double, end: Double) -> String { "video.trim?start=\(String(format: "%.3f", start))&end=\(String(format: "%.3f", end))" }
     public static func thumbnail(at t: Double) -> String { "video.thumbnail?t=\(String(format: "%.3f", t))" }
-    public static func duplicates(mode: String) -> String { "folder.removeDuplicate?mode=\(mode)" }
+    /// `dryRun` asks the engine for the list of what would be removed (nothing is touched); without it the copies go to the Trash.
+    public static func duplicates(mode: String, dryRun: Bool = false) -> String { "folder.removeDuplicate?mode=\(mode)\(dryRun ? "&dry=1" : "")" }
+    /// Share-safe copy; `maxEdge` 0 keeps the size.
+    public static func makeSafe(maxEdge: Int) -> String { maxEdge > 0 ? "image.makeSafe?maxEdge=\(min(maxEdge, 32768))" : "image.makeSafe" }
     public static let confirmEmpty = "folder.removeEmpty?confirm=1"
 
     /// Human text for an entry of a chooser (presets show their current value).
