@@ -38,7 +38,7 @@ xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app
 ~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # Quick Action を配置
 killall Finder
 ```
-バイナリを信用したくない場合は、下の手順で自分でビルドしてください。`brew install ffmpeg-full sevenzip` も必要です。
+このあと「クイックアクションをオンにする」（下）を行ってください。バイナリを信用したくない場合は、下の手順で自分でビルドしてください。`brew install ffmpeg-full sevenzip` も必要です。
 
 ## ビルドとインストール
 
@@ -49,7 +49,15 @@ scripts/build.sh --install     # ビルド → ad-hoc 署名 → ~/Applications 
 killall Finder
 ```
 
-Finder でファイルを右クリック →「クイックアクション」→ Flect。設定はアプリ本体を開いて変更します。
+## クイックアクションをオンにする（初回のみ）
+
+macOS は新しいクイックアクションを**オフ**にするため、オンにするまで右クリックに出ません:
+
+1. **システム設定 → 一般 → ログイン項目と機能拡張** を開き、下の **拡張機能** の **Finder** の右にある (i) ボタンを押します。
+2. **Flect: …** の項目（35 個）をすべてオンにします。ほかの項目はそのままで構いません。
+3. それでも Flect の項目が出ないときは、`killall Finder` を実行します。
+
+そのあと、Finder でファイルを右クリック →「クイックアクション」→ Flect。設定はアプリ本体を開いて変更します。
 
 ## セキュリティ設計
 

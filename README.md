@@ -38,7 +38,7 @@ xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app
 ~/Applications/Flect-for-Mac.app/Contents/Resources/flect-tools --out ~/Library/Services   # install the Quick Actions
 killall Finder
 ```
-If you would rather not trust a binary, build it yourself (below). You also need `brew install ffmpeg-full sevenzip`.
+Then turn on the Quick Actions (next section). If you would rather not trust a binary, build it yourself (below). You also need `brew install ffmpeg-full sevenzip`.
 
 ## Build and install
 
@@ -48,6 +48,14 @@ cd Flect-fork-for-Mac
 scripts/build.sh --install     # builds, ad-hoc signs, installs ~/Applications/Flect-for-Mac.app and the Quick Actions
 killall Finder
 ```
+
+## Turn on the Quick Actions (first time only)
+
+macOS leaves new Quick Actions **off**, so they do not show up until you turn them on:
+
+1. Open **System Settings → General → Login Items & Extensions**, scroll to **Extensions**, and click the (i) button next to **Finder**.
+2. Switch on every **Flect: …** item (35 of them). You can leave the others as they are.
+3. If a Flect item is still missing, run `killall Finder`.
 
 Then right-click a file in Finder → **Quick Actions** → Flect. Open the app itself to change settings.
 
