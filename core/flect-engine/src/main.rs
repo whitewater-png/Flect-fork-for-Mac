@@ -14,7 +14,7 @@ use flect_core::mediatasks::{self, MediaEnv};
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
 use flect_core::settings::HardwareEncoder;
 use flect_core::settings::{Settings, Store};
-use flect_core::{archive, batch, jar, locations, menu, tasks};
+use flect_core::{archive, batch, jar, locations, menu, privacy, tasks};
 
 type Out = Arc<Mutex<io::Stdout>>;
 
@@ -212,6 +212,12 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
                 args: vec![shown.clone()],
             },
         )?;
+        // The privacy check shows its findings as data; the task itself writes nothing.
+        if name == privacy::REPORT_TASK {
+            if let Ok(event) = privacy::report_event(Path::new(p)) {
+                emit(out, &event)?;
+            }
+        }
         match tasks::run(task, Path::new(p), &ctx) {
             Ok(done) => {
                 // Tell the app exactly what this run created (it powers "Undo"); a task that left the input as is reports nothing.

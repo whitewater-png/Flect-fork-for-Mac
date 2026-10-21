@@ -121,6 +121,9 @@ pub fn catalog() -> Vec<MenuEntry> {
                 ),
                 leaf("image.ocr", "OCR"),
                 leaf("image.strip", "Remove Metadata"),
+                leaf("image.privacy", "Privacy Check"),
+                leaf("image.makeSafe", "Make Safe to Share"),
+                leaf("image.makeSafe.resize", "Make Safe to Share (Resize)"),
                 leaf("image.chromakey", "Remove Background"),
             ],
         ),
@@ -460,8 +463,8 @@ mod tests {
 
     #[test]
     fn catalog_matches_windows_leaf_count() {
-        // legacy/windows/.../MenuCatalog.cs declares 87 leaf ids (verified identical by diff).
-        assert_eq!(leaf_ids(&catalog()).len(), 87);
+        // legacy/windows/.../MenuCatalog.cs declares 87 leaf ids; the Mac port adds 3 (privacy check, make safe, make safe + resize).
+        assert_eq!(leaf_ids(&catalog()).len(), 90);
     }
 
     #[test]

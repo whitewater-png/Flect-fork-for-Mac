@@ -607,6 +607,7 @@ pub fn is_file_task(name: &str) -> bool {
         || is_archive_task(name)
         || is_image_task(name)
         || crate::mediatasks::is_media_task(name)
+        || crate::privacy::is_task(name)
 }
 
 /// Run one single-file task.
@@ -620,6 +621,8 @@ pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
         run_image(&name, &params, input, ctx.settings, &|| {
             ctx.progress.cancelled()
         })
+    } else if crate::privacy::is_task(&name) {
+        crate::privacy::run_file(&name, &params, input, ctx.settings)
     } else if crate::mediatasks::is_media_task(&name) {
         let env = ctx.media.ok_or(crate::media::MediaError::NoTools)?;
         let job = crate::mediatasks::Job::new(env, ctx.settings, ctx.progress);
