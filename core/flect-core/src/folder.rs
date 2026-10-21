@@ -181,21 +181,42 @@ pub fn extension_of(name: &str) -> String {
 /// (compared after resolving the path, so `/var/x` and `/private/var/x` are the same folder).
 /// Order is kept; of two spellings of one folder the first wins. Scanning a folder twice would list
 /// every file in it twice, and the duplicate finder would then offer a file as its own copy.
-pub fn distinct_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
-    let canon: Vec<PathBuf> = roots
+///
+/// O(n log n): the resolved paths are sorted component-wise (`Path`'s order), so a folder comes
+/// right before everything inside it, and a root is dropped when the last root kept is one of its
+/// ancestors (or itself). `Path::starts_with` compares whole components: `/a/bc` is not in `/a/b`.
+/// Resolving can take a while for thousands of roots, so the cancel flag is checked as it goes.
+pub fn distinct_roots(
+    roots: &[PathBuf],
+    progress: &dyn Progress,
+) -> Result<Vec<PathBuf>, Cancelled> {
+    let mut canon: Vec<(PathBuf, usize)> = Vec::with_capacity(roots.len());
+    for (i, r) in roots.iter().enumerate() {
+        if i % 256 == 0 && progress.cancelled() {
+            return Err(Cancelled);
+        }
+        canon.push((fs::canonicalize(r).unwrap_or_else(|_| r.clone()), i));
+    }
+    // Equal paths sort by original position, so the first spelling is the one kept.
+    canon.sort_unstable();
+    let mut keep = vec![false; roots.len()];
+    let mut last: Option<&Path> = None;
+    for (path, i) in &canon {
+        if last.is_some_and(|kept| path.starts_with(kept)) {
+            continue;
+        }
+        keep[*i] = true;
+        last = Some(path);
+    }
+    if progress.cancelled() {
+        return Err(Cancelled);
+    }
+    Ok(roots
         .iter()
-        .map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone()))
-        .collect();
-    roots
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| {
-            !canon.iter().enumerate().any(|(j, other)| {
-                j != *i && canon[*i].starts_with(other) && (canon[*i] != *other || j < *i)
-            })
-        })
-        .map(|(_, r)| r.clone())
-        .collect()
+        .zip(keep)
+        .filter(|(_, k)| *k)
+        .map(|(r, _)| r.clone())
+        .collect())
 }
 
 /// Walk the (de-duplicated, see [`distinct_roots`]) selection. Every file is listed once: a file
@@ -207,7 +228,7 @@ pub fn scan(
     progress: &dyn Progress,
 ) -> Result<TreeScan, Cancelled> {
     let mut out = TreeScan::default();
-    for root in &distinct_roots(roots) {
+    for root in &distinct_roots(roots, progress)? {
         if progress.cancelled() {
             return Err(Cancelled);
         }
@@ -899,12 +920,16 @@ mod tests {
         fs::hard_link(a.join("in/x.txt"), a.join("x_link.txt")).unwrap();
         let canon = fs::canonicalize(&a).unwrap();
         assert_eq!(
-            distinct_roots(&[a.clone(), a.join("in"), canon.clone(), b.clone()]),
+            distinct_roots(
+                &[a.clone(), a.join("in"), canon.clone(), b.clone()],
+                &NullProgress
+            )
+            .unwrap(),
             [a.clone(), b.clone()],
             "`ab` is not inside `a`; `in` and the resolved spelling of `a` are"
         );
         assert_eq!(
-            distinct_roots(&[a.join("in"), a.clone()]),
+            distinct_roots(&[a.join("in"), a.clone()], &NullProgress).unwrap(),
             std::slice::from_ref(&a)
         );
         let s = scan(
@@ -915,6 +940,107 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.files.len(), 1, "one file, three ways to reach it: {s:?}");
+    }
+
+    /// The old pairwise comparison took ~90 s near the 20,000-root cap and could not be cancelled.
+    #[test]
+    fn distinct_roots_is_fast_correct_and_cancellable() {
+        // Brute force reference (the old definition) on paths that do not exist (kept as given).
+        fn reference(roots: &[PathBuf]) -> Vec<PathBuf> {
+            roots
+                .iter()
+                .enumerate()
+                .filter(|(i, r)| {
+                    !roots
+                        .iter()
+                        .enumerate()
+                        .any(|(j, o)| j != *i && r.starts_with(o) && (*r != o || j < *i))
+                })
+                .map(|(_, r)| r.clone())
+                .collect()
+        }
+        let base = PathBuf::from("/nonexistent-flect-test-root");
+        let p = |s: &str| base.join(s);
+        // nested, sibling, prefix-name and repeated cases
+        let small: Vec<PathBuf> = [
+            "a/b", "a/bc", "a", "a/b/c", "ab", "a/b", "x/y", "x/y/z", "x/yz", "x/y", "x", "q",
+        ]
+        .iter()
+        .map(|s| p(s))
+        .collect();
+        let got = distinct_roots(&small, &NullProgress).unwrap();
+        assert_eq!(got, [p("a"), p("ab"), p("x"), p("q")]);
+        assert_eq!(got, reference(&small));
+        let siblings: Vec<PathBuf> = ["a/b", "a/bc", "a/b-", "a/b/c", "a/b.d"]
+            .iter()
+            .map(|s| p(s))
+            .collect();
+        assert_eq!(
+            distinct_roots(&siblings, &NullProgress).unwrap(),
+            [p("a/b"), p("a/bc"), p("a/b-"), p("a/b.d")],
+            "`a/bc`, `a/b-` and `a/b.d` are not inside `a/b`"
+        );
+        assert_eq!(
+            distinct_roots(&siblings, &NullProgress).unwrap(),
+            reference(&siblings)
+        );
+
+        // 20,000 roots (the launch cap): mixed nesting, in a scrambled order.
+        let mut many = Vec::new();
+        for i in 0..20_000u64 {
+            let k = (i * 7919) % 20_000;
+            many.push(match k % 4 {
+                0 => p(&format!("d{}", k / 4)),
+                1 => p(&format!("d{}/sub{}", k / 8, k)),
+                2 => p(&format!("d{}x/f{}", k / 4, k)),
+                _ => p(&format!("e{}", k % 1000)),
+            });
+        }
+        let t = std::time::Instant::now();
+        let got = distinct_roots(&many, &NullProgress).unwrap();
+        let took = t.elapsed();
+        assert!(took < Duration::from_secs(5), "took {took:?}");
+        // Check against the reference on a slice small enough for it.
+        let slice = &many[..1500];
+        assert_eq!(
+            distinct_roots(slice, &NullProgress).unwrap(),
+            reference(slice)
+        );
+        // Nothing kept lies inside another kept root, and every dropped root is covered by one.
+        let kept: HashSet<&PathBuf> = got.iter().collect();
+        for r in &got {
+            assert!(
+                r.ancestors()
+                    .skip(1)
+                    .all(|a| !kept.contains(&a.to_path_buf())),
+                "{r:?}"
+            );
+        }
+        for r in &many {
+            assert!(
+                r.ancestors().any(|a| kept.contains(&a.to_path_buf())),
+                "{r:?}"
+            );
+        }
+
+        // Real folders: the resolved spelling still counts as the same folder.
+        let d = tempfile::tempdir().unwrap();
+        let real: Vec<PathBuf> = (0..3000).map(|i| d.path().join(format!("r{i}"))).collect();
+        for r in &real {
+            fs::create_dir(r).unwrap();
+        }
+        let mut with_canon = real.clone();
+        with_canon.extend(real.iter().map(|r| fs::canonicalize(r).unwrap()));
+        assert_eq!(distinct_roots(&with_canon, &NullProgress).unwrap(), real);
+
+        // Cancelled while resolving.
+        struct Stop;
+        impl Progress for Stop {
+            fn cancelled(&self) -> bool {
+                true
+            }
+        }
+        assert_eq!(distinct_roots(&many, &Stop), Err(Cancelled));
     }
 
     #[test]
