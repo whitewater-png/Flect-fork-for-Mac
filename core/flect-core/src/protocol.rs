@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::pipeline;
+
 pub const MAX_LINE_BYTES: usize = 1 << 20; // 1 MiB
 pub const MAX_PATHS: usize = 20_000;
 pub const MAX_PATH_BYTES: usize = 4096;
@@ -15,6 +17,11 @@ pub enum Request {
         paths: Vec<String>,
         #[serde(default)]
         options: Value,
+    },
+    /// Steps chained on each path; only the last step's result is written next to the original.
+    Pipeline {
+        steps: Vec<String>,
+        paths: Vec<String>,
     },
     Cancel,
     ExportMenu,
@@ -83,6 +90,7 @@ pub enum ParseError {
     Json(String),
     TooManyPaths,
     BadPath,
+    BadPipeline,
 }
 
 impl ParseError {
@@ -93,6 +101,7 @@ impl ParseError {
             Self::Json(_) => "protocol.badJson",
             Self::TooManyPaths => "protocol.tooManyPaths",
             Self::BadPath => "protocol.badPath",
+            Self::BadPipeline => "protocol.badPipeline",
         }
     }
 }
@@ -114,19 +123,37 @@ pub fn parse_line(line: &[u8]) -> Result<Request, ParseError> {
     }
     let request: Request =
         serde_json::from_value(value).map_err(|e| ParseError::Json(e.to_string()))?;
-    if let Request::Run { paths, .. } = &request {
-        if paths.is_empty() || paths.len() > MAX_PATHS {
-            return Err(ParseError::TooManyPaths);
+    match &request {
+        Request::Run { paths, .. } => check_paths(paths)?,
+        Request::Pipeline { steps, paths } => {
+            // Only the bounds here; what each step may be is checked by `pipeline::plan`.
+            if steps.is_empty()
+                || steps.len() > pipeline::MAX_STEPS
+                || steps
+                    .iter()
+                    .any(|s| s.is_empty() || s.len() > pipeline::MAX_STEP_BYTES || s.contains('\0'))
+            {
+                return Err(ParseError::BadPipeline);
+            }
+            check_paths(paths)?
         }
-        // Absolute, no NUL, bounded: relative paths would depend on our cwd.
-        if paths
-            .iter()
-            .any(|p| !p.starts_with('/') || p.contains('\0') || p.len() > MAX_PATH_BYTES)
-        {
-            return Err(ParseError::BadPath);
-        }
+        Request::Cancel | Request::ExportMenu => {}
     }
     Ok(request)
+}
+
+fn check_paths(paths: &[String]) -> Result<(), ParseError> {
+    if paths.is_empty() || paths.len() > MAX_PATHS {
+        return Err(ParseError::TooManyPaths);
+    }
+    // Absolute, no NUL, bounded: relative paths would depend on our cwd.
+    if paths
+        .iter()
+        .any(|p| !p.starts_with('/') || p.contains('\0') || p.len() > MAX_PATH_BYTES)
+    {
+        return Err(ParseError::BadPath);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -174,6 +201,45 @@ mod tests {
             parse_line(br#"{"op":"run","task":"a","paths":["/a\u0000b"]}"#),
             Err(ParseError::BadPath)
         );
+    }
+
+    #[test]
+    fn pipeline_requests_are_bounded() {
+        let r = parse_line(
+            br#"{"op":"pipeline","steps":["image.resize?scale=50","image.strip"],"paths":["/a.png"]}"#,
+        )
+        .unwrap();
+        assert!(matches!(r, Request::Pipeline { ref steps, .. } if steps.len() == 2));
+        let nine = ["\"image.strip\""; pipeline::MAX_STEPS + 1].join(",");
+        let long = "a".repeat(pipeline::MAX_STEP_BYTES + 1);
+        for bad in [
+            r#"{"op":"pipeline","steps":[],"paths":["/a"]}"#.to_owned(),
+            format!(r#"{{"op":"pipeline","steps":[{nine}],"paths":["/a"]}}"#),
+            r#"{"op":"pipeline","steps":[""],"paths":["/a"]}"#.to_owned(),
+            format!(r#"{{"op":"pipeline","steps":["{long}"],"paths":["/a"]}}"#),
+        ] {
+            assert_eq!(
+                parse_line(bad.as_bytes()),
+                Err(ParseError::BadPipeline),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            parse_line(br#"{"op":"pipeline","steps":["image.strip"],"paths":["rel"]}"#),
+            Err(ParseError::BadPath)
+        );
+        assert_eq!(
+            parse_line(br#"{"op":"pipeline","steps":["image.strip"],"paths":[]}"#),
+            Err(ParseError::TooManyPaths)
+        );
+        assert!(matches!(
+            parse_line(br#"{"op":"pipeline","steps":["image.strip"],"paths":["/a"],"x":1}"#),
+            Err(ParseError::Json(_))
+        ));
+        assert!(matches!(
+            parse_line(br#"{"op":"pipeline","paths":["/a"]}"#),
+            Err(ParseError::Json(_))
+        ));
     }
 
     #[test]

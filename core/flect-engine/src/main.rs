@@ -14,7 +14,7 @@ use flect_core::mediatasks::{self, MediaEnv};
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
 use flect_core::settings::HardwareEncoder;
 use flect_core::settings::{Settings, Store};
-use flect_core::{archive, batch, jar, locations, menu, tasks};
+use flect_core::{archive, batch, jar, locations, menu, pipeline, tasks};
 
 type Out = Arc<Mutex<io::Stdout>>;
 
@@ -91,7 +91,14 @@ fn read_bounded(input: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Optio
 }
 
 enum Msg {
-    Run { task: String, paths: Vec<String> },
+    Run {
+        task: String,
+        paths: Vec<String>,
+    },
+    Pipeline {
+        steps: Vec<String>,
+        paths: Vec<String>,
+    },
 }
 
 /// stdin -> queue. Handles everything that must not wait behind a running task.
@@ -118,6 +125,11 @@ fn reader(out: Out, cancel: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) -> io::Resul
             Ok(Request::Cancel) => cancel.store(true, Ordering::SeqCst),
             Ok(Request::Run { task, paths, .. }) => {
                 if tx.send(Msg::Run { task, paths }).is_err() {
+                    break;
+                }
+            }
+            Ok(Request::Pipeline { steps, paths }) => {
+                if tx.send(Msg::Pipeline { steps, paths }).is_err() {
                     break;
                 }
             }
@@ -160,16 +172,57 @@ fn display_name(p: &str) -> String {
         .unwrap_or_default()
 }
 
-fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io::Result<()> {
+fn done(out: &Out, outcome: Outcome) -> io::Result<()> {
+    emit(
+        out,
+        &Event::Done {
+            outcome,
+            summary_key: None,
+            summary_args: vec![],
+        },
+    )
+}
+
+/// A per-file failure as a message key and its arguments.
+trait Failure {
+    fn key(&self) -> &'static str;
+    fn args(&self, shown: String) -> Vec<String>;
+}
+
+impl Failure for tasks::TaskError {
+    fn key(&self) -> &'static str {
+        tasks::TaskError::key(self)
+    }
+    fn args(&self, shown: String) -> Vec<String> {
+        tasks::TaskError::args(self, shown)
+    }
+}
+
+impl Failure for pipeline::RunError {
+    fn key(&self) -> &'static str {
+        pipeline::RunError::key(self)
+    }
+    fn args(&self, shown: String) -> Vec<String> {
+        pipeline::RunError::args(self, shown)
+    }
+}
+
+/// Builds what file tasks need; tools are looked for only when one of `names` uses them.
+fn with_ctx<R>(
+    out: &Out,
+    cancel: &AtomicBool,
+    names: &[&str],
+    f: impl FnOnce(&tasks::Ctx<'_>) -> R,
+) -> R {
     let settings: Settings = locations::data_dir()
         .map(|d| Store::new(d).load())
         .unwrap_or_default();
     let seven_zip = archive::find_tool("7zz");
-    let is_cancelled = || cancel.load(Ordering::SeqCst);
     let progress = EngineProgress { out, cancel };
     // ffmpeg is looked for (and probed) only when a media task actually runs.
-    let name = task.split('?').next().unwrap_or("");
-    let media_env = mediatasks::is_media_task(name)
+    let media_env = names
+        .iter()
+        .any(|n| mediatasks::is_media_task(n))
         .then(|| {
             Tools::discover().map(|tools| MediaEnv {
                 caps: Capabilities::detect(
@@ -181,7 +234,10 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
         })
         .flatten();
     // A real JDK and the pinned CFR jar are only looked for when decompiling.
-    let java = (name == "jar.decompile").then(jar::find_java).flatten();
+    let java = names
+        .contains(&"jar.decompile")
+        .then(jar::find_java)
+        .flatten();
     let cfr = locations::data_dir().map(|d| d.join("deps/cfr.jar"));
     let ctx = tasks::Ctx {
         settings: &settings,
@@ -191,18 +247,64 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
         java: java.as_deref(),
         cfr: cfr.as_deref(),
     };
+    f(&ctx)
+}
+
+fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io::Result<()> {
+    let name = task.split('?').next().unwrap_or("");
+    let outcome = with_ctx(out, cancel, &[name], |ctx| {
+        each_file(out, cancel, paths, |_, p| tasks::run(task, p, ctx))
+    })?;
+    done(out, outcome)
+}
+
+/// Several steps per file (`op: pipeline`). Intermediate files live in a private folder under
+/// `$TMPDIR`, which is gone before `done` is sent; only final results are reported as outputs.
+fn run_pipeline(
+    out: &Out,
+    cancel: &AtomicBool,
+    steps: &[String],
+    paths: &[String],
+) -> io::Result<()> {
+    let plan = match pipeline::plan(steps) {
+        Ok(p) => p,
+        Err(e) => return failed(out, e.key(), e.args()),
+    };
+    let work = match pipeline::WorkDir::create(&std::env::temp_dir()) {
+        Ok(w) => w,
+        Err(_) => {
+            return failed(
+                out,
+                "msg.ioError",
+                vec![std::env::temp_dir().display().to_string()],
+            )
+        }
+    };
+    let names: Vec<&str> = plan.iter().map(|s| s.name).collect();
+    let outcome = with_ctx(out, cancel, &names, |ctx| {
+        each_file(out, cancel, paths, |i, p| {
+            pipeline::run_file(&plan, p, ctx, &work, i)
+        })
+    });
+    // Removed before `done`: the app may stop the engine as soon as it has read it.
+    drop(work);
+    done(out, outcome?)
+}
+
+/// Runs `job` on each path with the per-file events (status, outputs, messages, step) and returns
+/// how the run ended; the caller sends `done`.
+fn each_file<E: Failure>(
+    out: &Out,
+    cancel: &AtomicBool,
+    paths: &[String],
+    mut job: impl FnMut(usize, &Path) -> Result<tasks::Done, E>,
+) -> io::Result<Outcome> {
+    let is_cancelled = || cancel.load(Ordering::SeqCst);
     let total = paths.len() as u64;
     let mut failures = 0;
     for (i, p) in paths.iter().enumerate() {
         if is_cancelled() {
-            return emit(
-                out,
-                &Event::Done {
-                    outcome: Outcome::Cancelled,
-                    summary_key: None,
-                    summary_args: vec![],
-                },
-            );
+            return Ok(Outcome::Cancelled);
         }
         let shown = display_name(p);
         emit(
@@ -212,7 +314,7 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
                 args: vec![shown.clone()],
             },
         )?;
-        match tasks::run(task, Path::new(p), &ctx) {
+        match job(i, Path::new(p)) {
             Ok(done) => {
                 // Tell the app exactly what this run created (it powers "Undo"); a task that left the input as is reports nothing.
                 if done.output != Path::new(p) {
@@ -243,16 +345,7 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
                     )?;
                 }
             }
-            Err(_) if is_cancelled() => {
-                return emit(
-                    out,
-                    &Event::Done {
-                        outcome: Outcome::Cancelled,
-                        summary_key: None,
-                        summary_args: vec![],
-                    },
-                )
-            }
+            Err(_) if is_cancelled() => return Ok(Outcome::Cancelled),
             Err(e) => {
                 failures += 1;
                 emit(out, &error(e.key(), e.args(shown)))?;
@@ -266,19 +359,11 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
             },
         )?;
     }
-    let outcome = if failures == 0 {
+    Ok(if failures == 0 {
         Outcome::Succeeded
     } else {
         Outcome::Failed
-    };
-    emit(
-        out,
-        &Event::Done {
-            outcome,
-            summary_key: None,
-            summary_args: vec![],
-        },
-    )
+    })
 }
 
 fn run_batch(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io::Result<()> {
@@ -316,8 +401,14 @@ fn main() -> io::Result<()> {
         std::thread::spawn(move || reader(out, cancel, tx))
     };
     for msg in rx {
-        let Msg::Run { task, paths } = msg;
         cancel.store(false, Ordering::SeqCst); // a stale cancel must not kill the next run
+        let (task, paths) = match msg {
+            Msg::Run { task, paths } => (task, paths),
+            Msg::Pipeline { steps, paths } => {
+                run_pipeline(&out, &cancel, &steps, &paths)?;
+                continue;
+            }
+        };
         let name = task.split('?').next().unwrap_or("");
         if batch::is_batch_task(name) {
             run_batch(&out, &cancel, &task, &paths)?;

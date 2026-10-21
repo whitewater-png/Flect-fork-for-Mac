@@ -1,0 +1,12 @@
+{
+ "version": 1,
+ "presets": [
+  {
+   "id": "not-a-uuid",
+   "name": "a",
+   "steps": [
+    "image.strip"
+   ]
+  }
+ ]
+}

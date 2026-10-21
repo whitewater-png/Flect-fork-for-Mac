@@ -14,6 +14,8 @@ pub mod mediatasks;
 pub mod menu;
 pub mod metadata;
 pub mod paths;
+pub mod pipeline;
+pub mod presets;
 pub mod protocol;
 pub mod settings;
 pub mod subtitles;
