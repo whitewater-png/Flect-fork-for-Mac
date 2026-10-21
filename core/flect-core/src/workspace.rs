@@ -78,21 +78,48 @@ pub fn commit_new(temp: &Path, target: &Path) -> io::Result<()> {
         {
             Err(e)
         }
-        Err(_) => {
-            let mut src = fs::File::open(temp)?;
-            let mut dst = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(target)?;
-            let copied = io::copy(&mut src, &mut dst).and_then(|_| dst.sync_all());
-            drop(dst);
-            if let Err(e) = copied {
-                let _ = fs::remove_file(target);
-                return Err(e);
-            }
-            fs::remove_file(temp)
-        }
+        Err(_) => copy_commit(temp, target),
     }
+}
+
+/// Fallback when `temp` cannot be hard-linked to `target`. The bytes are first copied into a
+/// hidden scratch file inside the target folder (created exclusively), flushed to disk, and only
+/// then given the final name, so `target` never holds a partial file, not even after a crash.
+/// The final step is a hard link (fails if `target` exists). On a file system without hard links
+/// it falls back to checking that `target` is absent and renaming, which leaves only a tiny
+/// race against a third party creating `target` at that very moment.
+fn copy_commit(temp: &Path, target: &Path) -> io::Result<()> {
+    let parent = match target.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    if target.symlink_metadata().is_ok() {
+        return Err(io::ErrorKind::AlreadyExists.into());
+    }
+    let scratch = parent.join(format!(".{BRAND}-copy-{}", unique_token()));
+    let result = (|| {
+        let mut src = fs::File::open(temp)?;
+        let mut dst = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&scratch)?;
+        io::copy(&mut src, &mut dst)?;
+        dst.sync_all()?;
+        drop(dst);
+        match fs::hard_link(&scratch, target) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+            Err(_) => {
+                if target.symlink_metadata().is_ok() {
+                    return Err(io::ErrorKind::AlreadyExists.into());
+                }
+                fs::rename(&scratch, target)
+            }
+        }
+    })();
+    let _ = fs::remove_file(&scratch); // already gone after a successful rename
+    result?;
+    fs::remove_file(temp)
 }
 
 /// Hidden working directory beside a destination; deleted on drop.
@@ -186,6 +213,33 @@ mod tests {
         commit_new(&t, &f).unwrap();
         assert_eq!(fs::read(&f).unwrap(), b"new");
         assert!(!t.exists());
+    }
+
+    #[test]
+    fn copy_fallback_is_atomic_and_leaves_no_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (t, f) = (dir.path().join("t"), dir.path().join("final"));
+        fs::write(&t, b"new bytes").unwrap();
+        copy_commit(&t, &f).unwrap();
+        assert_eq!(fs::read(&f).unwrap(), b"new bytes");
+        assert!(!t.exists());
+        // an existing target is never replaced, and no scratch file is left behind
+        fs::write(&t, b"other").unwrap();
+        assert_eq!(
+            copy_commit(&t, &f).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&f).unwrap(), b"new bytes");
+        // failure while copying (source missing) leaves nothing under the final name or hidden
+        let g = dir.path().join("g");
+        assert!(copy_commit(&dir.path().join("missing"), &g).is_err());
+        assert!(!g.exists());
+        let mut names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["final", "t"]);
     }
 
     #[test]
