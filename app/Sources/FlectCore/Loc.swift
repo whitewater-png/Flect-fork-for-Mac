@@ -83,9 +83,27 @@ public final class Loc {
         return Loc.format(template, [String(count)])
     }
 
+    /// Replaces `{n}` with `args[n]` in one pass over the template: text inserted from an argument is never scanned
+    /// again, so a file name containing `{1}` cannot pull the next argument into its place. A placeholder without an
+    /// argument stays as it is.
     public static func format(_ template: String, _ args: [String]) -> String {
-        var out = template
-        for (i, a) in args.enumerated() { out = out.replacingOccurrences(of: "{\(i)}", with: a) }
+        if args.isEmpty { return template }
+        var out = ""
+        var rest = Substring(template)
+        while let open = rest.firstIndex(of: "{") {
+            out += rest[..<open]
+            let afterOpen = rest.index(after: open)
+            let digits = rest[afterOpen...].prefix(while: { $0.isASCII && $0.isNumber })
+            if !digits.isEmpty, digits.count <= 4, digits.endIndex < rest.endIndex, rest[digits.endIndex] == "}",
+               let i = Int(digits), i < args.count {
+                out += args[i]
+                rest = rest[rest.index(after: digits.endIndex)...]
+            } else {
+                out.append("{")
+                rest = rest[afterOpen...]
+            }
+        }
+        out += rest
         return out
     }
 }

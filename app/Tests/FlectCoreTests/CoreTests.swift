@@ -186,6 +186,43 @@ final class CoreTests: XCTestCase {
     }
 
     /// Every language must carry every key the English table has (a missing key shows up as raw text in the UI).
+    /// Arguments are inserted in one pass: a file name with `{1}` in it used to be replaced by the next argument.
+    func testFormatDoesNotRescanInsertedArguments() {
+        XCTAssertEqual(Loc.format("{0} ({1})", ["a{1}b", "why"]), "a{1}b (why)")
+        XCTAssertEqual(Loc.format("{1} then {0}", ["x{0}", "y{1}"]), "y{1} then x{0}")
+        XCTAssertEqual(Loc.format("{0}{0}", ["z"]), "zz")
+        XCTAssertEqual(Loc.format("{0} {2} {x} {} { {", ["a"]), "a {2} {x} {} { {")
+        XCTAssertEqual(Loc.format("{0", ["a"]), "{0")
+        XCTAssertEqual(Loc.format("日本{0}語", ["{0}"]), "日本{0}語")
+        XCTAssertEqual(Loc.format("no args {0}", []), "no args {0}")
+        XCTAssertEqual(Loc.format("{10}", (0...10).map(String.init)), "10")
+    }
+
+    /// The same `{n}` placeholders in every language (an argument the text never shows is lost, a missing one shows
+    /// up as `{1}`).
+    func testPlaceholdersMatchAcrossLanguages() throws {
+        func table(_ name: String) throws -> [String: String] {
+            let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Resources"))
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: String])
+        }
+        func placeholders(_ s: String) -> Set<String> {
+            var found = Set<String>(), rest = Substring(s)
+            while let r = rest.range(of: "\\{[0-9]+\\}", options: .regularExpression) { found.insert(String(rest[r])); rest = rest[r.upperBound...] }
+            return found
+        }
+        for family in ["strings", "strings.ux", "strings.share"] {
+            let en = try table("\(family).en")
+            for code in ["ja", "zh"] {
+                let other = try table("\(family).\(code)")
+                for (k, v) in en { if let o = other[k] { XCTAssertEqual(placeholders(o), placeholders(v), "\(family).\(code): \(k)") } }
+            }
+        }
+        let en = try table("strings.en")
+        XCTAssertEqual(placeholders(en["msg.sandboxFailed"] ?? ""), ["{0}", "{1}"])
+        XCTAssertEqual(placeholders(en["msg.emptyRemoveFailed"] ?? ""), ["{0}", "{1}"])
+        XCTAssertEqual(placeholders(en["msg.emptySkipped"] ?? ""), ["{0}"])
+    }
+
     func testAllLanguagesHaveAllKeys() throws {
         func keys(_ code: String) throws -> Set<String> {
             let url = try XCTUnwrap(Bundle.module.url(forResource: "strings.\(code)", withExtension: "json", subdirectory: "Resources"))

@@ -47,7 +47,7 @@
 | タスク | 1 回目 | アプリが尋ねる | 2 回目 |
 | --- | --- | --- | --- |
 | `folder.removeDuplicate`（プレビュー付き） | `folder.removeDuplicate?dry=1` → `data:duplicates`（Ask）または `data:duplicates_preview`（設定の Keep ルール） | どれを残すか → 実行内容の一覧を見せて**確認** | `mode=oldest\|newest\|all&dry=1` → `data:duplicates_preview` → 確認後 `mode=...`（`dry` なし）→ `needs:trash`。プレビューは何も変更せず、確認時に再スキャンして実行する（その間にファイルが変わっていれば実行時の内容が優先）。選択の重複・入れ子（`A` と `A/sub`、同じフォルダの別表記）は 1 回だけ走査し、同じ inode（ハードリンク）は 1 ファイルとして扱う。同じファイルを 2 回含むグループは提示も削除もしない |
-| `folder.removeEmpty` | `data:empty_folders` + `done(msg.emptyFound)` | 削除してよいか | `folder.removeEmpty?confirm=1` → `needs:trash`。除外フォルダ・読めない項目・リンクは「中身あり」。無視するのは OS のゴミ（`.DS_Store`・`._*`・`.localized`・`Icon\r`・`desktop.ini`・`Thumbs.db`、設定でオンのときだけ 0 バイトファイル）のみ。`needs:trash` を出す直前／完全削除の直前に各フォルダを再確認し、空でなくなったものは `warn msg.emptySkipped`（[パス]、完全削除時は [パス, 理由]）で外す。完全削除はゴミを 1 件ずつ消してから深い順に `remove_dir` のみ（再帰削除はしない） |
+| `folder.removeEmpty` | `data:empty_folders` + `done(msg.emptyFound)` | 削除してよいか | `folder.removeEmpty?confirm=1` → `needs:trash`。除外フォルダ・読めない項目・リンクは「中身あり」。無視するのは OS のゴミ（`.DS_Store`・`._*`・`.localized`・`Icon\r`・`desktop.ini`・`Thumbs.db`、設定でオンのときだけ 0 バイトファイル）のみ。`needs:trash` を出す直前／完全削除の直前に各フォルダを再確認し、空でなくなったものは `warn msg.emptySkipped`（[パス]）で外し、完全削除に失敗したものは `warn msg.emptyRemoveFailed`（[パス, 理由]。理由は制御文字を除いた 200 文字以内）で報告する。完全削除はゴミを 1 件ずつ消してから深い順に `remove_dir` のみ（再帰削除はしない） |
 | `folder.rename` | （アプリがダイアログで接頭辞/名前/接尾辞を取得） | — | `folder.rename?prefix=..&name=..&suffix=..&numbered=1&dry=0\|1` |
 | `pdf.merge` | （アプリが順序ダイアログで並べ替え） | — | `paths` を結合したい順で渡す（2 件以上） |
 | `video.trim` | （アプリがプレビューで範囲を取得） | — | `video.trim?start=秒&end=秒` |
@@ -77,7 +77,7 @@
 `image.resize.p1` のようなメニュー ID は、アプリ（Quick Action 起動後のウィンドウ）が設定（`Image.Presets.ResizeA` など）を読んで `image.resize?scale=50` のような**実タスク + パラメータ**に解決してからエンジンへ渡す。`*.custom` はアプリがダイアログで値を取得する。`video.compress.discord` は `video.compress?preset=discord`。
 
 ## 外部ツールの探索（PATH は信用しない）
-`ffmpeg`/`ffprobe`/`7zz`: `/opt/homebrew/bin`, `/usr/local/bin` のみ（他者書込可能なファイル/ディレクトリは拒否）。Java: `/usr/libexec/java_home` の結果または Homebrew の openjdk（`/usr/bin/java` スタブは使わない）。CFR: `<データフォルダ>/deps/cfr.jar` で **SHA-256 が固定値と一致するときだけ**使用（取得は `scripts/fetch-cfr.sh`）。CFR は必ず `/usr/bin/sandbox-exec` の中で動かす（ネットワーク禁止、書き込みはステージングと非公開の一時フォルダ（0700、作業フォルダ内）だけ、起動できるのは JVM のみ。パスは解決済み（`/private/var/...`）で `-D` パラメータとして渡す）。実行前に同じプロファイル・同じパラメータで `/usr/bin/true` を動かして確かめ、`sandbox-exec` が無い／拒否された場合は `error msg.sandboxFailed` で失敗し、**サンドボックスなしでは実行しない**。
+`ffmpeg`/`ffprobe`/`7zz`: `/opt/homebrew/bin`, `/usr/local/bin` のみ（他者書込可能なファイル/ディレクトリは拒否）。Java: `/usr/libexec/java_home` の結果または Homebrew の openjdk（`/usr/bin/java` スタブは使わない）。CFR: `<データフォルダ>/deps/cfr.jar` で **SHA-256 が固定値と一致するときだけ**使用（取得は `scripts/fetch-cfr.sh`）。CFR は必ず `/usr/bin/sandbox-exec` の中で動かす（ネットワーク禁止、書き込みはステージングと非公開の一時フォルダ（0700、作業フォルダ内）だけ、起動できるのは JVM のみ。パスは解決済み（`/private/var/...`）で `-D` パラメータとして渡す）。実行前に同じプロファイル・同じパラメータで `/usr/bin/true` を動かして確かめ、`sandbox-exec` が無い／拒否された場合は `error msg.sandboxFailed`（[ファイル名, 理由]）で失敗し、**サンドボックスなしでは実行しない**。
 
 ## エンジンが使う `key`（Swift の String Catalog に必要）
 旧 Windows 版の `Strings.En.cs` にも存在するキーは翻訳を流用できる。**新規**（翻訳が必要）:
@@ -100,6 +100,7 @@
 - `msg.duplicatesFound`
 - `msg.duplicatesPreview`
 - `msg.emptyFound`
+- `msg.emptyRemoveFailed`
 - `msg.emptySkipped`
 - `msg.ffmpegFailed`
 - `msg.ffmpegMissing`

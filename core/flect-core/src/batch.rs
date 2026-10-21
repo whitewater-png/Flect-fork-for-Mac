@@ -169,14 +169,18 @@ fn carry_out(
 
 /// Carry out a confirmed empty-folder plan. Every folder is re-checked right before it is handed on
 /// (Trash) or removed (permanent): one that is not empty any more is left alone and reported with
-/// `msg.emptySkipped`; nothing is ever deleted recursively.
+/// `msg.emptySkipped` ([path]); one whose removal failed is reported with `msg.emptyRemoveFailed`
+/// ([path, reason]). Nothing is ever deleted recursively.
 fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
     let f = &ctx.settings.folder;
-    let skipped_event = |p: &Path, why: Option<String>| {
-        let mut args = vec![p.to_string_lossy().into_owned()];
-        args.extend(why);
+    let skipped_event = |p: &Path, why: Option<&str>| {
+        let path = p.to_string_lossy().into_owned();
+        let (key, args) = match why {
+            None => ("msg.emptySkipped", vec![path]),
+            Some(w) => ("msg.emptyRemoveFailed", vec![path, tasks::short_reason(w)]),
+        };
         (ctx.emit)(Event::Warn {
-            key: "msg.emptySkipped".into(),
+            key: key.into(),
             args,
         });
     };
@@ -185,7 +189,7 @@ fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
             Err(e) => fail(ctx, "msg.ioError", e.to_string()),
             Ok(out) => {
                 for (p, why) in &out.skipped {
-                    skipped_event(p, Some(why.clone()));
+                    skipped_event(p, why.as_deref());
                 }
                 if out.removed == 0 {
                     return done(ctx, Outcome::Succeeded, Some("msg.noEmpty"), vec![]);
@@ -750,6 +754,36 @@ mod tests {
         assert!(lib.exists(), "excluded content was deleted: {ev:?}");
         assert!(r.join("zero/marker").exists() && locked.exists());
         assert!(!r.join("B/hollow").exists() && !r.join("litter").exists());
+    }
+
+    /// A permanent removal that fails is reported with its reason ([path, reason]); the reason used
+    /// to be sent as a second argument of `msg.emptySkipped`, whose text never showed it.
+    #[test]
+    fn failed_permanent_removal_reports_the_reason() {
+        let d = tempfile::tempdir().unwrap();
+        let parent = d.path().join("P");
+        fs::create_dir_all(parent.join("E")).unwrap();
+        // P holds only an empty folder, so P is planned; E cannot be removed from a read-only P.
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        let ev = run("folder.removeEmpty?confirm=1", &[d.path()], &perm);
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        let warn = ev
+            .iter()
+            .find(|e| e["event"] == "warn")
+            .unwrap_or_else(|| panic!("{ev:?}"));
+        assert_eq!(warn["key"], "msg.emptyRemoveFailed", "{ev:?}");
+        let args = warn["args"].as_array().unwrap();
+        assert_eq!(args.len(), 2, "{warn}");
+        assert_eq!(args[0], parent.to_string_lossy().as_ref());
+        let why = args[1].as_str().unwrap();
+        assert!(
+            !why.is_empty() && !why.contains(char::is_control),
+            "{why:?}"
+        );
+        assert!(parent.join("E").exists());
+        assert_eq!(find(&ev, "done").unwrap()["summary_key"], "msg.noEmpty");
     }
 
     /// Option names are never percent-decoded: `%63onfirm` is not `confirm` (the CLI guard matched

@@ -53,9 +53,30 @@ impl TaskError {
             Self::Media(
                 crate::media::MediaError::NoModel(m) | crate::media::MediaError::ModelMismatch(m),
             ) => vec![m.clone()],
+            // {0} the file, {1} what sandbox-exec said
+            Self::Jar(crate::jar::JarError::NoSandbox(why)) => vec![shown, short_reason(why)],
             _ => vec![shown],
         }
     }
+}
+
+/// Longest reason (in characters) put into a message.
+pub const MAX_REASON_CHARS: usize = 200;
+
+/// A reason from a tool or the OS, fit for one line of a message: control characters (line breaks,
+/// escape sequences...) become spaces, runs of white space collapse, and it is cut to
+/// [`MAX_REASON_CHARS`] characters (with `…`).
+pub fn short_reason(why: &str) -> String {
+    let cleaned: String = why
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let mut out = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.chars().count() > MAX_REASON_CHARS {
+        out = out.chars().take(MAX_REASON_CHARS - 1).collect();
+        out.push('…');
+    }
+    out
 }
 
 impl From<io::Error> for TaskError {
@@ -692,6 +713,25 @@ pub fn run(task: &str, input: &Path, ctx: &Ctx<'_>) -> Result<Done, TaskError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sandbox_failure_carries_a_short_clean_reason() {
+        use crate::jar::JarError;
+        let e = TaskError::Jar(JarError::NoSandbox(
+            "sandbox_apply:\tOperation not permitted\n\u{1b}[31mx".into(),
+        ));
+        assert_eq!(e.key(), "msg.sandboxFailed");
+        assert_eq!(
+            e.args("app.jar".into()),
+            ["app.jar", "sandbox_apply: Operation not permitted [31mx"]
+        );
+        let long = "é".repeat(5000);
+        let r = short_reason(&long);
+        assert_eq!(r.chars().count(), MAX_REASON_CHARS);
+        assert!(r.ends_with('…'));
+        assert_eq!(short_reason("  \r\n "), "");
+        // other errors still get the file name only
+        assert_eq!(TaskError::NotAFile.args("a".into()), ["a"]);
+    }
     use super::*;
 
     /// The engine answers "unimplemented" to any task `is_file_task` does not list, which made JAR decompiling unreachable.

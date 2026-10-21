@@ -610,8 +610,8 @@ fn remove_empty_tree(
 pub struct EmptyRemoval {
     /// Folders removed (nested ones included).
     pub removed: usize,
-    /// Planned folders left alone, with the reason (no longer empty, or the removal failed).
-    pub skipped: Vec<(PathBuf, String)>,
+    /// Planned folders left alone: `None` when no longer empty, otherwise why the removal failed.
+    pub skipped: Vec<(PathBuf, Option<String>)>,
 }
 
 /// Permanent removal of planned empty folders. Each one is re-checked right before it is touched
@@ -628,12 +628,12 @@ pub fn delete_empty_permanently(
     for path in paths {
         check_inside(path, &canon_roots)?;
         if still_empty(path, &excl, &f.empty).is_none() {
-            out.skipped.push((path.clone(), "no longer empty".into()));
+            out.skipped.push((path.clone(), None));
             continue;
         }
         match remove_empty_tree(path, &excl, &f.empty) {
             Ok(n) => out.removed += n,
-            Err(e) => out.skipped.push((path.clone(), e.to_string())),
+            Err(e) => out.skipped.push((path.clone(), Some(e.to_string()))),
         }
     }
     Ok(out)
