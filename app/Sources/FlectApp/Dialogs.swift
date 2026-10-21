@@ -20,6 +20,7 @@ struct PlayerView: NSViewRepresentable {
         case .pdfOrder: PdfOrderDialog(model: model)
         case .trim: TrimDialog(model: model, thumbnail: false)
         case .thumbnail: TrimDialog(model: model, thumbnail: true)
+        case .maxEdge: MaxEdgeDialog(model: model)
         }
     }
 }
@@ -87,6 +88,23 @@ enum SizeParser {
                 .font(.caption).foregroundStyle(.secondary)
             Buttons(model: model, actionTitle: model.loc.t("dialog.target.action"), enabled: SizeParser.parse(text) != nil) {
                 if let b = SizeParser.parse(text) { model.submit(task: Planner.compress(base: base, bytes: b)) }
+            }
+        }.padding(20)
+    }
+}
+
+/// "Make safe to share" with a size limit: personal metadata is removed in any case, the long edge is reduced only when larger.
+@MainActor struct MaxEdgeDialog: View {
+    let model: AppModel
+    @State private var text = "2048"
+    private var edge: Int? { Int(text.trimmingCharacters(in: .whitespaces)).flatMap { (16...32768).contains($0) ? $0 : nil } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(model.loc.t("share.dialog.edge.label"))
+            TextField("2048", text: $text).frame(width: 110)
+            Text(model.loc.t("share.dialog.edge.hint")).font(.caption).foregroundStyle(.secondary)
+            Buttons(model: model, actionTitle: model.loc.t("share.dialog.edge.action"), enabled: edge != nil) {
+                if let e = edge { model.submit(task: Planner.makeSafe(maxEdge: e)) }
             }
         }.padding(20)
     }

@@ -17,6 +17,8 @@ import FlectCore
             case .tree(let text): TextResultView(text: text, model: model)
             case .analyze(let data): TextResultView(text: AnalyzeFormatter.text(data, loc: loc), model: model)
             case .duplicates(let groups): DuplicatesView(groups: groups, model: model)
+            case .duplicatesPreview(let preview): DuplicatesPreviewView(preview: preview, model: model)
+            case .privacyReport(let reports, let errors): PrivacyReportView(reports: reports, errors: errors, model: model)
             case .emptyFolders(let targets, let permanent): EmptyFoldersView(targets: targets, permanent: permanent, model: model)
             case .renamePreview(let lines): RenamePreviewView(lines: lines, model: model)
             case .pdfPreview(let url): PDFPreviewView(url: url)
@@ -153,11 +155,93 @@ enum AnalyzeFormatter {
                 }
             }
             HStack {
-                Button(model.loc.t("app.keepOldest")) { model.submit(task: Planner.duplicates(mode: "oldest")) }
-                Button(model.loc.t("app.keepNewest")) { model.submit(task: Planner.duplicates(mode: "newest")) }
-                Button(model.loc.t("app.deleteAll")) { model.submit(task: Planner.duplicates(mode: "all")) }
+                // Each choice first shows what would be removed (dry run); the Trash is only asked for after confirming there.
+                Button(model.loc.t("app.keepOldest")) { model.submit(task: Planner.duplicates(mode: "oldest", dryRun: true)) }
+                Button(model.loc.t("app.keepNewest")) { model.submit(task: Planner.duplicates(mode: "newest", dryRun: true)) }
+                Button(model.loc.t("app.deleteAll")) { model.submit(task: Planner.duplicates(mode: "all", dryRun: true)) }
                 Spacer()
                 Button(model.loc.t("common.cancel")) { model.close() }.keyboardShortcut(.cancelAction)
+            }
+        }.padding(16)
+    }
+}
+
+/// "Show what will happen, then confirm" for duplicate removal. Nothing has been touched when this appears.
+@MainActor struct DuplicatesPreviewView: View {
+    let preview: DuplicatePreview
+    let model: AppModel
+    var body: some View {
+        let loc = model.loc
+        let size = ByteCountFormatter.string(fromByteCount: preview.reclaimBytes, countStyle: .file)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(loc.f(preview.permanent ? "share.dup.titlePermanent" : "share.dup.titleTrash", [String(preview.removeCount), size])).font(.headline)
+            Text(loc.t("share.dup.note")).font(.caption).foregroundStyle(.secondary)
+            if preview.permanent { Text(loc.t("settings.folder.delete.warning")).foregroundStyle(.red) }
+            List {
+                ForEach(preview.groups) { g in
+                    Section(ByteCountFormatter.string(fromByteCount: g.keep?.size ?? g.remove.first?.size ?? 0, countStyle: .file)) {
+                        if let k = g.keep {
+                            Label { Text(k.path).font(.caption).textSelection(.enabled) } icon: { Image(systemName: "checkmark.circle").foregroundStyle(.green) }
+                                .help(loc.t("share.dup.keep"))
+                        } else {
+                            Text(loc.t("share.dup.keepNone")).font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(g.remove) { f in
+                            Label { Text(f.path).font(.caption).textSelection(.enabled) } icon: { Image(systemName: "trash").foregroundStyle(.red) }
+                                .help(loc.t("share.dup.remove"))
+                        }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                // Cancel is the default button: pressing Return must never delete anything.
+                Button(loc.t("common.cancel")) { model.close() }.keyboardShortcut(.defaultAction)
+                Button(loc.t(preview.permanent ? "share.dup.confirmPermanent" : "share.dup.confirmTrash")) {
+                    model.submit(task: Planner.duplicates(mode: preview.mode))
+                }
+            }
+        }.padding(16)
+    }
+}
+
+/// Result of the read-only privacy check.
+@MainActor struct PrivacyReportView: View {
+    let reports: [PrivacyReport]
+    let errors: [String]
+    let model: AppModel
+    var body: some View {
+        let loc = model.loc
+        VStack(alignment: .leading, spacing: 8) {
+            Text(loc.t("share.privacy.title")).font(.headline)
+            Text(loc.t("share.privacy.readOnly")).font(.caption).foregroundStyle(.secondary)
+            List {
+                ForEach(reports) { r in
+                    Section("\(r.file)  (\(r.format))") {
+                        if r.items.isEmpty {
+                            Label(loc.t("share.privacy.clean"), systemImage: "checkmark.shield").foregroundStyle(.green)
+                        } else {
+                            ForEach(r.items) { item in
+                                HStack(alignment: .firstTextBaseline) {
+                                    Image(systemName: item.high ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
+                                        .foregroundStyle(item.high ? Color.red : Color.orange)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(loc.has("share.kind.\(item.kind)") ? loc.t("share.kind.\(item.kind)") : item.kind)
+                                        if !item.detail.isEmpty { Text(item.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ForEach(errors, id: \.self) { Text($0).foregroundStyle(.red).font(.caption) }
+            }
+            HStack {
+                Spacer()
+                if reports.contains(where: { !$0.items.isEmpty }) {
+                    Button(loc.t("share.privacy.makeSafe")) { model.submit(task: Planner.makeSafe(maxEdge: 0)) }
+                }
+                Button(loc.t("common.close")) { model.close() }.keyboardShortcut(.defaultAction)
             }
         }.padding(16)
     }

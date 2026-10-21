@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Share safely (images): **Privacy Check** shows what personal data a JPEG, PNG or WebP carries (GPS location, camera and lens serial numbers, owner/author, timestamps, software, embedded thumbnails, XMP/IPTC, comments, hidden blocks) and changes nothing. **Make Safe to Share** writes a new `_safe` copy without it (lossless for JPEG/PNG/WebP unless the rotation has to be applied; optionally with a maximum long edge via **Make Safe to Share (Resize)**). The copy is re-checked before it is written and the original is never touched or overwritten. Both appear as Finder Quick Actions. HEIC, PDF and video are not covered yet.
+- Duplicate removal now shows a preview first: for each group the copy that stays and the copies that would go. Nothing is moved until you confirm (Trash by default; Cancel is the default button).
 - Output folders: **Settings → Output** sets a folder per feature (images, video, audio, text files, PDF, OCR, extracted archives, compressed folders, analysis reports). Empty means beside the original, as before. A relative path such as `./Compressed` starts from the original's folder; absolute paths and `~` work; the folder is created when missing. Existing files are never overwritten (` (2)`, ` (3)` numbering is unchanged).
 - Zip files made on Windows with Japanese or Chinese names (Shift_JIS / GBK, no UTF-8 flag) now extract with readable names instead of mojibake. All path, link and size checks still apply.
 
