@@ -28,6 +28,10 @@ sha2 = "0.11.1"
 # openat / unlinkat / fstatat without unsafe code (already in the tree through tempfile)
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
 
+[features]
+# Pause points (FLECT_SEAM_DIR / FLECT_SEAM) for review drivers; never in release builds.
+review-seams = []
+
 [dev-dependencies]
 tempfile = "3"
 

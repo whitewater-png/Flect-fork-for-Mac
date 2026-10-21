@@ -269,6 +269,7 @@
  "msg.duplicatesAllChanged": "未删除任何内容：全部 {0} 个重复项在扫描后其本身或保留的副本已更改，均未处理（见列表）。",
  "msg.recycledPartial": "已将 {0} 移到废纸篓，释放 {1}；{2} 因其本身或保留的副本已更改、或无法删除而未处理（见列表）。",
  "msg.deletedPermanentlyPartial": "已彻底删除 {0}，释放 {1}；{2} 因其本身或保留的副本已更改、或无法删除而未处理（见列表）。",
+ "msg.leftUnderTempName": "未删除：{0} 在最后一刻已更改，且其名称已被占用，因此以 {1} 的名称保留在同一文件夹中。",
  "msg.emptySkipped": "已不再为空，未删除：{0}",
  "msg.ffmpegFailed": "ffmpeg 运行失败。",
  "msg.ffmpegMissing": "未找到 ffmpeg。请执行：brew install ffmpeg",

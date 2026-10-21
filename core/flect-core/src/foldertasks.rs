@@ -577,11 +577,13 @@ pub fn still_empty(
 }
 
 /// Delete the empty tree `name` in the open folder `parent`, deepest first, through handles only:
-/// each folder is opened with `O_NOFOLLOW` relative to its (open) parent, litter files are removed
-/// one by one with `unlinkat` after an `fstatat` that does not follow links, and each folder with
-/// `unlinkat(AT_REMOVEDIR)`, which refuses a folder that is not empty. Stops at the first thing
-/// that is not litter, so content that appeared after the check is left alone; renaming or swapping
-/// a folder on the way cannot redirect a removal elsewhere.
+/// each folder is opened with `O_NOFOLLOW` relative to its (open) parent; each litter file and
+/// then each folder is removed with [`fsat::remove_checked`] (renamed to a fresh temporary name,
+/// checked again under it, then `unlinkat` / `unlinkat(AT_REMOVEDIR)`, which refuses a folder that
+/// is not empty). A litter file must still be the same file, still litter (a 0-byte file still 0
+/// bytes); a folder still the same folder. Stops at the first thing that is not litter, so content
+/// that appeared after the check is left alone; renaming or swapping a folder on the way, or
+/// renaming another item into a checked name, cannot redirect a removal elsewhere.
 fn remove_empty_tree_at(
     parent: &std::os::fd::OwnedFd,
     name: &std::ffi::OsStr,
@@ -590,21 +592,51 @@ fn remove_empty_tree_at(
 ) -> io::Result<usize> {
     let not_empty = || io::Error::other(format!("{} is not empty", name.to_string_lossy()));
     let dir = fsat::open_dir_at(parent, name)?;
+    let dir_id = fsat::Fingerprint::of_stat(&fsat::stat_fd(&dir)?).id();
     let mut removed = 0;
     for entry in fsat::names_in(&dir)? {
         let st = fsat::stat_at(&dir, &entry)?;
-        let ename = entry.to_string_lossy();
+        let ename = entry.to_string_lossy().into_owned();
         if fsat::is_dir(&st) && !excl.excludes_folder(&ename) {
             removed += remove_empty_tree_at(&dir, &entry, excl, empty)?;
         } else if fsat::is_file(&st) && folder::ignorable(&ename, st.st_size as u64, empty) {
-            fsat::unlink_file_at(&dir, &entry)?;
+            fsat::seam("E3", Path::new(&entry));
+            let was = fsat::Fingerprint::of_stat(&st);
+            let still_litter = |now: &rustix::fs::Stat| {
+                let n = fsat::Fingerprint::of_stat(now);
+                (n.dev, n.ino, n.size, n.mtime) == (was.dev, was.ino, was.size, was.mtime)
+                    && folder::ignorable(&ename, n.size, empty)
+            };
+            match fsat::remove_checked(&dir, &entry, false, &still_litter, &|| true) {
+                Ok(()) | Err(fsat::NotRemoved::Gone) => {}
+                Err(why) => return Err(not_removed(name, why)),
+            }
         } else {
             return Err(not_empty());
         }
     }
     drop(dir);
-    fsat::remove_dir_at(parent, name)?;
-    Ok(removed + 1)
+    fsat::seam("E2", Path::new(name));
+    let same_folder = |now: &rustix::fs::Stat| fsat::Fingerprint::of_stat(now).id() == dir_id;
+    match fsat::remove_checked(parent, name, true, &same_folder, &|| true) {
+        Ok(()) => Ok(removed + 1),
+        Err(why) => Err(not_removed(name, why)),
+    }
+}
+
+/// An error for a removal step that did not happen.
+fn not_removed(name: &std::ffi::OsStr, why: fsat::NotRemoved) -> io::Error {
+    match why {
+        fsat::NotRemoved::Failed(e) => e,
+        fsat::NotRemoved::LeftAs(t) => io::Error::other(format!(
+            "{} changed; left as {}",
+            name.to_string_lossy(),
+            t.to_string_lossy()
+        )),
+        fsat::NotRemoved::Gone | fsat::NotRemoved::Changed => {
+            io::Error::other(format!("{} changed", name.to_string_lossy()))
+        }
+    }
 }
 
 /// [`remove_empty_tree_at`] for `path`, reached through handles from the selected folder it lies in.
@@ -623,6 +655,7 @@ fn remove_empty_tree(
         .strip_prefix(root)
         .map_err(|_| fsat::changed("not below the root"))?;
     let name = rel.file_name().ok_or_else(|| fsat::changed("no name"))?;
+    fsat::seam("E1", path);
     let parent = fsat::open_below(root, None, rel.parent().unwrap_or(Path::new("")))?;
     remove_empty_tree_at(&parent, name, excl, empty)
 }
@@ -995,6 +1028,94 @@ mod tests {
         touch(&d.path().join("h/.DS_Store"), b"x");
         touch(&d.path().join("h/real.txt"), b"x");
         assert!(still_empty(&d.path().join("h"), &ExclusionFilter::default(), &f.empty).is_none());
+    }
+
+    /// rev021e E2 / E3 and the opt-in 0-byte rule: whatever is renamed into, written to or added to
+    /// a checked name or folder right before its removal is never removed, and the folder stays.
+    #[test]
+    fn litter_and_folders_changed_right_before_removal_are_kept() {
+        for (phase, attack, zero) in [
+            ("E3", "litter_swap", false),
+            ("E3", "zero_write", true),
+            ("E2", "add_file", false),
+            ("E2", "parent_full", false),
+            ("R1", "litter_swap", false),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let r = d.path().to_path_buf();
+            fs::create_dir_all(r.join("e/sub")).unwrap();
+            fs::create_dir_all(r.join("full")).unwrap();
+            fs::write(r.join("e/.DS_Store"), "litter").unwrap();
+            fs::write(r.join("full/real.txt"), "REAL").unwrap();
+            if zero {
+                fs::write(r.join("e/sub/zero.txt"), "").unwrap();
+            }
+            let mut f = Settings::default().folder;
+            f.empty.ignore_zero_byte_files = zero;
+            let (plan, _) = plan_remove_empty(std::slice::from_ref(&r), &f, &NullProgress).unwrap();
+            assert_eq!(plan.paths, [r.join("e")], "{phase} {attack}");
+            let (rr, once) = (r.clone(), std::rc::Rc::new(std::cell::Cell::new(false)));
+            let flag = once.clone();
+            let out = crate::fsat::with_seam(
+                move |p, name| {
+                    let target = match attack {
+                        "litter_swap" => ".DS_Store",
+                        "zero_write" => "zero.txt",
+                        _ => "e",
+                    };
+                    if p != phase || name != Path::new(target) || flag.replace(true) {
+                        return;
+                    }
+                    match attack {
+                        "litter_swap" => {
+                            fs::rename(rr.join("e/.DS_Store"), rr.join("e/.DS_Store.old")).unwrap();
+                            fs::write(rr.join("e/.DS_Store"), "IMPORTANT, REALLY").unwrap();
+                        }
+                        "zero_write" => {
+                            fs::write(rr.join("e/sub/zero.txt"), "IMPORTANT-NEW-DATA").unwrap()
+                        }
+                        "add_file" => fs::write(rr.join("e/new.txt"), "NEW").unwrap(),
+                        _ => {
+                            fs::rename(rr.join("e"), rr.join("e.old")).unwrap();
+                            fs::rename(rr.join("full"), rr.join("e")).unwrap();
+                        }
+                    }
+                },
+                || delete_empty_permanently(&plan.paths, std::slice::from_ref(&r), &f).unwrap(),
+            );
+            assert!(once.get(), "{phase} {attack}: the seam ran");
+            assert_eq!(out.removed, 0, "{phase} {attack}: {out:?}");
+            assert_eq!(out.skipped.len(), 1, "{phase} {attack}: {out:?}");
+            match attack {
+                "litter_swap" => assert_eq!(
+                    fs::read_to_string(r.join("e/.DS_Store")).unwrap(),
+                    "IMPORTANT, REALLY"
+                ),
+                "zero_write" => assert_eq!(
+                    fs::read_to_string(r.join("e/sub/zero.txt")).unwrap(),
+                    "IMPORTANT-NEW-DATA"
+                ),
+                "add_file" => assert_eq!(fs::read_to_string(r.join("e/new.txt")).unwrap(), "NEW"),
+                _ => assert_eq!(fs::read_to_string(r.join("e/real.txt")).unwrap(), "REAL"),
+            }
+            let temp: Vec<_> = walk_names(&r)
+                .into_iter()
+                .filter(|n| n.contains(".flect-rm-"))
+                .collect();
+            assert!(temp.is_empty(), "{phase} {attack}: {temp:?}");
+        }
+    }
+
+    fn walk_names(r: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        for e in fs::read_dir(r).unwrap() {
+            let e = e.unwrap();
+            out.push(e.path().to_string_lossy().into_owned());
+            if e.file_type().unwrap().is_dir() {
+                out.extend(walk_names(&e.path()));
+            }
+        }
+        out
     }
 
     #[test]

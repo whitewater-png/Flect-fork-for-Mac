@@ -159,6 +159,146 @@ pub fn names_in(dir: &OwnedFd) -> io::Result<Vec<std::ffi::OsString>> {
     Ok(out)
 }
 
+/// A unique, unpredictable name for an item that is about to be removed (`.flect-rm-…`), so the
+/// removal can act on a name nobody else uses.
+pub fn temp_name() -> std::ffi::OsString {
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    h.write_u32(std::process::id());
+    let a = h.finish();
+    h.write_u64(a);
+    format!(".flect-rm-{:016x}{:016x}", a, h.finish()).into()
+}
+
+/// Rename `from` to `to` inside the open folder `dir`, never replacing an existing `to`
+/// (`renameatx_np(RENAME_EXCL)` / `renameat2(RENAME_NOREPLACE)`). Where the file system does not
+/// support that flag (some FAT, exFAT or network volumes), falls back to a plain `renameat` after
+/// checking that `to` does not exist; `to` is a fresh random name, so nothing else uses it.
+pub fn rename_noreplace(
+    dir: &OwnedFd,
+    from: &std::ffi::OsStr,
+    to: &std::ffi::OsStr,
+) -> io::Result<()> {
+    use rustix::io::Errno;
+    match rfs::renameat_with(dir, from, dir, to, rfs::RenameFlags::NOREPLACE) {
+        Err(e) if [Errno::INVAL, Errno::NOTSUP, Errno::NOSYS, Errno::OPNOTSUPP].contains(&e) => {
+            if rfs::statat(dir, to, AtFlags::SYMLINK_NOFOLLOW).is_ok() {
+                return Err(io::Error::from(Errno::EXIST));
+            }
+            Ok(rfs::renameat(dir, from, dir, to)?)
+        }
+        r => Ok(r?),
+    }
+}
+
+/// How a removal step ended when it did not remove anything.
+#[derive(Debug)]
+pub enum NotRemoved {
+    /// The name is gone already (nothing to do).
+    Gone,
+    /// What is there now is not what was checked; it was put back under its name.
+    Changed,
+    /// Not what was checked, and its name is taken now: left under `temp` in the same folder.
+    LeftAs(std::ffi::OsString),
+    Failed(io::Error),
+}
+
+/// Remove `name` from the open folder `dir` only if it still is what was checked, closing the gap
+/// between the last check and the removal: the name is first renamed to a fresh temporary name
+/// (never replacing anything), the renamed item is looked at again (`ok`, given its `fstatat`),
+/// `last` runs (a final check of something else, such as the copy that stays), and only then the
+/// temporary name is removed (`unlinkat`, or `AT_REMOVEDIR` for a folder). Whatever another
+/// process renames into `name` after that first rename is never touched. If anything does not
+/// hold, the item is renamed back (again without replacing) or, when its name is taken, left
+/// under the temporary name and reported.
+pub fn remove_checked(
+    dir: &OwnedFd,
+    name: &std::ffi::OsStr,
+    folder: bool,
+    ok: &dyn Fn(&rfs::Stat) -> bool,
+    last: &dyn Fn() -> bool,
+) -> Result<(), NotRemoved> {
+    let temp = temp_name();
+    seam("R1", Path::new(name));
+    match rename_noreplace(dir, name, &temp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(NotRemoved::Gone),
+        Err(e) => return Err(NotRemoved::Failed(e)),
+    }
+    let put_back = |why: NotRemoved| match rename_noreplace(dir, &temp, name) {
+        Ok(()) => why,
+        Err(_) => NotRemoved::LeftAs(temp.clone()),
+    };
+    let still = rfs::statat(dir, &temp, AtFlags::SYMLINK_NOFOLLOW)
+        .is_ok_and(|st| (if folder { is_dir(&st) } else { is_file(&st) }) && ok(&st));
+    seam("R2", Path::new(name));
+    if !still || !last() {
+        return Err(put_back(NotRemoved::Changed));
+    }
+    let flags = if folder {
+        AtFlags::REMOVEDIR
+    } else {
+        AtFlags::empty()
+    };
+    match rfs::unlinkat(dir, &temp, flags) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(put_back(NotRemoved::Failed(e.into()))),
+    }
+}
+
+/// Pause points for tests and reviews, named like the review harness's (`D1`-`D4` duplicates,
+/// `E1`-`E3` Remove Empty, `T1` Trash hand-off, `R1`/`R2` around the temporary rename). In unit
+/// tests a hook can be set per thread (`with_seam`); with the `review-seams` feature
+/// `FLECT_SEAM_DIR` / `FLECT_SEAM` make the engine write `<dir>/ready` and wait for `<dir>/go`.
+/// Otherwise a no-op.
+#[allow(unused_variables)]
+pub fn seam(phase: &str, p: &Path) {
+    #[cfg(test)]
+    SEAM.with(|h| {
+        if let Some(f) = h.borrow().as_ref() {
+            f(phase, p)
+        }
+    });
+    #[cfg(feature = "review-seams")]
+    {
+        let (Ok(dir), Ok(list)) = (std::env::var("FLECT_SEAM_DIR"), std::env::var("FLECT_SEAM"))
+        else {
+            return;
+        };
+        if !list.split(',').any(|x| x == phase) {
+            return;
+        }
+        let dir = Path::new(&dir);
+        let _ = fs::write(dir.join("ready"), format!("{phase} {}", p.display()));
+        let go = dir.join("go");
+        while !go.exists() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _ = fs::remove_file(&go);
+        let _ = fs::remove_file(dir.join("ready"));
+    }
+}
+
+#[cfg(test)]
+type SeamHook = Box<dyn Fn(&str, &Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static SEAM: std::cell::RefCell<Option<SeamHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `hook` called at every [`seam`] on this thread.
+#[cfg(test)]
+pub fn with_seam<R>(hook: impl Fn(&str, &Path) + 'static, f: impl FnOnce() -> R) -> R {
+    SEAM.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    let r = f();
+    SEAM.with(|h| *h.borrow_mut() = None);
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

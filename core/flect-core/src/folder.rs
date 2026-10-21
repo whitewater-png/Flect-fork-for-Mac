@@ -794,6 +794,9 @@ pub enum Removal {
     Changed,
     /// The removal itself failed.
     Failed(io::Error),
+    /// Not what was checked any more, and its name was taken in the meantime: it was left in its
+    /// folder under this temporary name (nothing was removed).
+    LeftAs(PathBuf),
 }
 
 /// The folder a scanned file was listed in, opened through handles from its selected folder
@@ -835,9 +838,12 @@ fn open_still(f: &ScannedFile, dir: &std::os::fd::OwnedFd, name: &std::ffi::OsSt
 ///    opened there, must still have the scanned device, inode, size and times;
 /// 3. their bytes must still be identical (streamed, bounded memory, cancellable), and step 2
 ///    must still hold afterwards;
-/// 4. right before the removal the folder must still be where the path leads, and the file is
-///    then removed with `unlinkat` on the verified folder: never by path, so renaming or swapping
-///    a folder above it cannot make it remove another file.
+/// 4. right before the removal the folder must still be where the path leads; the file is then
+///    removed through the verified folder with [`fsat::remove_checked`]: renamed to a fresh
+///    temporary name (never replacing anything), checked again under that name (device, inode,
+///    size and modification time; the rename itself changes the status change time), and only
+///    then removed with `unlinkat`. Never by path, so renaming or swapping a folder above it, or
+///    another file renamed into its name, cannot make it remove another file.
 ///
 /// `before_unlink` runs between the checks and step 4 (a test seam; a no-op otherwise).
 pub fn remove_duplicate(
@@ -850,6 +856,7 @@ pub fn remove_duplicate(
     let Some((dp, dn)) = open_parent(doomed) else {
         return Ok(Removal::Changed);
     };
+    fsat::seam("D1", &doomed.path);
     let Some(mut d) = open_still(doomed, &dp, &dn) else {
         return Ok(Removal::Changed);
     };
@@ -878,6 +885,7 @@ pub fn remove_duplicate(
                 break;
             }
         }
+        fsat::seam("D2", &doomed.path);
         let still = |f: &ScannedFile, file: &File| file.metadata().is_ok_and(|m| f.unchanged(&m));
         if !(still(kept, &k) && is_still(kept, &kp, &kn)) {
             return Ok(Removal::Changed);
@@ -887,6 +895,7 @@ pub fn remove_duplicate(
         return Ok(Removal::Changed);
     }
     before_unlink(doomed);
+    fsat::seam("D3", &doomed.path);
     // The folder must still be where its path leads (nothing above it renamed or swapped), and
     // the name in it must still be the file checked.
     let here = open_parent(doomed)
@@ -895,13 +904,23 @@ pub fn remove_duplicate(
     if here != Some(doomed.parent_id) || !is_still(doomed, &dp, &dn) {
         return Ok(Removal::Changed);
     }
+    fsat::seam("D4", &doomed.path);
     if !unlink {
         return Ok(Removal::Verified);
     }
-    Ok(match fsat::unlink_file_at(&dp, &dn) {
-        Ok(()) => Removal::Removed,
-        Err(e) => Removal::Failed(e),
-    })
+    let want = doomed.fingerprint();
+    let same = |st: &rustix::fs::Stat| {
+        let now = fsat::Fingerprint::of_stat(st);
+        (now.dev, now.ino, now.size, now.mtime) == (want.dev, want.ino, want.size, want.mtime)
+    };
+    Ok(
+        match fsat::remove_checked(&dp, &dn, false, &same, &|| true) {
+            Ok(()) => Removal::Removed,
+            Err(fsat::NotRemoved::Gone | fsat::NotRemoved::Changed) => Removal::Changed,
+            Err(fsat::NotRemoved::LeftAs(t)) => Removal::LeftAs(doomed.path.with_file_name(t)),
+            Err(fsat::NotRemoved::Failed(e)) => Removal::Failed(e),
+        },
+    )
 }
 
 // ------------------------------------------------------------ tree

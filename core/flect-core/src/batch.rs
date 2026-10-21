@@ -304,6 +304,17 @@ fn remove_duplicates_with(
                 });
                 continue;
             }
+            Ok(folder::Removal::LeftAs(temp)) => {
+                skipped += 1;
+                (ctx.emit)(Event::Warn {
+                    key: "msg.leftUnderTempName".into(),
+                    args: vec![
+                        d.path.to_string_lossy().into_owned(),
+                        temp.to_string_lossy().into_owned(),
+                    ],
+                });
+                continue;
+            }
             Ok(folder::Removal::Verified) => {
                 // Handed on at once, with the fingerprint just verified, so the app moves it while
                 // the check is fresh (and only if it still matches), not after the whole run.
@@ -403,6 +414,7 @@ fn remove_empty(ctx: &Ctx<'_>, planned: &[PathBuf], roots: &[PathBuf]) {
         let (mut handed, mut total, mut skipped) = (0usize, 0usize, 0usize);
         for p in planned {
             let (keep, n, _) = ft::recheck_empty(std::slice::from_ref(p), f);
+            crate::fsat::seam("T1", p);
             match (keep.first(), folder::dir_id(p)) {
                 (Some(_), Some(id)) => {
                     trash_one(ctx, p, crate::fsat::dir_fingerprint(id));
@@ -1213,6 +1225,137 @@ mod tests {
                 "msg.deletedPermanently",
                 "{variant}"
             );
+        }
+    }
+
+    /// rev021e D4: between the final `fstatat` and the removal, another file is renamed into the
+    /// checked name in the same folder (`mv A/x.txt A/x.old; mv B/x.txt A/x.txt`, a link, a hard
+    /// link). The removal renames the name to a temporary one first and checks what it got: the
+    /// other file is put back under its name and nothing is removed.
+    #[test]
+    fn a_file_renamed_into_the_checked_name_is_never_removed() {
+        let mut perm = Settings::default();
+        perm.folder.delete_method = DeleteMethod::Permanent;
+        for (phase, attack) in [
+            ("D4", "same_dir_mv"),
+            ("D4", "file_link"),
+            ("D4", "hardlink"),
+            ("R1", "same_dir_mv"),
+            ("R2", "same_dir_mv"),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let r = d.path().to_path_buf();
+            for (p, c) in [
+                ("keep/x.txt", "dup-content\n"),
+                ("A/x.txt", "dup-content\n"),
+                ("B/x.txt", "UNIQUE-B\n"),
+            ] {
+                fs::create_dir_all(r.join(p).parent().unwrap()).unwrap();
+                fs::write(r.join(p), c).unwrap();
+            }
+            let old =
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+            fs::File::options()
+                .write(true)
+                .open(r.join("keep/x.txt"))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            let s = folder::scan(
+                std::slice::from_ref(&r),
+                &folder::ExclusionFilter::default(),
+                &Default::default(),
+                &folder::NullProgress,
+            )
+            .unwrap();
+            let groups =
+                folder::find_duplicates(&s.files, &Default::default(), &folder::NullProgress)
+                    .unwrap();
+            let doomed = folder::to_delete(&groups, DuplicateMode::KeepOldest);
+            assert_eq!(doomed[0].path, r.join("A/x.txt"));
+            let (rr, done_once) = (r.clone(), std::rc::Rc::new(std::cell::Cell::new(false)));
+            let flag = done_once.clone();
+            let ev = crate::fsat::with_seam(
+                move |p, _| {
+                    if p != phase || flag.replace(true) {
+                        return;
+                    }
+                    // (at R2 the checked name is already under its temporary name)
+                    let _ = fs::rename(rr.join("A/x.txt"), rr.join("A/x.old"));
+                    match attack {
+                        "same_dir_mv" => {
+                            fs::rename(rr.join("B/x.txt"), rr.join("A/x.txt")).unwrap()
+                        }
+                        "file_link" => {
+                            std::os::unix::fs::symlink("../B/x.txt", rr.join("A/x.txt")).unwrap()
+                        }
+                        _ => fs::hard_link(rr.join("B/x.txt"), rr.join("A/x.txt")).unwrap(),
+                    }
+                },
+                || {
+                    let events = Mutex::new(Vec::new());
+                    let emit = |e: Event| {
+                        events
+                            .lock()
+                            .unwrap()
+                            .push(serde_json::to_value(&e).unwrap())
+                    };
+                    let never = || false;
+                    let ctx = Ctx {
+                        settings: &perm,
+                        cancelled: &never,
+                        emit: &emit,
+                    };
+                    remove_duplicates(
+                        &ctx,
+                        &groups,
+                        &doomed,
+                        DuplicateMode::KeepOldest,
+                        std::slice::from_ref(&r),
+                    );
+                    events.into_inner().unwrap()
+                },
+            );
+            assert!(done_once.get(), "{phase} {attack}: the seam ran");
+            let unique = if attack == "same_dir_mv" {
+                r.join("A/x.txt")
+            } else {
+                r.join("B/x.txt")
+            };
+            assert_eq!(
+                fs::read_to_string(&unique).unwrap(),
+                "UNIQUE-B\n",
+                "{phase} {attack}: {ev:?}"
+            );
+            assert!(
+                fs::symlink_metadata(r.join("A/x.txt")).is_ok(),
+                "{phase} {attack}: the name is back"
+            );
+            if phase == "R2" {
+                // after the rename the checked file is under a name of its own: it is the one removed
+                assert!(!r.join("A/x.old").exists(), "{ev:?}");
+                assert_eq!(
+                    find(&ev, "done").unwrap()["summary_key"],
+                    "msg.deletedPermanently"
+                );
+            } else {
+                assert_eq!(
+                    fs::read_to_string(r.join("A/x.old")).unwrap(),
+                    "dup-content\n",
+                    "{phase} {attack}"
+                );
+                assert_eq!(
+                    changed_paths(&ev),
+                    [r.join("A/x.txt").to_string_lossy()],
+                    "{phase} {attack}: {ev:?}"
+                );
+            }
+            let leftovers: Vec<_> = fs::read_dir(r.join("A"))
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .filter(|n| n.to_string_lossy().starts_with(".flect-rm-"))
+                .collect();
+            assert!(leftovers.is_empty(), "{phase} {attack}: {leftovers:?}");
         }
     }
 
