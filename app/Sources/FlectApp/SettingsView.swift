@@ -10,6 +10,28 @@ final class SettingsEditor: ObservableObject {
     @Published var leaves: [MenuEntry] = []
     @Published var deps: [DependencyStatus] = []
     var requiredMissing: Bool { deps.contains { $0.required && !$0.ok } }
+    @Published var quickActions = 0
+    @Published var installing = false
+    @Published var setupMessage: String?
+
+    func refreshQuickActions() { quickActions = QuickActionInstaller.installedCount() }
+
+    /// Generates the Quick Actions with the bundled flect-tools, then restarts Finder so they appear.
+    func installQuickActions() async {
+        installing = true
+        setupMessage = nil
+        let loc = Loc.shared
+        do {
+            let n = try await Task.detached(priority: .userInitiated) { try QuickActionInstaller.install() }.value
+            await Task.detached(priority: .userInitiated) { QuickActionInstaller.refreshFinder() }.value
+            quickActions = n
+            setupMessage = loc.f("setup.step1.done", [String(n)])
+        } catch {
+            refreshQuickActions()
+            setupMessage = loc.t("setup.step1.failed")
+        }
+        installing = false
+    }
 
     /// Where the fetch scripts are: inside the app bundle, or the repository's scripts folder when run from a build.
     static var scriptsFolder: String {
@@ -88,10 +110,16 @@ struct SettingsView: View {
     var body: some View {
         let loc = Loc.shared
         VStack(spacing: 0) {
+            if editor.quickActions == 0 {
+                Text(loc.t("setup.banner")).font(.callout).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8)
+            }
             if editor.requiredMissing {
                 Text(loc.t("deps.banner")).font(.callout).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8)
             }
             TabView(selection: $tab) {
+                SetupView(editor: editor)
+                    .tabItem { Text(text(loc, "setup.tab", "Getting started")) }
+                    .tag("setup")
                 ForEach(SettingsSchema.sections) { section in
                     Form {
                         ForEach(section.fields) { f in FieldRow(field: f, editor: editor) }
@@ -122,7 +150,11 @@ struct SettingsView: View {
             Button(loc.t("common.cancel"), role: .cancel) {}
         }
         .frame(minWidth: 620, minHeight: 460)
-        .task { await editor.refreshDependencies() }
+        .task {
+            editor.refreshQuickActions()
+            if editor.quickActions == 0 { tab = "setup" }   // first run: start with the setup steps
+            await editor.refreshDependencies()
+        }
     }
 }
 
@@ -212,5 +244,53 @@ struct MenuItemsView: View {
             }
         }
         .task { editor.leaves = await model.menuLeaves() }
+    }
+}
+
+/// First-run steps: install the Quick Actions, switch them on in System Settings, then use them.
+@MainActor
+struct SetupView: View {
+    @ObservedObject var editor: SettingsEditor
+
+    var body: some View {
+        let loc = Loc.shared
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(loc.t("setup.intro")).font(.callout).foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(loc.t("setup.step1.title")).font(.headline)
+                    Text(loc.t("setup.step1.body")).font(.callout)
+                    HStack(spacing: 10) {
+                        Button(loc.t(editor.quickActions == 0 ? "setup.step1.button" : "setup.step1.reinstall")) {
+                            Task { await editor.installQuickActions() }
+                        }
+                        .disabled(editor.installing)
+                        if editor.installing { ProgressView().controlSize(.small) }
+                        Text(editor.quickActions == 0 ? loc.t("setup.step1.none") : loc.f("setup.step1.ok", [String(editor.quickActions)]))
+                            .font(.caption).foregroundStyle(editor.quickActions == 0 ? Color.orange : Color.green)
+                    }
+                    if let m = editor.setupMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(loc.t("setup.step2.title")).font(.headline)
+                    Text(loc.t("setup.step2.body")).font(.callout)
+                    Button(loc.t("setup.step2.button")) {
+                        if !NSWorkspace.shared.open(QuickActionInstaller.finderExtensionsSettingsURL) {
+                            NSWorkspace.shared.open(QuickActionInstaller.loginItemsSettingsURL)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(loc.t("setup.step3.title")).font(.headline)
+                    Text(loc.t("setup.step3.body")).font(.callout)
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .task { editor.refreshQuickActions() }
     }
 }

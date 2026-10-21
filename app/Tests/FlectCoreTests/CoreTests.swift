@@ -159,6 +159,34 @@ final class CoreTests: XCTestCase {
         }
     }
 
+    func testQuickActionInstallerCountsOnlyFlectWorkflows() throws {
+        XCTAssertTrue(QuickActionInstaller.isFlectWorkflow("Flect Image Resize.workflow"))
+        XCTAssertFalse(QuickActionInstaller.isFlectWorkflow("Flect PoC.workflow"))
+        XCTAssertFalse(QuickActionInstaller.isFlectWorkflow("Claude - ask.workflow"))
+        XCTAssertFalse(QuickActionInstaller.isFlectWorkflow("Flect Image Resize.txt"))
+        let dir = tmp()
+        for n in ["Flect Image Resize.workflow", "Flect Video Trim.workflow", "Flect PoC.workflow", "Other.workflow"] {
+            try FileManager.default.createDirectory(at: dir.appendingPathComponent(n), withIntermediateDirectories: true)
+        }
+        XCTAssertEqual(QuickActionInstaller.installedCount(in: dir), 2)
+        XCTAssertEqual(QuickActionInstaller.installedCount(in: dir.appendingPathComponent("missing")), 0)
+    }
+
+    func testQuickActionInstallerRunsTheToolWithTheOutputFolder() throws {
+        let dir = tmp()
+        let tool = dir.appendingPathComponent("flect-tools")
+        // A stand-in that creates two workflows in the folder given after --out.
+        try """
+        #!/bin/sh
+        [ "$1" = "--out" ] || exit 2
+        mkdir -p "$2/Flect One.workflow" "$2/Flect Two.workflow"
+        """.write(to: tool, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        let out = dir.appendingPathComponent("Services")
+        XCTAssertEqual(try QuickActionInstaller.install(tools: tool, into: out), 2)
+        XCTAssertThrowsError(try QuickActionInstaller.install(tools: nil, into: out)) { XCTAssertEqual($0 as? QuickActionInstaller.InstallError, .toolsNotFound) }
+    }
+
     /// Drives the real client against a stand-in engine script.
     func testEngineClientRoundTrip() async throws {
         let dir = tmp()
