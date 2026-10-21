@@ -167,7 +167,8 @@ pub(crate) fn write_result(
     bytes: &[u8],
 ) -> Result<PathBuf, TaskError> {
     let dir = paths::prepare_output_dir(source, folder)?;
-    for _ in 0..16 {
+    // Each lost race means another writer took that name, so this only runs out when dozens collide.
+    for _ in 0..64 {
         let target = paths::derive_in(&dir, source, suffix, extension);
         let temp = paths::scratch(&target, extension.unwrap_or(""));
         let mut guard = WorkingFile::new(temp.clone());

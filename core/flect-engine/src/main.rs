@@ -14,7 +14,7 @@ use flect_core::mediatasks::{self, MediaEnv};
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
 use flect_core::settings::HardwareEncoder;
 use flect_core::settings::{Settings, Store};
-use flect_core::{archive, batch, jar, locations, menu, tasks};
+use flect_core::{archive, batch, jar, locations, menu, pool, tasks};
 
 type Out = Arc<Mutex<io::Stdout>>;
 
@@ -91,7 +91,11 @@ fn read_bounded(input: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<Optio
 }
 
 enum Msg {
-    Run { task: String, paths: Vec<String> },
+    Run {
+        task: String,
+        paths: Vec<String>,
+        jobs: Option<usize>,
+    },
 }
 
 /// stdin -> queue. Handles everything that must not wait behind a running task.
@@ -116,8 +120,16 @@ fn reader(out: Out, cancel: Arc<AtomicBool>, tx: mpsc::Sender<Msg>) -> io::Resul
                 },
             )?,
             Ok(Request::Cancel) => cancel.store(true, Ordering::SeqCst),
-            Ok(Request::Run { task, paths, .. }) => {
-                if tx.send(Msg::Run { task, paths }).is_err() {
+            Ok(Request::Run {
+                task,
+                paths,
+                options,
+            }) => {
+                let jobs = options
+                    .get("jobs")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|n| n as usize);
+                if tx.send(Msg::Run { task, paths, jobs }).is_err() {
                     break;
                 }
             }
@@ -160,7 +172,24 @@ fn display_name(p: &str) -> String {
         .unwrap_or_default()
 }
 
-fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io::Result<()> {
+/// What parallel workers get: cancellation only (no per-file progress events).
+struct QuietProgress<'a> {
+    cancel: &'a AtomicBool,
+}
+
+impl Progress for QuietProgress<'_> {
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+}
+
+fn run_files(
+    out: &Out,
+    cancel: &AtomicBool,
+    task: &str,
+    paths: &[String],
+    jobs: Option<usize>,
+) -> io::Result<()> {
     let settings: Settings = locations::data_dir()
         .map(|d| Store::new(d).load())
         .unwrap_or_default();
@@ -193,26 +222,31 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
     };
     let total = paths.len() as u64;
     let mut failures = 0;
-    for (i, p) in paths.iter().enumerate() {
-        if is_cancelled() {
-            return emit(
-                out,
-                &Event::Done {
-                    outcome: Outcome::Cancelled,
-                    summary_key: None,
-                    summary_args: vec![],
-                },
-            );
-        }
-        let shown = display_name(p);
+    let cancelled_done = || {
+        emit(
+            out,
+            &Event::Done {
+                outcome: Outcome::Cancelled,
+                summary_key: None,
+                summary_args: vec![],
+            },
+        )
+    };
+    let status = |i: usize| {
         emit(
             out,
             &Event::Status {
                 key: "msg.processing".into(),
-                args: vec![shown.clone()],
+                args: vec![display_name(&paths[i])],
             },
-        )?;
-        match tasks::run(task, Path::new(p), &ctx) {
+        )
+    };
+    // Reports one finished file. The only place outputs, messages and `step` come from, serial or not.
+    let mut deliver = |i: usize,
+                       result: Result<tasks::Done, tasks::TaskError>|
+     -> io::Result<bool> {
+        let p = &paths[i];
+        match result {
             Ok(done) => {
                 // Tell the app exactly what this run created (it powers "Undo"); a task that left the input as is reports nothing.
                 if done.output != Path::new(p) {
@@ -243,19 +277,10 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
                     )?;
                 }
             }
-            Err(_) if is_cancelled() => {
-                return emit(
-                    out,
-                    &Event::Done {
-                        outcome: Outcome::Cancelled,
-                        summary_key: None,
-                        summary_args: vec![],
-                    },
-                )
-            }
+            Err(_) if is_cancelled() => return Ok(false),
             Err(e) => {
                 failures += 1;
-                emit(out, &error(e.key(), e.args(shown)))?;
+                emit(out, &error(e.key(), e.args(display_name(p))))?;
             }
         }
         emit(
@@ -265,6 +290,61 @@ fn run_files(out: &Out, cancel: &AtomicBool, task: &str, paths: &[String]) -> io
                 total,
             },
         )?;
+        Ok(true)
+    };
+    let workers = if pool::is_parallel_task(name) {
+        pool::worker_count(paths.len(), jobs)
+    } else {
+        1
+    };
+    if workers > 1 {
+        // Independent image/text files: run them side by side, report them in input order.
+        // Workers see cancellation only; per-file progress would interleave meaninglessly.
+        let quiet = QuietProgress { cancel };
+        let work = |i: usize| {
+            let wctx = tasks::Ctx {
+                settings: &settings,
+                seven_zip: None,
+                progress: &quiet,
+                media: None,
+                java: None,
+                cfr: None,
+            };
+            tasks::run(task, Path::new(&paths[i]), &wctx)
+        };
+        let mut io_error = None;
+        let mut interrupted = false;
+        let delivered = pool::run_ordered(paths.len(), workers, &is_cancelled, &work, |u| {
+            if io_error.is_some() {
+                return;
+            }
+            let r = match u {
+                pool::Update::Waiting(i) if !is_cancelled() => status(i).map(|()| true),
+                pool::Update::Waiting(_) => Ok(true),
+                pool::Update::Finished(i, res) => deliver(i, res),
+            };
+            match r {
+                Ok(ok) => interrupted |= !ok,
+                Err(e) => io_error = Some(e),
+            }
+        });
+        if let Some(e) = io_error {
+            return Err(e);
+        }
+        if interrupted || delivered < paths.len() {
+            return cancelled_done();
+        }
+    } else {
+        for (i, p) in paths.iter().enumerate() {
+            if is_cancelled() {
+                return cancelled_done();
+            }
+            status(i)?;
+            let result = tasks::run(task, Path::new(p), &ctx);
+            if !deliver(i, result)? {
+                return cancelled_done();
+            }
+        }
     }
     let outcome = if failures == 0 {
         Outcome::Succeeded
@@ -316,13 +396,13 @@ fn main() -> io::Result<()> {
         std::thread::spawn(move || reader(out, cancel, tx))
     };
     for msg in rx {
-        let Msg::Run { task, paths } = msg;
+        let Msg::Run { task, paths, jobs } = msg;
         cancel.store(false, Ordering::SeqCst); // a stale cancel must not kill the next run
         let name = task.split('?').next().unwrap_or("");
         if batch::is_batch_task(name) {
             run_batch(&out, &cancel, &task, &paths)?;
         } else if tasks::is_file_task(name) {
-            run_files(&out, &cancel, &task, &paths)?;
+            run_files(&out, &cancel, &task, &paths, jobs)?;
         } else if known_task(&task) {
             failed(&out, "task.unimplemented", vec![task])?;
         } else {
