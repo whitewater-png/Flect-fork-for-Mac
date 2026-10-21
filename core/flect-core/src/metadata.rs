@@ -185,29 +185,93 @@ pub(crate) fn jpeg_segments(data: &[u8]) -> Option<Vec<(u8, &[u8])>> {
     Some(out)
 }
 
-pub fn strip_jpeg(data: &[u8], o: StripOptions) -> Option<Vec<u8>> {
+/// One top-level JPEG marker segment. For a scan (SOS) `end` also covers its entropy-coded data.
+pub(crate) struct JpegSeg<'a> {
+    pub marker: u8,
+    pub start: usize,
+    pub end: usize,
+    /// The segment body (after the length field); empty for stand-alone markers.
+    pub body: &'a [u8],
+}
+
+/// Walk the whole file: every marker segment before, between and after the scans of a
+/// (progressive or multi-scan) JPEG, so metadata hidden between scans is seen too. Returns the
+/// segments and the offset just past EOI (`data.len()` when there is none); bytes after EOI are
+/// not walked. `None` for structural damage (a missing 0xFF, a segment running past the end).
+pub(crate) fn jpeg_walk(data: &[u8]) -> Option<(Vec<JpegSeg<'_>>, usize)> {
     if data.get(0..2)? != [0xFF, 0xD8] {
         return None;
     }
-    let mut out = vec![0xFF, 0xD8];
-    let mut i = 2;
-    while i + 2 <= data.len() {
+    let (mut i, mut segs) = (2usize, Vec::new());
+    while i < data.len() {
         if data[i] != 0xFF {
             return None;
         }
-        let m = data[i + 1];
-        if m == 0xDA || m == 0xD9 {
-            out.extend_from_slice(&data[i..]); // scan data and EOI, verbatim
-            return Some(out);
+        let m = *data.get(i + 1)?;
+        if m == 0xFF {
+            i += 1; // fill byte
+            continue;
         }
-        if (0xD0..=0xD7).contains(&m) || m == 0x01 || m == 0xFF {
-            out.extend_from_slice(&data[i..i + 2]);
+        if m == 0xD9 {
+            return Some((segs, i + 2));
+        }
+        if m == 0x01 || (0xD0..=0xD7).contains(&m) {
+            segs.push(JpegSeg {
+                marker: m,
+                start: i,
+                end: i + 2,
+                body: &[],
+            });
             i += 2;
             continue;
         }
         let len = u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]) as usize;
-        let seg = data.get(i..i + 2 + len)?;
-        let body = &seg[4..];
+        if len < 2 {
+            return None;
+        }
+        let hdr_end = i.checked_add(2 + len)?;
+        let body = data.get(i + 4..hdr_end)?;
+        let mut end = hdr_end;
+        if m == 0xDA {
+            // entropy-coded data up to the next real marker
+            loop {
+                let Some(off) = data[end..].iter().position(|b| *b == 0xFF) else {
+                    end = data.len();
+                    break;
+                };
+                let p = end + off;
+                match data.get(p + 1) {
+                    Some(0x00 | 0xD0..=0xD7 | 0xFF) => end = p + 1,
+                    Some(_) => {
+                        end = p;
+                        break;
+                    }
+                    None => {
+                        end = data.len();
+                        break;
+                    }
+                }
+            }
+        }
+        segs.push(JpegSeg {
+            marker: m,
+            start: i,
+            end,
+            body,
+        });
+        i = end;
+    }
+    Some((segs, data.len()))
+}
+
+pub fn strip_jpeg(data: &[u8], o: StripOptions) -> Option<Vec<u8>> {
+    let (segs, _) = jpeg_walk(data)?;
+    let mut out = vec![0xFF, 0xD8];
+    let mut tail_from = 2;
+    for s in &segs {
+        let (m, body) = (s.marker, s.body);
+        let seg = &data[s.start..s.end];
+        tail_from = s.end;
         let keep = match m {
             0xE1 if body.starts_with(b"Exif\0\0") => {
                 if o.exif {
@@ -219,7 +283,6 @@ pub fn strip_jpeg(data: &[u8], o: StripOptions) -> Option<Vec<u8>> {
                             out.extend_from_slice(&seg[..4]);
                             out.extend_from_slice(b"Exif\0\0");
                             out.extend_from_slice(&tiff);
-                            i += 2 + len;
                             continue;
                         }
                         None => false, // cannot prove it is clean: drop the block
@@ -237,8 +300,8 @@ pub fn strip_jpeg(data: &[u8], o: StripOptions) -> Option<Vec<u8>> {
         if keep {
             out.extend_from_slice(seg);
         }
-        i += 2 + len;
     }
+    out.extend_from_slice(&data[tail_from..]); // EOI (and whatever follows it), verbatim
     Some(out)
 }
 
@@ -524,6 +587,27 @@ mod tests {
 
         let nothing = strip_jpeg(&src, opts(false, false, false, false)).unwrap();
         assert_eq!(nothing, src);
+    }
+
+    #[test]
+    fn strip_removes_metadata_placed_between_scans() {
+        let mut j = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 7, b'J', b'F', b'I', b'F', 0];
+        j.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0x11, 0x22]);
+        for (m, body) in [
+            (0xFEu8, &b"secret-comment"[..]),
+            (0xE1, b"Exif\0\0SECRETEXIF"),
+        ] {
+            j.extend_from_slice(&[0xFF, m]);
+            j.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+            j.extend_from_slice(body);
+        }
+        j.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0x33, 0xFF, 0xD9]);
+        let out = strip_jpeg(&j, opts(true, true, true, true)).unwrap();
+        let has = |n: &[u8]| out.windows(n.len()).any(|w| w == n);
+        assert!(!has(b"secret-comment") && !has(b"SECRETEXIF"));
+        assert!(has(b"JFIF") && out.ends_with(&[0x33, 0xFF, 0xD9]));
+        // both scans survive
+        assert_eq!(out.windows(2).filter(|w| *w == [0xFF, 0xDA]).count(), 2);
     }
 
     #[test]

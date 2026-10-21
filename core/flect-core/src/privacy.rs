@@ -404,73 +404,16 @@ const JPEG_KEEP_APP: &[(u8, &[u8])] = &[
     (0xEE, b"Adobe"),
 ];
 
-/// Index just past the EOI marker of the image whose SOS marker is at `sos`, walking the
-/// entropy-coded data and the marker segments between scans (a byte pair FF D9 inside a table
-/// is not an end of image).
-fn jpeg_end(data: &[u8], sos: usize) -> Option<usize> {
-    let mut i = sos;
-    loop {
-        // at a marker: FF m
-        if *data.get(i)? != 0xFF {
-            return None;
-        }
-        let m = *data.get(i + 1)?;
-        if m == 0xD9 {
-            return Some(i + 2);
-        }
-        let len = u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]) as usize;
-        if len < 2 {
-            return None;
-        }
-        i = i.checked_add(2 + len)?;
-        if m == 0xDA {
-            // entropy-coded data up to the next real marker
-            loop {
-                let p = data.get(i..)?.iter().position(|b| *b == 0xFF)? + i;
-                match *data.get(p + 1)? {
-                    0x00 | 0xD0..=0xD7 | 0xFF => i = p + 1,
-                    _ => {
-                        i = p;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Offset of the SOS marker, or `None` when the header cannot be walked.
-fn jpeg_sos(data: &[u8]) -> Option<usize> {
-    if data.get(0..2)? != [0xFF, 0xD8] {
-        return None;
-    }
-    let mut i = 2;
-    loop {
-        if *data.get(i)? != 0xFF {
-            return None;
-        }
-        let m = *data.get(i + 1)?;
-        if m == 0xDA {
-            return Some(i);
-        }
-        if m == 0xD9 {
-            return None;
-        }
-        if (0xD0..=0xD7).contains(&m) || m == 0x01 || m == 0xFF {
-            i += if m == 0xFF { 1 } else { 2 };
-            continue;
-        }
-        let len = u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?]) as usize;
-        i = i.checked_add(2 + len)?;
-    }
-}
-
 fn scan_jpeg(data: &[u8]) -> Result<Vec<Item>, ImageError> {
     let bad = || ImageError::Decode("not a readable JPEG".into());
-    let sos = jpeg_sos(data).ok_or_else(bad)?;
-    let segments = metadata::jpeg_segments(data).ok_or_else(bad)?;
+    let (segments, end) = metadata::jpeg_walk(data).ok_or_else(bad)?;
+    if !segments.iter().any(|s| s.marker == 0xDA) {
+        return Err(bad());
+    }
     let mut items = Vec::new();
-    for (m, body) in segments {
+    // Every segment counts, including those between the scans of a progressive JPEG.
+    for seg in segments {
+        let (m, body) = (seg.marker, seg.body);
         match m {
             0xE1 if body.starts_with(b"Exif\0\0") => scan_exif(&body[6..], &mut items),
             0xE1 if body.starts_with(b"http://ns.adobe.com/xap/") => scan_xmp(body, &mut items),
@@ -508,14 +451,12 @@ fn scan_jpeg(data: &[u8]) -> Result<Vec<Item>, ImageError> {
             _ => {}
         }
     }
-    if let Some(end) = jpeg_end(data, sos) {
-        if data.len() > end {
-            items.push(Item {
-                kind: "extra",
-                level: "medium",
-                detail: format!("{} B", data.len() - end),
-            });
-        }
+    if data.len() > end {
+        items.push(Item {
+            kind: "extra",
+            level: "medium",
+            detail: format!("{} B", data.len() - end),
+        });
     }
     Ok(items)
 }
@@ -523,37 +464,193 @@ fn scan_jpeg(data: &[u8]) -> Result<Vec<Item>, ImageError> {
 /// Keep only the segments a viewer needs (JFIF, ICC profile, Adobe colour flag and all the
 /// coding tables), and cut anything after the end of the image.
 fn sanitize_jpeg(data: &[u8]) -> Option<Vec<u8>> {
-    let sos = jpeg_sos(data)?;
+    let (segs, _) = metadata::jpeg_walk(data)?;
+    if !segs.iter().any(|s| s.marker == 0xDA) {
+        return None;
+    }
     let mut out = vec![0xFF, 0xD8];
-    let mut i = 2;
-    while i < sos {
-        let m = data[i + 1];
-        if (0xD0..=0xD7).contains(&m) || m == 0x01 {
-            out.extend_from_slice(&data[i..i + 2]);
-            i += 2;
-            continue;
-        }
-        if m == 0xFF {
-            i += 1;
-            continue;
-        }
-        let len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
-        let seg = data.get(i..i + 2 + len)?;
-        let body = &seg[4..];
-        let keep = if (0xE0..=0xEF).contains(&m) || m == 0xFE {
+    for s in &segs {
+        let keep = if (0xE0..=0xEF).contains(&s.marker) || s.marker == 0xFE {
             JPEG_KEEP_APP
                 .iter()
-                .any(|(k, p)| *k == m && body.starts_with(p))
+                .any(|(k, p)| *k == s.marker && s.body.starts_with(p))
         } else {
             true
         };
         if keep {
-            out.extend_from_slice(seg);
+            out.extend_from_slice(&data[s.start..s.end]);
         }
-        i += 2 + len;
     }
-    let end = jpeg_end(data, sos).unwrap_or(data.len());
-    out.extend_from_slice(&data[sos..end]);
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    Some(out)
+}
+
+// ------------------------------------------------------------------ GIF
+
+/// A GIF block: `start..end` is its whole byte range; `kind` says what it is.
+struct GifBlock {
+    start: usize,
+    end: usize,
+    kind: GifKind,
+}
+
+enum GifKind {
+    /// Header, screen descriptor, global colour table.
+    Head,
+    Image,
+    /// Graphic control (timing/transparency) extension.
+    Control,
+    Comment(String),
+    /// Application extension: its 11-byte identifier.
+    App(Vec<u8>),
+    PlainText,
+    OtherExt,
+}
+
+fn gif_color_table(flags: u8) -> usize {
+    if flags & 0x80 != 0 {
+        3 << ((flags & 7) + 1)
+    } else {
+        0
+    }
+}
+
+/// Skip data sub-blocks starting at `i`; returns the offset after the terminator, and the
+/// concatenated payload (capped, only needed for comments).
+fn gif_sub_blocks(data: &[u8], mut i: usize, payload: Option<&mut Vec<u8>>) -> Option<usize> {
+    let mut payload = payload;
+    loop {
+        let n = *data.get(i)? as usize;
+        i += 1;
+        if n == 0 {
+            return Some(i);
+        }
+        let chunk = data.get(i..i + n)?;
+        if let Some(p) = payload.as_deref_mut() {
+            if p.len() < 4096 {
+                p.extend_from_slice(chunk);
+            }
+        }
+        i += n;
+    }
+}
+
+/// Walk a GIF; returns its blocks and the offset after the trailer (`None` when damaged).
+fn gif_blocks(data: &[u8]) -> Option<(Vec<GifBlock>, usize)> {
+    let mut i = 13usize;
+    i += gif_color_table(*data.get(10)?);
+    data.get(..i)?;
+    let mut blocks = vec![GifBlock {
+        start: 0,
+        end: i,
+        kind: GifKind::Head,
+    }];
+    loop {
+        let start = i;
+        match *data.get(i)? {
+            0x3B => return Some((blocks, i + 1)),
+            0x2C => {
+                let flags = *data.get(i + 9)?;
+                i += 10 + gif_color_table(flags);
+                data.get(i)?; // LZW minimum code size
+                i = gif_sub_blocks(data, i + 1, None)?;
+                blocks.push(GifBlock {
+                    start,
+                    end: i,
+                    kind: GifKind::Image,
+                });
+            }
+            0x21 => {
+                let label = *data.get(i + 1)?;
+                let mut payload = Vec::new();
+                i = gif_sub_blocks(data, i + 2, Some(&mut payload))?;
+                let kind = match label {
+                    0xF9 => GifKind::Control,
+                    0xFE => GifKind::Comment(String::from_utf8_lossy(&payload).into_owned()),
+                    0xFF => {
+                        // first sub-block is the 11-byte application identifier
+                        let id_len = *data.get(start + 2)? as usize;
+                        let id = data.get(start + 3..start + 3 + id_len.min(11))?;
+                        GifKind::App(id.to_vec())
+                    }
+                    0x01 => GifKind::PlainText,
+                    _ => GifKind::OtherExt,
+                };
+                blocks.push(GifBlock {
+                    start,
+                    end: i,
+                    kind,
+                });
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Application extensions a viewer needs (looping).
+fn gif_app_is_needed(id: &[u8]) -> bool {
+    id == b"NETSCAPE2.0" || id == b"ANIMEXTS1.0"
+}
+
+fn scan_gif(data: &[u8]) -> Result<Vec<Item>, ImageError> {
+    let (blocks, end) =
+        gif_blocks(data).ok_or_else(|| ImageError::Decode("not a readable GIF".into()))?;
+    let mut items = Vec::new();
+    for b in &blocks {
+        match &b.kind {
+            GifKind::Comment(text) => items.push(Item {
+                kind: "comment",
+                level: "medium",
+                detail: clean_text(text),
+            }),
+            GifKind::App(id) if id.starts_with(b"XMP DataXMP") => {
+                scan_xmp(&data[b.start..b.end], &mut items);
+                if !items.iter().any(|i| i.kind == "xmp") {
+                    items.push(Item {
+                        kind: "xmp",
+                        level: "medium",
+                        detail: String::new(),
+                    });
+                }
+            }
+            GifKind::App(id) if !gif_app_is_needed(id) => items.push(Item {
+                kind: "hidden",
+                level: "medium",
+                detail: "GIF application extension".into(),
+            }),
+            GifKind::PlainText | GifKind::OtherExt => items.push(Item {
+                kind: "hidden",
+                level: "medium",
+                detail: "GIF extension".into(),
+            }),
+            _ => {}
+        }
+    }
+    if data.len() > end {
+        items.push(Item {
+            kind: "extra",
+            level: "medium",
+            detail: format!("{} B", data.len() - end),
+        });
+    }
+    Ok(items)
+}
+
+/// Keep the picture data, timing and looping; drop comments, other extensions and trailing bytes.
+fn sanitize_gif(data: &[u8]) -> Option<Vec<u8>> {
+    let (blocks, _) = gif_blocks(data)?;
+    let mut out = Vec::with_capacity(data.len());
+    for b in &blocks {
+        let keep = match &b.kind {
+            GifKind::Head | GifKind::Image | GifKind::Control => true,
+            GifKind::App(id) => gif_app_is_needed(id),
+            _ => false,
+        };
+        if keep {
+            out.extend_from_slice(&data[b.start..b.end]);
+        }
+    }
+    out.push(0x3B);
     Some(out)
 }
 
@@ -714,6 +811,8 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
         Some("PNG")
     } else if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         Some("WebP")
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some("GIF")
     } else {
         None
     }
@@ -749,6 +848,7 @@ pub fn scan(bytes: &[u8]) -> Result<Report, ImageError> {
     let items = match format {
         "JPEG" => scan_jpeg(bytes)?,
         "PNG" => scan_png(bytes)?,
+        "GIF" => scan_gif(bytes)?,
         _ => scan_webp(bytes)?,
     };
     // One entry per kind (EXIF and PNG text can both name an owner, for instance).
@@ -810,6 +910,7 @@ fn sanitize(data: Vec<u8>, format: Format) -> Result<Vec<u8>, ImageError> {
         Format::Jpeg => sanitize_jpeg(&data),
         Format::Png => sanitize_png(&data),
         Format::WebP => sanitize_webp(&data),
+        Format::Gif => sanitize_gif(&data),
         _ => Some(data),
     };
     cleaned.ok_or_else(|| ImageError::Encode("could not clean the container".into()))
@@ -1321,11 +1422,32 @@ mod tests {
         j.extend(app(0xC4, &[0xFF, 0xD9])); // a table between two scans
         j.extend(app(0xDA, &[4, 5]));
         j.extend_from_slice(&[0x44, 0xFF, 0xD9]);
-        let sos = jpeg_sos(&j).unwrap();
-        assert_eq!(jpeg_end(&j, sos), Some(j.len()));
+        let (segs, end) = metadata::jpeg_walk(&j).unwrap();
+        assert_eq!(end, j.len());
+        assert_eq!(segs.iter().filter(|s| s.marker == 0xDA).count(), 2);
         j.extend_from_slice(b"junk");
-        assert_eq!(jpeg_end(&j, sos), Some(j.len() - 4));
+        assert_eq!(metadata::jpeg_walk(&j).unwrap().1, j.len() - 4);
         assert_eq!(sanitize_jpeg(&j).unwrap().len(), j.len() - 4);
+    }
+
+    #[test]
+    fn metadata_between_progressive_scans_is_found_and_removed() {
+        let mut j = vec![0xFF, 0xD8];
+        j.extend(app(0xE0, b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0"));
+        j.extend(app(0xDA, &[1, 2, 3]));
+        j.extend_from_slice(&[0x11, 0xFF, 0x00, 0x22]);
+        j.extend(app(0xFE, b"hidden after first scan"));
+        j.extend(app(0xE1, &[b"Exif\0\0".to_vec(), exif_block(1)].concat()));
+        j.extend(app(0xDA, &[4, 5]));
+        j.extend_from_slice(&[0x44, 0xFF, 0xD9]);
+        let k = kinds(&scan(&j).unwrap());
+        assert!(k.contains(&"comment") && k.contains(&"gps"), "{k:?}");
+        let clean = sanitize_jpeg(&j).unwrap();
+        assert!(!clean.windows(6).any(|w| w == b"hidden"));
+        assert!(!clean.windows(4).any(|w| w == b"Exif"));
+        assert!(scan(&clean).unwrap().is_clean());
+        // both scans are still there
+        assert_eq!(clean.windows(2).filter(|w| *w == [0xFF, 0xDA]).count(), 2);
     }
 
     #[test]
@@ -1355,9 +1477,54 @@ mod tests {
             evil[o..o + 4].copy_from_slice(&saved);
         }
         assert!(matches!(
-            scan(b"GIF89a....."),
+            scan(b"BM........."),
             Err(ImageError::Unsupported(_))
         ));
+        assert!(scan(b"GIF89a.....").is_err());
+        for len in 0..gif_with_metadata().len() {
+            let _ = scan(&gif_with_metadata()[..len]);
+            let _ = sanitize_gif(&gif_with_metadata()[..len]);
+        }
+    }
+
+    /// A 1x1 GIF with a comment, an XMP application extension, a looping extension and trailing bytes.
+    fn gif_with_metadata() -> Vec<u8> {
+        let mut g = b"GIF89a".to_vec();
+        g.extend_from_slice(&[1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 255, 255, 255]);
+        g.extend_from_slice(&[0x21, 0xFF, 11]);
+        g.extend_from_slice(b"NETSCAPE2.0");
+        g.extend_from_slice(&[3, 1, 0, 0, 0]);
+        g.extend_from_slice(&[0x21, 0xFE, 12]);
+        g.extend_from_slice(b"secret GIF c");
+        g.extend_from_slice(&[0]);
+        g.extend_from_slice(&[0x21, 0xFF, 11]);
+        g.extend_from_slice(b"XMP DataXMP");
+        g.extend_from_slice(&[5]);
+        g.extend_from_slice(b"<x:a>");
+        g.extend_from_slice(&[0]);
+        g.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0]);
+        g.push(0x3B);
+        g.extend_from_slice(b"TRAIL");
+        g
+    }
+
+    #[test]
+    fn gif_comments_and_extensions_are_found_and_removed() {
+        let g = gif_with_metadata();
+        let k = kinds(&scan(&g).unwrap());
+        assert!(
+            k.contains(&"comment") && k.contains(&"xmp") && k.contains(&"extra"),
+            "{k:?}"
+        );
+        let clean = sanitize_gif(&g).unwrap();
+        assert!(scan(&clean).unwrap().is_clean());
+        assert!(!clean.windows(6).any(|w| w == b"secret"));
+        assert!(clean.windows(11).any(|w| w == b"NETSCAPE2.0"));
+        assert!(clean.ends_with(&[0x3B]));
+        // make_safe on a real GIF also leaves a verified-clean file
+        let real = im::encode(&photo(8, 8), Format::Gif, 0).unwrap();
+        let safe = make_safe(&real, Some("gif"), None, 90).unwrap();
+        assert!(scan(&safe.data).unwrap().is_clean());
     }
 
     fn settings() -> Settings {
