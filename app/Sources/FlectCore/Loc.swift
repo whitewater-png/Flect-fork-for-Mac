@@ -28,16 +28,29 @@ public final class Loc {
 
     public init(language: AppLanguage, bundle: Bundle? = nil) {
         self.language = language
-        let b = bundle ?? Bundle.module
+        let b = bundle ?? Loc.resourceBundle
         self.english = Loc.load("en", bundle: b)
         self.table = language == .english ? english : Loc.load(language.rawValue, bundle: b)
     }
 
     public func use(_ language: AppLanguage) {
         self.language = language
-        let b = Bundle.module
+        let b = Loc.resourceBundle
         table = language == .english ? english : Loc.load(language.rawValue, bundle: b)
     }
+
+    /// The SwiftPM resource bundle. In a packaged app it sits in Contents/Resources, where the generated
+    /// `Bundle.module` accessor of older toolchains does not look: it checks the .app root and the absolute
+    /// build path, and traps when neither exists (a zip built on CI and unpacked elsewhere crashed at launch).
+    /// `Bundle.module` is therefore touched only as the fallback for `swift run` and tests.
+    static let resourceBundle: Bundle = {
+        let name = "FlectForMac_FlectCore.bundle"
+        let roots = [Bundle.main.resourceURL, Bundle.main.bundleURL, Bundle.main.executableURL?.deletingLastPathComponent()]
+        for root in roots.compactMap({ $0 }) {
+            if let b = Bundle(url: root.appendingPathComponent(name)) { return b }
+        }
+        return Bundle.module
+    }()
 
     private static func load(_ code: String, bundle: Bundle) -> [String: String] {
         guard let url = bundle.url(forResource: "strings.\(code)", withExtension: "json", subdirectory: "Resources") ?? bundle.url(forResource: "strings.\(code)", withExtension: "json"),
