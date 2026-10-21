@@ -113,6 +113,10 @@ final class AppModel: ObservableObject {
             screen = .message(loc.t("ux.launch.reinstall"))
         case .failure(.missing(let path)):
             screen = .message(loc.f("ux.launch.missing", [path]))
+        case .failure(.notPermitted(let path)):
+            screen = .message(loc.f("ux.launch.notPermitted", [path]))
+        case .failure(.unreadablePath(let path)):
+            screen = .message(loc.f("ux.launch.unreadableItem", [path]))
         case .failure:
             screen = .message(loc.t("app.noTask"))
         case .success(let req):

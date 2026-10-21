@@ -218,6 +218,30 @@ final class LaunchSecurityTests: XCTestCase {
         XCTAssertEqual(try parse(try makeSelectionFile("\(link)\0").path).get().paths, [link])
     }
 
+    /// An item macOS privacy protection hides (EACCES / EPERM from lstat) was reported as "no longer exists".
+    func testUnreadableIsNotReportedAsMissing() throws {
+        let dir = scratch()
+        let a = dir.appendingPathComponent("a").path, b = dir.appendingPathComponent("b").path
+        for p in [a, b] { FileManager.default.createFile(atPath: p, contents: Data()) }
+        func parse(errno code: Int32) throws -> Result<LaunchRequest, LaunchRequest.Failure> {
+            let file = try makeSelectionFile("\(a)\0\(b)\0")
+            return LaunchRequest.parse(arguments: ["--task", "image.strip", "--input", file.path],
+                                       statPath: { $0 == b ? code : LaunchRequest.lstatErrno($0) })
+        }
+        let shown = String(b.prefix(80))
+        XCTAssertEqual(try parse(errno: ENOENT), .failure(.missing(shown)))
+        XCTAssertEqual(try parse(errno: ENOTDIR), .failure(.missing(shown)))
+        XCTAssertEqual(try parse(errno: EACCES), .failure(.notPermitted(shown)))
+        XCTAssertEqual(try parse(errno: EPERM), .failure(.notPermitted(shown)))
+        XCTAssertEqual(try parse(errno: EIO), .failure(.unreadablePath(shown)))
+        XCTAssertEqual(try parse(errno: ENAMETOOLONG), .failure(.unreadablePath(shown)))
+        XCTAssertEqual(try parse(errno: 0).get().paths, [a, b])
+        // the real lstat: 0 for an existing item, ENOENT for a gone one
+        XCTAssertEqual(LaunchRequest.lstatErrno(a), 0)
+        XCTAssertEqual(LaunchRequest.lstatErrno(dir.appendingPathComponent("gone").path), ENOENT)
+        XCTAssertEqual(LaunchRequest.lstatErrno(a + "/below-a-file"), ENOTDIR)
+    }
+
     func testOutdatedQuickActionsAreCounted() throws {
         let dir = scratch()
         func workflow(_ name: String, _ script: String?) throws {
@@ -236,6 +260,7 @@ final class LaunchSecurityTests: XCTestCase {
 
     func testLaunchMessagesExistInEveryLanguage() throws {
         let keys = ["ux.launch.untrustedInput", "ux.launch.rejectedTask", "ux.launch.reinstall", "ux.launch.missing",
+                    "ux.launch.notPermitted", "ux.launch.unreadableItem",
                     "ux.setup.outdated", "ux.setup.outdated.one", "ux.setup.outdatedBanner"]
         for code in ["en", "ja", "zh"] {
             let url = try XCTUnwrap(Bundle.module.url(forResource: "strings.ux.\(code)", withExtension: "json", subdirectory: "Resources"))

@@ -27,15 +27,39 @@ public struct LaunchRequest: Equatable {
         /// break in it would add a path the user never selected, so it is not used (except for one path without any
         /// line break inside): the Quick Actions have to be installed again.
         case outdatedQuickAction
-        /// A listed path does not exist (lstat fails).
+        /// A listed path does not exist (lstat fails with ENOENT or ENOTDIR).
         case missing(String)
+        /// macOS does not let Flect look at a listed path (lstat fails with EACCES or EPERM, as privacy protection
+        /// does for Desktop, Documents, Downloads, removable volumes... until access is allowed).
+        case notPermitted(String)
+        /// lstat fails for another reason (I/O error, name too long, ...).
+        case unreadablePath(String)
+    }
+
+    /// What a failed lstat of a listed path means. `errno` 0 means it succeeded (nil).
+    public static func pathFailure(errno code: Int32, path: String) -> Failure? {
+        let shown = String(path.prefix(80))
+        switch code {
+        case 0: return nil
+        case ENOENT, ENOTDIR: return .missing(shown)
+        case EACCES, EPERM: return .notPermitted(shown)
+        default: return .unreadablePath(shown)
+        }
+    }
+
+    /// lstat(2) of `path`: 0, or the errno it failed with.
+    public static func lstatErrno(_ path: String) -> Int32 {
+        var st = stat()
+        return lstat(path, &st) == 0 ? 0 : errno
     }
 
     /// Arguments without the program name. The selection file is read and then deleted, but only when it is one a
     /// Quick Action made (`isSelectionFile`); anything else is left alone and the request is refused.
     /// The file holds the selected paths, each followed by a NUL byte (`printf '%s\0'`), exactly as given: nothing is
     /// trimmed and nothing but NUL separates paths (`selectionPaths`).
-    public static func parse(arguments: [String], deleteInput: Bool = true, tempDirectories: [String]? = nil) -> Result<LaunchRequest, Failure> {
+    /// `statPath` is the lstat used on the listed paths (tests inject errno values through it).
+    public static func parse(arguments: [String], deleteInput: Bool = true, tempDirectories: [String]? = nil,
+                             statPath: (String) -> Int32 = LaunchRequest.lstatErrno) -> Result<LaunchRequest, Failure> {
         var task: String?, input: String?
         var i = 0
         while i + 1 < arguments.count {
@@ -58,8 +82,7 @@ public struct LaunchRequest: Equatable {
         }
         if let failure = validate(paths: paths) { return .failure(failure) }
         for p in paths {
-            var st = stat()
-            guard lstat(p, &st) == 0 else { return .failure(.missing(String(p.prefix(80)))) }
+            if let failure = pathFailure(errno: statPath(p), path: p) { return .failure(failure) }
         }
         return .success(LaunchRequest(task: task, paths: paths))
     }
