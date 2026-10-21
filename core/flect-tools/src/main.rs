@@ -332,6 +332,31 @@ mod tests {
             .all(|a| valid_token(&a.task) && !a.utis.is_empty()));
     }
 
+    /// The app accepts from launch arguments only plain catalog ids (`[A-Za-z0-9.]`, no `?` parameters), and its
+    /// tests check every id in `app/Tests/quick-action-tasks.txt`: the generated actions must pass exactly those.
+    #[test]
+    fn tasks_are_plain_catalog_ids_listed_for_the_app_tests() {
+        let tasks: Vec<String> = actions().into_iter().map(|a| a.task).collect();
+        for t in &tasks {
+            assert!(
+                t.contains('.')
+                    && !t.starts_with('.')
+                    && !t.ends_with('.')
+                    && t.len() <= 64
+                    && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '.'),
+                "{t:?} is not a plain catalog id"
+            );
+        }
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/Tests/quick-action-tasks.txt");
+        let listed: Vec<String> = fs::read_to_string(&fixture)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(tasks, listed, "update {}", fixture.display());
+    }
+
     #[test]
     fn video_actions_also_match_mkv_where_macos_gives_it_a_dynamic_type() {
         let a = actions()

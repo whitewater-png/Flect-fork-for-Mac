@@ -2,6 +2,7 @@
  "ux.history.empty": "还没有创建过文件的运行。",
  "ux.history.pick": "选择一次运行以查看它创建的文件。",
  "ux.history.title": "最近运行",
+ "ux.launch.rejectedTask": "Flect 没有开始：收到的任务不是 Flect 自己的快速操作之一。没有更改任何内容。请从访达中的 Flect 快速操作启动，或把项目拖到 Flect 图标上再选择任务。",
  "ux.launch.untrustedInput": "Flect 没有开始：所选项目的列表不是 Flect 快速操作创建的，因此既没有读取也没有删除它。请从访达再次运行快速操作。",
  "ux.menu.file": "文件",
  "ux.menu.history": "最近运行…",

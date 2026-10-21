@@ -2,6 +2,7 @@
  "ux.history.empty": "No runs that created files yet.",
  "ux.history.pick": "Select a run to see what it created.",
  "ux.history.title": "Recent runs",
+ "ux.launch.rejectedTask": "Flect did not start: it was asked to run a task that is not one of its own Quick Actions. Nothing was changed. Start Flect from a Flect Quick Action in Finder, or drop the items on the Flect icon and pick the task there.",
  "ux.launch.untrustedInput": "Flect did not start: the list of selected items was not one a Flect Quick Action made, so it was neither read nor deleted. Run the Quick Action again from Finder.",
  "ux.menu.file": "File",
  "ux.menu.history": "Recent Runs…",

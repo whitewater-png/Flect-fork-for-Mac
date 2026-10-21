@@ -48,6 +48,36 @@ public struct LaunchRequest: Equatable {
         return .success(LaunchRequest(task: task, paths: lines))
     }
 
+    // MARK: the task
+
+    /// What `--task` may name. Launch arguments come from anyone who can run `open -a Flect-for-Mac --args ...`, so
+    /// they never carry engine parameters (`folder.removeDuplicate?mode=all`, `folder.removeEmpty?confirm=1`,
+    /// `folder.rename?...&dry=0` would skip the preview and delete or rename at once).
+    public enum LaunchTask: Equatable {
+        /// An id of the engine's menu below the top level, as the generated Quick Actions pass it (`image.resize`,
+        /// `folder.removeDuplicate`, `pdf.convert.PNG`). It goes through `Planner.resolveCatalogID`, which always
+        /// starts the deleting and renaming tasks with their preview or dialog.
+        case catalog(String)
+        /// `preset:<UUID>` (a Quick Action made for a saved preset; its steps are re-checked by `Pipeline.plan`).
+        case preset(UUID)
+    }
+
+    /// `preset:<UUID>`, or a catalog id that `catalog` contains below its top level. Anything else (parameters,
+    /// unknown ids, top-level groups) is nil and must be refused.
+    public static func launchTask(_ task: String, catalog: MenuCatalog?) -> LaunchTask? {
+        if let id = presetID(task) { return .preset(id) }
+        guard PickerRef.isCatalogID(task), task.contains("."), let catalog = catalog, catalog.find(task) != nil else { return nil }
+        return .catalog(task)
+    }
+
+    /// The UUID of `preset:<UUID>`, nil for anything else.
+    public static func presetID(_ task: String) -> UUID? {
+        guard task.hasPrefix("preset:") else { return nil }
+        let text = String(task.dropFirst(7))
+        guard PresetFile.isUUID(text) else { return nil }
+        return UUID(uuidString: text)
+    }
+
     // MARK: the selection file
 
     /// The user's temporary folders, where `mktemp -t` puts the selection file: `NSTemporaryDirectory()`, `$TMPDIR`

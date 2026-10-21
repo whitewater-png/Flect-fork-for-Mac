@@ -39,7 +39,19 @@ public enum Planner {
         v == v.rounded() && abs(v) < 1e15 ? String(Int64(v)) : String(v)
     }
 
+    /// What the app does for a menu id picked by the user or named by a Quick Action, Dock drop, Open..., Services,
+    /// a pinned item or "Run again". Only a plain catalog id (`PickerRef.isCatalogID`: no `?`, no parameters) is
+    /// resolved; anything else is `.unknown`. This keeps every such entry point on the safe first pass of the deleting
+    /// and renaming tasks (`folder.removeDuplicate` -> its dry run, `folder.removeEmpty` -> the list to confirm,
+    /// `folder.rename` -> its dialog); their confirmed second pass is only ever built by the app from that preview.
+    public static func resolveCatalogID(_ id: String, settings s: SettingsStore) -> Resolution {
+        guard PickerRef.isCatalogID(id) else { return .unknown }
+        return resolve(id, settings: s)
+    }
+
     /// Settings-dependent preset values, with the same defaults as the engine.
+    /// Also passes a parameterised engine task through unchanged (for front ends that validate it themselves, such as
+    /// the Shortcuts plan); ids from the user or another program go through `resolveCatalogID` instead.
     public static func resolve(_ id: String, settings s: SettingsStore) -> Resolution {
         let base = id.split(separator: "?", maxSplits: 1).first.map(String.init) ?? id
         // Already a concrete engine task with parameters (from a re-run or another front end)

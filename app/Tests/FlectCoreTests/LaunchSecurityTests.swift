@@ -144,4 +144,62 @@ final class LaunchSecurityTests: XCTestCase {
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", again.path], tempDirectories: ["/nonexistent"]), .failure(.untrustedInput))
         XCTAssertTrue(FileManager.default.fileExists(atPath: again.path))
     }
+
+    // MARK: --task
+
+    /// The task ids the generated Quick Actions pass (core/flect-tools checks its own list against the same file).
+    private func quickActionTasks() throws -> [String] {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("quick-action-tasks.txt")
+        return try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map(String.init)
+    }
+
+    private func catalog(_ ids: [String]) throws -> MenuCatalog {
+        let entries: [[String: Any]] = [["id": "all", "children": ids.map { ["id": $0] }]]
+        return try XCTUnwrap(MenuCatalog(menu: JSONValue(any: ["entries": entries])))
+    }
+
+    func testEveryQuickActionTaskIsAdmittedAndResolves() throws {
+        let ids = try quickActionTasks()
+        XCTAssertEqual(ids.count, 38)
+        let c = try catalog(ids)
+        let s = SettingsStore(directory: scratch())
+        for id in ids {
+            XCTAssertEqual(LaunchRequest.launchTask(id, catalog: c), .catalog(id), id)
+            XCTAssertNotEqual(Planner.resolveCatalogID(id, settings: s), .unknown, id)
+        }
+        let uuid = UUID()
+        XCTAssertEqual(LaunchRequest.launchTask("preset:\(uuid.uuidString)", catalog: nil), .preset(uuid))
+    }
+
+    func testLaunchArgumentsCannotCarryParametersOrUnknownTasks() throws {
+        let c = try catalog(try quickActionTasks())
+        let s = SettingsStore(directory: scratch())
+        let hostile = [
+            "folder.removeDuplicate?mode=all", "folder.removeDuplicate?mode=newest", "folder.removeDuplicate?mode=oldest&dry=0",
+            "folder.removeEmpty?confirm=1", "folder.rename?prefix=a&name=b&suffix=&numbered=1&dry=0", "image.resize?scale=10",
+            "folder.removeEmpty ", " folder.removeEmpty", "folder.removeEmpty\n", "nope.task", "folder", "all", "", "?", ".folder.tree",
+            "preset:not-a-uuid", "preset:\(UUID().uuidString)?x", "preset:", "task:image.strip", "step:image.strip",
+        ]
+        for t in hostile {
+            XCTAssertNil(LaunchRequest.launchTask(t, catalog: c), t)
+            if t.contains("?") { XCTAssertEqual(Planner.resolveCatalogID(t, settings: s), .unknown, t) }
+        }
+        XCTAssertNil(LaunchRequest.launchTask("image.strip", catalog: nil), "no catalog, no catalog id")
+        // `resolve` itself still passes a parameterised task through (the Shortcuts plan validates its own).
+        XCTAssertEqual(Planner.resolve("image.resize?scale=10", settings: s), .engine("image.resize?scale=10"))
+    }
+
+    func testDeletingAndRenamingTasksAlwaysStartWithTheirPreview() throws {
+        let s = SettingsStore(directory: scratch())
+        XCTAssertEqual(Planner.resolveCatalogID("folder.removeDuplicate", settings: s), .engine("folder.removeDuplicate?dry=1"))
+        XCTAssertEqual(Planner.resolveCatalogID("folder.removeEmpty", settings: s), .engine("folder.removeEmpty"), "lists the folders, confirm=1 only after the user confirms")
+        XCTAssertEqual(Planner.resolveCatalogID("folder.rename", settings: s), .dialog(.rename))
+        // No catalog id of any entry point resolves to a confirmed or non-dry deleting task.
+        for id in try quickActionTasks() {
+            guard case .engine(let t) = Planner.resolveCatalogID(id, settings: s) else { continue }
+            XCTAssertFalse(t.contains("confirm=") || t.contains("dry=0"), t)
+            if t.hasPrefix("folder.removeDuplicate") { XCTAssertTrue(t.contains("dry=1"), t) }
+            XCTAssertFalse(t.hasPrefix("folder.rename"), t)
+        }
+    }
 }
