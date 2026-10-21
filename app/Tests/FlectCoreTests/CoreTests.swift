@@ -30,20 +30,18 @@ final class CoreTests: XCTestCase {
     }
 
     func testLaunchRequest() throws {
-        let dir = tmp()
-        let file = dir.appendingPathComponent("sel.txt")
-        try "\u{FEFF}/Users/a/写真 1.png\r\n/Users/a/b.png\n\n".write(to: file, atomically: true, encoding: .utf8)
+        let file = try makeSelectionFile("\u{FEFF}/Users/a/写真 1.png\r\n/Users/a/b.png\n\n")
         let r = LaunchRequest.parse(arguments: ["--task", "image.ocr", "--input", file.path])
         XCTAssertEqual(try r.get(), LaunchRequest(task: "image.ocr", paths: ["/Users/a/写真 1.png", "/Users/a/b.png"]))
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "the selection file is deleted after reading")
 
-        let bad = dir.appendingPathComponent("bad.txt")
-        try "relative/path.png\n".write(to: bad, atomically: true, encoding: .utf8)
+        let bad = try makeSelectionFile("relative/path.png\n")
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", bad.path]), .failure(.badPath("relative/path.png")))
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x"]), .failure(.missingArguments))
-        XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", "/nonexistent/file"]), .failure(.unreadable))
-        let empty = dir.appendingPathComponent("empty.txt")
-        try "\n \n".write(to: empty, atomically: true, encoding: .utf8)
+        XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", "/nonexistent/file"]), .failure(.untrustedInput))
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("flect-sel.missing0000")
+        XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", missing.path]), .failure(.unreadable))
+        let empty = try makeSelectionFile("\n \n")
         XCTAssertEqual(LaunchRequest.parse(arguments: ["--task", "x", "--input", empty.path]), .failure(.empty))
     }
 

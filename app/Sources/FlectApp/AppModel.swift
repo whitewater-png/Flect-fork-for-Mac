@@ -107,6 +107,8 @@ final class AppModel: ObservableObject {
         startedInSettings = !arguments.contains("--task")
         guard arguments.contains("--task") else { screen = .settings; return }
         switch LaunchRequest.parse(arguments: arguments) {
+        case .failure(.untrustedInput):
+            screen = .message(loc.t("ux.launch.untrustedInput"))
         case .failure:
             screen = .message(loc.t("app.noTask"))
         case .success(let req):
