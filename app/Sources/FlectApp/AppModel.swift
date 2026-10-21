@@ -60,6 +60,12 @@ final class AppModel: ObservableObject {
     var startedInSettings = false
     var returnScreen: Screen?
     var autoClose: DispatchWorkItem?
+    // Presets, favorites and "Run again": see PresetsView.swift
+    let presetStore = PresetStore()
+    let pickerStore = PickerMemoryStore()
+    @Published var presets: [Preset] = []
+    @Published var memory = PickerMemory()
+    var rememberOverride: PickerRef?
 
     // MARK: start
 
@@ -68,6 +74,7 @@ final class AppModel: ObservableObject {
         Loc.shared.use(settings.language)
         engine = EngineClient.locate().map { EngineClient(executable: $0) }
         history = historyStore.load()
+        reloadPresets()
         startedInSettings = !arguments.contains("--task")
         guard arguments.contains("--task") else { screen = .settings; return }
         switch LaunchRequest.parse(arguments: arguments) {
@@ -80,11 +87,12 @@ final class AppModel: ObservableObject {
     }
 
     func handle(task: String) {
+        if task.hasPrefix("preset:") { runPreset(ref: task); return } // `--task preset:<UUID>` from a Quick Action
         switch Planner.resolve(task, settings: settings) {
         case .engine(let t): runEngine(t, paths: paths)
         case .choose(let group): chooseFrom(group)
         case .dialog(let d): screen = .dialog(d)
-        case .native(let n): runNative(n)
+        case .native(let n): remember(task: task); runNative(n)
         case .unavailable(let key): screen = .message(loc.t(key))
         case .unknown: screen = .message(loc.f("msg.unknownCommand", [task]))
         }
@@ -112,17 +120,20 @@ final class AppModel: ObservableObject {
 
     // MARK: engine runs
 
-    func runEngine(_ task: String, paths runPaths: [String]) {
+    /// `steps`: run them as one pipeline instead of `task`. `label`: what the run history shows (a preset's name).
+    func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil) {
         guard let engine = engine else { screen = .message(loc.t("app.engineMissing")); return }
         resetProgress()
         screen = .running
         pendingData = []
-        tracker.begin(task: task, inputs: runPaths)
+        tracker.begin(task: label ?? task, inputs: runPaths)
+        remember(task: task)
+        let events = steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
         Task {
             var outcome = Outcome.failed
             var summary: String?
             var sawProblem = false
-            for await event in engine.run(task: task, paths: runPaths) {
+            for await event in events {
                 switch event {
                 case .status(let k, let a): status = loc.f(k, a)
                 case .step(let d, let t): done = d; total = t; filePermille = 0

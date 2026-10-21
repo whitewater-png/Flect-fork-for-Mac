@@ -175,6 +175,9 @@ struct SettingsView: View {
                 MenuItemsView(editor: editor, model: model)
                     .tabItem { Text(text(loc, "settings.general.menu", "Menu items")) }
                     .tag("menu")
+                PresetsView(model: model)
+                    .tabItem { Text(text(loc, "ux.presets.tab", "Presets")) }
+                    .tag("presets")
             }
             Divider()
             HStack {

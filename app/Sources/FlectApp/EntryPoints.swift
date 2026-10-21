@@ -81,12 +81,14 @@ final class ServicesProvider: NSObject {
                 Text(loc.t("ux.picker.none")).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
+                    PickerShortcutRows(selection: selection, model: model) // run again, pinned, presets (PresetsView.swift)
                     ForEach(selection.sections) { section in
                         Section(selection.sections.count > 1 || section.paths.count > 1
                                 ? loc.f("ux.picker.section", [loc.t("menu.\(section.category.rawValue)"), String(section.paths.count)])
                                 : loc.t("menu.\(section.category.rawValue)")) {
                             ForEach(section.entries, id: \.id) { entry in
                                 Button(model.label(for: entry)) { model.runPicked(section, entry) }.buttonStyle(.plain)
+                                    .contextMenu { PinMenu(ref: .task(entry.id), model: model) }
                             }
                         }
                     }
