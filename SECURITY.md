@@ -44,10 +44,11 @@ may change the same files. What Flect does:
 
 Known limits:
 
-- A change that keeps device, inode, size and both times identical cannot be seen. On FAT and
-  exFAT, modification times have a 2-second resolution, so a same-size rewrite within the
-  same 2 seconds, between the engine's check and the app's move to the Trash, is not detected.
-  Moving to the Trash can be undone.
+- A change that keeps device, inode, size and both times identical cannot be seen. FAT records
+  modification times in 2-second steps (exFAT in 10 ms steps) and has no separate change time,
+  so a same-size rewrite within one step is not detected between the engine's check and the
+  app's move to the Trash (moving to the Trash can be undone). The same applies in permanent
+  mode to the short moment between the byte comparison and the removal.
 - Between the last check under the temporary name and the removal, only the temporary name is
   used; a process that lists the folder and renames that exact name in that moment is not
   defended against.
