@@ -18,6 +18,10 @@ final class PageSpecTests: XCTestCase {
     func testFullWidthInputIsAccepted() {
         XCTAssertEqual(pages("１－３、５", 5), [0, 1, 2, 4])
         XCTAssertEqual(pages("１，２", 3), [0, 1])
+        XCTAssertEqual(pages("１；３", 3), [0, 2])
+        XCTAssertEqual(pages("1､3", 3), [0, 2], "half-width ideographic comma")
+        XCTAssertEqual(pages("2ー4", 4), [1, 2, 3], "prolonged sound mark typed as a hyphen")
+        XCTAssertEqual(pages("２−４", 4), [1, 2, 3], "minus sign")
     }
 
     func testBadSyntaxIsRejected() {

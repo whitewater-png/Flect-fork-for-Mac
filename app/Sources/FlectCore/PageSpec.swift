@@ -19,9 +19,25 @@ public enum PageSpec {
     static let maxTokens = 1000
     static let maxDigits = 6
 
-    /// Full-width digits, commas and hyphens (Japanese input) become plain ones.
+    /// Full-width digits, commas and hyphens (Japanese input) become plain ones. Spelled out on purpose: the system's
+    /// full-width to half-width transform also rewrites "、" to a half-width "､" and could change with the OS.
     static func normalized(_ text: String) -> String {
-        text.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? text
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0xFF10...0xFF19:                                         // ０-９
+                out.append(Unicode.Scalar(scalar.value - 0xFF10 + 0x30)!)
+            case 0x2010...0x2015, 0x2212, 0xFF0D, 0x30FC, 0xFF70:         // hyphens, dashes, minus, ー
+                out.append("-")
+            case 0x3001, 0xFF0C, 0xFF64:                                  // 、 ， ､
+                out.append(",")
+            case 0xFF1B:                                                  // ；
+                out.append(";")
+            default:
+                out.append(scalar)
+            }
+        }
+        return String(out)
     }
 
     static func number(_ s: String) -> Int? {
@@ -30,7 +46,8 @@ public enum PageSpec {
     }
 
     static func tokens(_ text: String) -> [Token]? {
-        let separators = CharacterSet(charactersIn: ",;、；")
+        // `normalized` has already turned the other separators ("、" "，" "；") into these two.
+        let separators = CharacterSet(charactersIn: ",;")
         let parts = normalized(text).components(separatedBy: separators)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }

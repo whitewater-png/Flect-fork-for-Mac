@@ -103,6 +103,13 @@ jobs:
           pid=$!
           sleep 6
           if kill -0 "$pid" 2>/dev/null; then kill "$pid"; echo "launch ok"; else echo "the app exited early"; cat "$RUNNER_TEMP/launch.log"; exit 1; fi
+      - name: Web download end to end (the built engine, a real yt-dlp and ffmpeg, a local server)
+        timeout-minutes: 15
+        run: |
+          # Only 127.0.0.1 is contacted. This also checks that the engine finds the tools in the fixed Homebrew folder.
+          brew install yt-dlp
+          brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+          python3 scripts/mac-verify/download_e2e.py "$PWD/dist/Flect-for-Mac.app/Contents/Resources/flect-engine"
       - uses: actions/upload-artifact@v4
         with:
           name: Flect-for-Mac-adhoc-build
