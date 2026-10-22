@@ -98,6 +98,8 @@ public enum DependencyCheck {
                              neededForKey: "deps.for.jar", command: "brew install openjdk"),
             DependencyStatus(id: "cfr", name: "CFR", ok: fm.fileExists(atPath: dataDir.appendingPathComponent("deps/cfr.jar").path), required: false,
                              neededForKey: "deps.for.jar", command: q(scripts + "/fetch-cfr.sh")),
+            DependencyStatus(id: "ytdlp", name: "yt-dlp", ok: find("yt-dlp", dirs: dirs, fm: fm) != nil, required: false,
+                             neededForKey: "deps.for.download", command: "brew install yt-dlp"),
         ]
     }
 }

@@ -380,6 +380,13 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(item("cfr").command, "\"/app/scripts/fetch-cfr.sh\"")
         XCTAssertEqual(item("model").command, "\"/app/scripts/fetch-whisper-model.sh\" tiny")
         XCTAssertEqual(item("7zz").command, "brew install sevenzip")
+        // yt-dlp is optional and never fetched by Flect itself.
+        XCTAssertFalse(item("ytdlp").ok)
+        XCTAssertFalse(item("ytdlp").required)
+        XCTAssertEqual(item("ytdlp").command, "brew install yt-dlp")
+        fm.createFile(atPath: bin.appendingPathComponent("yt-dlp").path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        let again = DependencyCheck.check(dataDir: data, modelSetting: "Tiny", scripts: "/app/scripts", dirs: [bin.path], hasWhisper: { _ in true }, hasJava: { false })
+        XCTAssertTrue(again.first { $0.id == "ytdlp" }!.ok)
     }
 
     func testFilterListingParsing() {

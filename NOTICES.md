@@ -17,6 +17,9 @@ These are installed by the user and run as separate processes from fixed directo
 | whisper.cpp (inside ffmpeg's `whisper` filter) | Part of a whisper-enabled ffmpeg build such as `ffmpeg-full` | MIT |
 | Whisper model weights (ggml) | `scripts/fetch-whisper-model.sh` from huggingface.co/ggerganov/whisper.cpp; SHA-256 pinned in `core/flect-core/src/subtitles.rs` | MIT (OpenAI Whisper) |
 | Java runtime | `brew install openjdk` (optional, only for JAR decompilation) | GPL-2.0 with Classpath Exception |
+| yt-dlp | `brew install yt-dlp` (optional, only for media download; the feature is off until the user turns it on in Settings) | Unlicense |
+
+Flect never bundles or downloads yt-dlp. The download feature only runs the copy the user installed, and it has no login, cookie or DRM handling. Users are responsible for downloading only what they have the right to and for following each site's terms.
 
 ## Rust dependencies (`core/`, compiled into `flect-engine` and `flect-tools`)
 

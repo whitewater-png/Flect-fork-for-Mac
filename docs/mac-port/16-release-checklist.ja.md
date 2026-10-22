@@ -22,6 +22,7 @@
 | B4 | `scripts/setup-deps.sh --check` と通常モード、設定の「必要なツール」タブの見た目 | あなた | □ |
 | B5 | 手順書 13 の未実施項目（JAR のデコンパイルなど、第 2 回で未確認のもの）があれば実施 | あなた | □ |
 | B6 | Mac の旧 PoC（`~/Library/Services/Flect PoC.workflow`）を削除 | あなた | □ |
+| B7 | ダウンロード機能（yt-dlp）を追加した版: yt-dlp 未導入で「必要なツール」に案内が出る／設定の「ダウンロード」が既定でオフ／yt-dlp を同梱・自動取得していない（`NOTICES.md` の記載と一致）／Stirling-PDF の独自ライセンス部分（`app/proprietary/`、`engine/`、`frontend/src/processor/` ほか）のコードを含めていない | 私 / あなた | □ |
 
 ## C. GitHub の設定（あなた）
 | # | 項目 | 状態 |

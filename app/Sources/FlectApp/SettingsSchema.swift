@@ -118,6 +118,9 @@ enum SettingsSchema {
             Field(["Text", "JsonSort", "SortPrimitiveArrays"], "settings.text.json.arrays", "Sort arrays of plain values", .toggle, false),
             Field(["Text", "JsonSort", "PinnedKeys"], "settings.text.json.pinned", "Pinned keys (comma separated)", .text, ""),
         ]),
+        SettingsSection(id: "download", key: "settings.nav.download", fallback: "Download", fields: [
+            Field(["Download", "Enabled"], "settings.download.enabled", "Enable media download (needs yt-dlp)", .toggle, false),
+        ]),
         SettingsSection(id: "output", key: "settings.nav.output", fallback: "Output", fields: [
             Field(["Output", "Image"], "settings.output.image", "Images", .folder, ""),
             Field(["Output", "Video"], "settings.output.video", "Video", .folder, ""),
