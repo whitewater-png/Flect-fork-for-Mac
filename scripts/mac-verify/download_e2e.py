@@ -40,6 +40,7 @@ def find_engine(arg):
     here = pathlib.Path(__file__).resolve().parents[2]
     candidates = [arg] if arg else [
         os.path.expanduser("~/Applications/Flect-for-Mac.app/Contents/Resources/flect-engine"),
+        "/Applications/Flect-for-Mac.app/Contents/Resources/flect-engine",
         str(here / "dist/Flect-for-Mac.app/Contents/Resources/flect-engine"),
         str(here / "core/target/release/flect-engine"),
         str(here / "core/target/debug/flect-engine"),

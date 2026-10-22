@@ -832,10 +832,27 @@ echo "flect-file $out/env.txt"
         });
         assert!(started.elapsed() < Duration::from_secs(10));
         let pid: i32 = fs::read_to_string(&marker).unwrap().trim().parse().unwrap();
-        // the child is gone (or a zombie awaiting its parent, which no longer exists)
-        let alive = fs::read_to_string(format!("/proc/{pid}/stat"))
-            .map(|s| !s.contains(") Z "))
-            .unwrap_or(false);
-        assert!(!alive, "the child process survived the cancel");
+        // The kill is asynchronous: give the child a moment to finish dying. A zombie (waiting for a parent
+        // that no longer exists) counts as gone.
+        let alive = |pid: i32| -> bool {
+            if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+                return !stat.contains(") Z ");
+            }
+            // no /proc (macOS): ask ps; an empty answer means the process is gone
+            Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .map(|o| {
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    let text = text.trim();
+                    !text.is_empty() && !text.starts_with('Z')
+                })
+                .unwrap_or(false)
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while alive(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive(pid), "the child process survived the cancel");
     }
 }
