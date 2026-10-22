@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn one_action_per_second_level_entry_with_unique_titles() {
         let acts = actions();
-        assert_eq!(acts.len(), 38);
+        assert_eq!(acts.len(), 41);
         let mut titles: Vec<_> = acts.iter().map(|a| a.title.clone()).collect();
         titles.sort();
         titles.dedup();
@@ -527,7 +527,7 @@ mod tests {
     fn writes_bundles_to_disk() {
         let d = tempfile::tempdir().unwrap();
         let list = write_all(d.path(), "Flect-for-Mac").unwrap();
-        assert_eq!(list.len(), 38);
+        assert_eq!(list.len(), 41);
         assert!(d
             .path()
             .join("Flect Image Resize.workflow/Contents/document.wflow")

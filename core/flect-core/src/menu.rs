@@ -76,6 +76,25 @@ pub fn catalog() -> Vec<MenuEntry> {
                 leaf_key("pdf.convert.PNG", "to PNG", "menu.to"),
                 leaf_key("pdf.convert.JPG", "to JPG", "menu.to"),
                 leaf_key("pdf.convert.TXT", "to TXT", "menu.to"),
+                // Done by the app with PDFKit; always written as new files.
+                group(
+                    "pdf.split",
+                    "Split",
+                    vec![
+                        leaf("pdf.split.each", "One file per page"),
+                        leaf("pdf.split.range", "Extract pages..."),
+                    ],
+                ),
+                group(
+                    "pdf.rotate",
+                    "Rotate",
+                    vec![
+                        leaf("pdf.rotate.p1", "90°"),
+                        leaf("pdf.rotate.p2", "180°"),
+                        leaf("pdf.rotate.p3", "270°"),
+                    ],
+                ),
+                leaf("pdf.delete", "Delete pages..."),
             ],
         ),
         group(
@@ -463,8 +482,9 @@ mod tests {
 
     #[test]
     fn catalog_matches_windows_leaf_count() {
-        // legacy/windows/.../MenuCatalog.cs declares 87 leaf ids; the Mac port adds 3 (privacy check, make safe, make safe + resize).
-        assert_eq!(leaf_ids(&catalog()).len(), 90);
+        // legacy/windows/.../MenuCatalog.cs declares 87 leaf ids; the Mac port adds 3 (privacy check, make safe, make safe + resize)
+        // and 6 PDF page tools (split x2, rotate x3, delete).
+        assert_eq!(leaf_ids(&catalog()).len(), 96);
     }
 
     #[test]

@@ -354,6 +354,23 @@ final class CoreTests: XCTestCase {
         try await Task.sleep(nanoseconds: 300_000_000)
     }
 
+    // MARK: PDF page tools
+
+    func testPdfPageToolsResolveThroughThePlanner() {
+        let s = SettingsStore(directory: tmp())
+        XCTAssertEqual(Planner.resolve("pdf.split", settings: s), .choose(group: "pdf.split"))
+        XCTAssertEqual(Planner.resolve("pdf.rotate", settings: s), .choose(group: "pdf.rotate"))
+        XCTAssertEqual(Planner.resolve("pdf.split.each", settings: s), .native(.pdfSplitEach))
+        XCTAssertEqual(Planner.resolve("pdf.split.range", settings: s), .dialog(.pdfPages(delete: false)))
+        XCTAssertEqual(Planner.resolve("pdf.delete", settings: s), .dialog(.pdfPages(delete: true)))
+        XCTAssertEqual(Planner.resolve("pdf.rotate.p1", settings: s), .native(.pdfRotate(degrees: 90)))
+        XCTAssertEqual(Planner.resolve("pdf.rotate.p2", settings: s), .native(.pdfRotate(degrees: 180)))
+        XCTAssertEqual(Planner.resolve("pdf.rotate.p3", settings: s), .native(.pdfRotate(degrees: 270)))
+        // A page list is typed in the dialog; it never arrives as a task parameter from a Quick Action or the command line.
+        XCTAssertEqual(Planner.resolveCatalogID("pdf.delete?pages=1", settings: s), .unknown)
+        XCTAssertEqual(Planner.resolveCatalogID("pdf.split.range?pages=1-3", settings: s), .unknown)
+    }
+
     // MARK: dependency check
 
     func testDependencyCheckReportsWhatIsInstalled() throws {

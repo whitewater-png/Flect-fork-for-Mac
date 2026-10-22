@@ -10,6 +10,9 @@ pdf.merge
 pdf.convert.PNG
 pdf.convert.JPG
 pdf.convert.TXT
+pdf.split
+pdf.rotate
+pdf.delete
 image.resize
 image.compress
 image.rotate

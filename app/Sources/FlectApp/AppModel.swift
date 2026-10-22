@@ -362,6 +362,11 @@ final class AppModel: ObservableObject {
         runNative(.pdfMerge)
     }
 
+    /// Extract or delete pages: PDFKit work on each selected PDF, written as new files.
+    func submitPdfPages(delete: Bool, spec: String) {
+        runNative(delete ? .pdfDelete(pages: spec) : .pdfExtract(pages: spec))
+    }
+
     func close() {
         // An instance opened as the settings window goes back to it after a run started from Open.../a drop.
         if startedInSettings, !isSettingsScreen { screen = .settings; return }

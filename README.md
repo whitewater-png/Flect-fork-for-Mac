@@ -64,7 +64,7 @@ killall Finder
 macOS leaves new Quick Actions **off**, so they do not show up until you turn them on:
 
 1. Click **Open the Finder settings** on the app's **Getting started** tab, or open **System Settings → General → Login Items & Extensions** yourself, scroll to **Extensions**, and click the (i) button next to **Finder**.
-2. Switch on every **Flect: …** item (38 of them). You can leave the others as they are.
+2. Switch on every **Flect: …** item (41 of them). You can leave the others as they are.
 3. If a Flect item is still missing, run `killall Finder`.
 
 Then right-click a file in Finder → **Quick Actions** → Flect. Open the app itself to change settings.
