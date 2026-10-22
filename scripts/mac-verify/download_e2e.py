@@ -250,6 +250,51 @@ def main():
         check("no yt-dlp / ffmpeg process is left running", not left, left)
         check("nothing was added to the output folder", listing() == before, listing())
         check("the private work folder is gone", not [p for p in tmp.iterdir()], [p.name for p in tmp.iterdir()])
+
+        print("\n7. an address that is a playlist saves only its first item")
+        for n in ("a", "b", "c"):
+            shutil.copy(www / "clip.mp4", www / f"{n}.mp4")
+        tracks = "".join(f"<track><location>{base}/{n}.mp4</location><title>{n}</title></track>" for n in "abc")
+        (www / "list.xspf").write_text('<?xml version="1.0" encoding="UTF-8"?>'
+                                       '<playlist version="1" xmlns="http://xspf.org/ns/0/"><trackList>'
+                                       + tracks + "</trackList></playlist>")
+        list_out = work / "out_playlist"
+        write_settings(flect_home, True, list_out)
+        ev, _ = call(engine, env, {"op": "download", "url": f"{base}/list.xspf", "kind": "video"})
+        saved = sorted(p.name for p in list_out.iterdir()) if list_out.exists() else []
+        check("succeeds", outcome_of(ev) == "succeeded", ev)
+        check("one file is saved, not the whole list", len(saved) == 1 and len(outputs_of(ev)) == 1, saved)
+
+        print("\n8. the quality limit on a stream that reports its heights (240p, 480p and 1080p versions)")
+        renditions = ((240, "426x240", 300000), (480, "854x480", 900000), (1080, "1920x1080", 3000000))
+        made_all = True
+        for h, size, _ in renditions:
+            r = subprocess.run(
+                [tools["ffmpeg"], "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"testsrc=duration=3:size={size}:rate=24",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:v", "libx264", "-c:a", "aac",
+                 "-pix_fmt", "yuv420p", "-shortest", "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod",
+                 "-hls_segment_filename", f"v{h}_%d.ts", f"v{h}.m3u8"], cwd=www, capture_output=True, text=True)
+            made_all = made_all and r.returncode == 0
+        (www / "master.m3u8").write_text("#EXTM3U\n" + "".join(
+            f"#EXT-X-STREAM-INF:BANDWIDTH={b},RESOLUTION={size}\nv{h}.m3u8\n" for h, size, b in renditions))
+        check("the test stream could be made", made_all)
+
+        def height_of(path):
+            out = subprocess.run([tools["ffprobe"], "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                  "stream=height", "-of", "csv=p=0", path], capture_output=True, text=True).stdout.strip()
+            return int(out) if out.isdigit() else None
+
+        for label, cap, expected in (("no limit", None, 1080), ("up to 720p", 720, 480), ("up to 480p", 480, 480)):
+            where = work / ("out_hls_" + label.replace(" ", "_"))
+            write_settings(flect_home, True, where)
+            request = {"op": "download", "url": f"{base}/master.m3u8", "kind": "video"}
+            if cap:
+                request["max_height"] = cap
+            ev, _ = call(engine, env, request)
+            files = outputs_of(ev)
+            got = height_of(files[0]) if files and os.path.exists(files[0]) else None
+            check(f"{label}: the {expected}p version is saved", outcome_of(ev) == "succeeded" and got == expected,
+                  f"saved height {got}")
     except Exception as exc:  # a crash of the check itself is a failure, with its reason
         check("the check itself ran to the end", False, repr(exc))
     finally:

@@ -105,6 +105,10 @@ pub fn build_args(url: &str, kind: Kind, out_dir: &Path, temp_dir: &Path) -> Vec
         // Ignore the user's own yt-dlp config files so results do not depend on them.
         "--ignore-config",
         "--no-playlist",
+        // `--no-playlist` only helps for an address of one video inside a list. An address that is a list
+        // itself would otherwise be saved item by item, hundreds of files for a big one.
+        "--playlist-items",
+        "1",
         "--newline",
         "--progress",
         "--max-filesize",
@@ -482,6 +486,8 @@ mod tests {
             [
                 "--ignore-config",
                 "--no-playlist",
+                "--playlist-items",
+                "1",
                 "--newline",
                 "--progress",
                 "--max-filesize",

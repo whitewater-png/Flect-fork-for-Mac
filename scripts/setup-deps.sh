@@ -33,6 +33,7 @@ find_tool() { for d in $BIN; do [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }; d
 have_ffmpeg=no; have_whisper=no; have_7z=no; have_java=no; have_cfr=no
 if t="$(find_tool ffmpeg)"; then have_ffmpeg=yes; "$t" -hide_banner -filters 2>/dev/null | awk '$2=="whisper"{f=1} END{exit !f}' && have_whisper=yes; fi
 find_tool 7zz >/dev/null && have_7z=yes
+have_ytdlp=no; find_tool yt-dlp >/dev/null && have_ytdlp=yes
 if [ -x /usr/libexec/java_home ] && /usr/libexec/java_home >/dev/null 2>&1; then have_java=yes
 elif [ -d /opt/homebrew/opt/openjdk ] || [ -d /usr/local/opt/openjdk ]; then have_java=yes; fi
 [ -f "$data/deps/cfr.jar" ] && have_cfr=yes
@@ -45,7 +46,9 @@ row "ffmpeg with the whisper filter" "$have_whisper" "subtitles (Homebrew: ffmpe
 row "7-Zip (7zz)" "$have_7z" "7z archives"
 row "Java runtime" "$have_java" "JAR decompile (optional)"
 row "CFR decompiler (pinned)" "$have_cfr" "JAR decompile (optional)"
+row "yt-dlp" "$have_ytdlp" "web download (optional, off by default; never installed by this script)"
 [ -n "$whisper" ] && row "Whisper model: $whisper" "requested" "subtitles"
+[ "$have_ytdlp" = no ] && echo "Web download is optional: if you turn it on in Settings, install yt-dlp yourself with: brew install yt-dlp"
 echo
 
 if [ "$mode" = check ]; then
