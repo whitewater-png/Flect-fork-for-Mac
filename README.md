@@ -19,6 +19,8 @@ Your originals are never touched: every task writes a new file next to the sourc
 | Folders | find duplicates (byte-verified), remove empty folders, tree, analyze, bulk rename, compress |
 | Archives / code | safe extraction (ZIP, 7z, tar...), JAR decompile (CFR) |
 
+Web download (off by default): **File > Download from URL...** saves a video (best quality or capped at 1080p/720p/480p) or its audio as MP3 into your Downloads folder (change it under Settings > Output), using a `yt-dlp` you install yourself (`brew install yt-dlp`, plus ffmpeg). Turn it on under Settings > Download. Flect does not bundle or fetch yt-dlp and has no login, cookie or DRM handling. Download only what you have the right to save and follow each site's terms; you are responsible for how you use it.
+
 Subtitles (speech to SRT/VTT/TXT) use the `whisper` filter of a whisper-enabled ffmpeg (e.g. Homebrew `ffmpeg-full`) plus a model installed with `scripts/fetch-whisper-model.sh`. Not implemented yet: AI background removal.
 
 ## Requirements

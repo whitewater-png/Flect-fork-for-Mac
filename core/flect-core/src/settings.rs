@@ -223,6 +223,8 @@ section!(OutputSettings {
     archive_extract: String = String::new(),
     archive_compress: String = String::new(),
     report: String = String::new(),
+    // Empty = ~/Downloads (there is no source file to put it beside).
+    download: String = String::new(),
 });
 
 impl OutputSettings {
@@ -240,6 +242,7 @@ impl OutputSettings {
                 "audio" => &self.audio,
                 "text" => &self.text,
                 "pdf" => &self.pdf,
+                "download" => &self.download,
                 _ => "",
             },
         }

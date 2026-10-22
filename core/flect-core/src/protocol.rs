@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::pipeline;
+use crate::{download, pipeline};
 
 pub const MAX_LINE_BYTES: usize = 1 << 20; // 1 MiB
 pub const MAX_PATHS: usize = 20_000;
@@ -22,6 +22,14 @@ pub enum Request {
     Pipeline {
         steps: Vec<String>,
         paths: Vec<String>,
+    },
+    /// Fetch one web address with the user's own yt-dlp (`kind`: `video` or `audio`; `max_height`
+    /// caps a video, see `download::HEIGHTS`). Needs `Download.Enabled` in the settings.
+    Download {
+        url: String,
+        kind: String,
+        #[serde(default)]
+        max_height: Option<u32>,
     },
     Cancel,
     ExportMenu,
@@ -119,6 +127,8 @@ pub enum ParseError {
     TooManyPaths,
     BadPath,
     BadPipeline,
+    BadUrl,
+    BadDownload,
 }
 
 impl ParseError {
@@ -130,6 +140,8 @@ impl ParseError {
             Self::TooManyPaths => "protocol.tooManyPaths",
             Self::BadPath => "protocol.badPath",
             Self::BadPipeline => "protocol.badPipeline",
+            Self::BadUrl => "protocol.badUrl",
+            Self::BadDownload => "protocol.badDownload",
         }
     }
 }
@@ -164,6 +176,14 @@ pub fn parse_line(line: &[u8]) -> Result<Request, ParseError> {
                 return Err(ParseError::BadPipeline);
             }
             check_paths(paths)?
+        }
+        Request::Download {
+            url,
+            kind,
+            max_height,
+        } => {
+            download::validate_url(url).map_err(|_| ParseError::BadUrl)?;
+            download::kind_from(kind, *max_height).ok_or(ParseError::BadDownload)?;
         }
         Request::Cancel | Request::ExportMenu | Request::TrashAck => {}
     }
@@ -268,6 +288,63 @@ mod tests {
             parse_line(br#"{"op":"pipeline","paths":["/a"]}"#),
             Err(ParseError::Json(_))
         ));
+    }
+
+    #[test]
+    fn download_requests_are_checked_before_anything_runs() {
+        let ok = parse_line(
+            br#"{"op":"download","url":"https://example.com/v","kind":"video","max_height":720}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            ok,
+            Request::Download {
+                max_height: Some(720),
+                ..
+            }
+        ));
+        assert!(
+            parse_line(br#"{"op":"download","url":"https://example.com/v","kind":"audio"}"#)
+                .is_ok()
+        );
+        for (line, expected) in [
+            (
+                r#"{"op":"download","url":"--exec=x","kind":"audio"}"#,
+                ParseError::BadUrl,
+            ),
+            (
+                r#"{"op":"download","url":"file:///etc/passwd","kind":"audio"}"#,
+                ParseError::BadUrl,
+            ),
+            (
+                r#"{"op":"download","url":"https://a.example/ b","kind":"audio"}"#,
+                ParseError::BadUrl,
+            ),
+            (
+                r#"{"op":"download","url":"https://a.example/","kind":"playlist"}"#,
+                ParseError::BadDownload,
+            ),
+            (
+                r#"{"op":"download","url":"https://a.example/","kind":"video","max_height":999}"#,
+                ParseError::BadDownload,
+            ),
+            (
+                r#"{"op":"download","url":"https://a.example/","kind":"audio","max_height":720}"#,
+                ParseError::BadDownload,
+            ),
+        ] {
+            assert_eq!(parse_line(line.as_bytes()), Err(expected), "{line}");
+        }
+        for bad in [
+            r#"{"op":"download","kind":"audio"}"#,
+            r#"{"op":"download","url":"https://a.example/","kind":"audio","extra":1}"#,
+            r#"{"op":"download","url":"https://a.example/","kind":"audio","options":"--exec x"}"#,
+        ] {
+            assert!(
+                matches!(parse_line(bad.as_bytes()), Err(ParseError::Json(_))),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

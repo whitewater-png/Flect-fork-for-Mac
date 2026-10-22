@@ -19,6 +19,7 @@ struct PlayerView: NSViewRepresentable {
         case .rename: RenameDialog(model: model)
         case .pdfOrder: PdfOrderDialog(model: model)
         case .pdfPages(let delete): PdfPagesDialog(model: model, delete: delete)
+        case .download: DownloadDialog(model: model)
         case .trim: TrimDialog(model: model, thumbnail: false)
         case .thumbnail: TrimDialog(model: model, thumbnail: true)
         case .maxEdge: MaxEdgeDialog(model: model)
@@ -172,6 +173,26 @@ enum SizeParser {
             Buttons(model: model, actionTitle: model.loc.t(delete ? "dialog.pdfPages.action.delete" : "dialog.pdfPages.action.extract"),
                     enabled: PageSpec.isValidSyntax(text)) {
                 model.submitPdfPages(delete: delete, spec: text)
+            }
+        }.padding(20)
+    }
+}
+
+/// Web address and quality for a download with the user's own yt-dlp. The notice stays visible.
+@MainActor struct DownloadDialog: View {
+    let model: AppModel
+    @State private var url = ""
+    @State private var choice = DownloadChoice.best
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(model.loc.t("dialog.download.body"))
+            TextField("https://", text: $url)
+            Picker(model.loc.t("dialog.download.quality"), selection: $choice) {
+                ForEach(DownloadChoice.allCases) { c in Text(model.loc.t(c.labelKey)).tag(c) }
+            }
+            Text(model.loc.t("download.notice")).font(.caption).foregroundStyle(.secondary)
+            Buttons(model: model, actionTitle: model.loc.t("dialog.download.action"), enabled: DownloadURL.isPlausible(url)) {
+                model.submitDownload(url: url, choice: choice)
             }
         }.padding(20)
     }

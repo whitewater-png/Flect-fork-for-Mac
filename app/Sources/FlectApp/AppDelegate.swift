@@ -67,6 +67,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         present(urls: panel.urls)
     }
 
+    @objc func downloadFromURL(_ sender: Any?) {
+        guard let model = model else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        model.offerDownload()
+    }
+
     @objc func showRecentRuns(_ sender: Any?) { showHistory(focus: nil) }
 
     private func showHistory(focus: UUID?) {
@@ -108,6 +115,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let open = NSMenuItem(title: loc.t("ux.menu.open"), action: #selector(openDocument(_:)), keyEquivalent: "o")
         open.target = self
         file.addItem(open)
+        let download = NSMenuItem(title: loc.t("ux.menu.download"), action: #selector(downloadFromURL(_:)), keyEquivalent: "d")
+        download.target = self
+        file.addItem(download)
         let recent = NSMenuItem(title: loc.t("ux.menu.history"), action: #selector(showRecentRuns(_:)), keyEquivalent: "y")
         recent.target = self
         file.addItem(recent)

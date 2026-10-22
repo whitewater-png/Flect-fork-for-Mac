@@ -178,7 +178,9 @@ final class AppModel: ObservableObject {
 
     /// `steps`: run them as one pipeline instead of `task`. `label`: what the run history shows (a preset's name).
     /// `remembering`: what "Run again" should repeat, when it is not `task` itself (a preset).
-    func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil, remembering: PickerRef? = nil) {
+    /// `events`: start the run some other way than `op: run` / `op: pipeline` (the web download).
+    func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil, remembering: PickerRef? = nil,
+                   events start: ((EngineClient) -> AsyncStream<EngineEvent>)? = nil) {
         guard let engine = engine else { tracker.carryOver = false; screen = .message(loc.t("app.engineMissing")); return }
         resetProgress()
         screen = .running
@@ -187,7 +189,7 @@ final class AppModel: ObservableObject {
         let scope = TrashGuard.Scope(inputs: runPaths, kind: TrashGuard.kind(task: task, steps: steps))
         currentRun = scope.run
         remember(task: task, as: remembering)
-        let events = steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
+        let events = start?(engine) ?? steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
         Task {
             var outcome = Outcome.failed
             var summary: String?
@@ -360,6 +362,21 @@ final class AppModel: ObservableObject {
     func submitMerge(ordered: [String]) {
         paths = ordered
         runNative(.pdfMerge)
+    }
+
+    /// File > Download from URL...: explains what is missing instead of opening a dialog that cannot work.
+    func offerDownload() {
+        cancelAutoClose()
+        paths = []
+        guard settings.bool("Download", "Enabled", default: false) else { screen = .message(loc.t("download.off")); return }
+        guard DependencyCheck.find("yt-dlp") != nil else { screen = .message(loc.f("download.installHint", ["brew install yt-dlp"])); return }
+        screen = .dialog(.download)
+    }
+
+    func submitDownload(url: String, choice: DownloadChoice) {
+        guard let address = DownloadURL.normalized(url) else { screen = .message(loc.t("protocol.badUrl")); return }
+        paths = []
+        runEngine("download", paths: [], events: { $0.download(url: address, kind: choice.kind, maxHeight: choice.maxHeight) })
     }
 
     /// Extract or delete pages: PDFKit work on each selected PDF, written as new files.

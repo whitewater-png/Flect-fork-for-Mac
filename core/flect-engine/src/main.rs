@@ -14,7 +14,9 @@ use flect_core::mediatasks::{self, MediaEnv};
 use flect_core::protocol::{parse_line, Event, Outcome, Request, MAX_LINE_BYTES};
 use flect_core::settings::HardwareEncoder;
 use flect_core::settings::{Settings, Store};
-use flect_core::{archive, batch, jar, locations, menu, pipeline, pool, privacy, tasks};
+use flect_core::{
+    archive, batch, download, jar, locations, menu, paths, pipeline, pool, privacy, tasks,
+};
 
 type Out = Arc<Mutex<io::Stdout>>;
 
@@ -102,6 +104,10 @@ enum Msg {
         steps: Vec<String>,
         paths: Vec<String>,
     },
+    Download {
+        url: String,
+        kind: download::Kind,
+    },
 }
 
 /// stdin -> queue. Handles everything that must not wait behind a running task.
@@ -161,6 +167,20 @@ fn reader(
             }
             Ok(Request::Pipeline { steps, paths }) => {
                 if tx.send(Msg::Pipeline { steps, paths }).is_err() {
+                    break;
+                }
+            }
+            Ok(Request::Download {
+                url,
+                kind,
+                max_height,
+            }) => {
+                // `parse_line` has already checked both; this only turns them into the typed form.
+                let Some(kind) = download::kind_from(&kind, max_height) else {
+                    failed(&out, "protocol.badDownload", vec![])?;
+                    continue;
+                };
+                if tx.send(Msg::Download { url, kind }).is_err() {
                     break;
                 }
             }
@@ -419,6 +439,86 @@ fn run_pipeline(
     done(out, outcome?)
 }
 
+/// One web download (`op: download`). Everything the tool needs is checked first, so a missing
+/// tool or a switched-off feature is explained instead of failing somewhere inside.
+fn run_download(out: &Out, cancel: &AtomicBool, url: &str, kind: download::Kind) -> io::Result<()> {
+    let settings: Settings = locations::data_dir()
+        .map(|d| Store::new(d).load())
+        .unwrap_or_default();
+    let tool = match download::preflight(&settings, download::find(), Tools::discover().is_some()) {
+        Ok(t) => t,
+        Err(key) => return failed(out, key, vec![]),
+    };
+    let Ok(url) = download::validate_url(url) else {
+        return failed(out, "protocol.badUrl", vec![]);
+    };
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|h| h.is_absolute());
+    let Some(home) = home else {
+        return failed(out, "msg.ioError", vec![]);
+    };
+    let dest = match download::destination(&settings, &home) {
+        Ok(d) => d,
+        Err(e) => return failed(out, paths::io_error_key(&e), vec![]),
+    };
+    let progress = EngineProgress { out, cancel };
+    progress.status("download.starting", &[download::host_of(&url)]);
+    let tmp = std::env::temp_dir();
+    let job = download::Job {
+        tool: &tool,
+        url: &url,
+        kind,
+        out_dir: &dest,
+        env: download::Env {
+            path: download::PATH_ENV,
+            home: Some(&home),
+        },
+        work_parent: &tmp,
+    };
+    match download::download(&job, &progress) {
+        Ok(f) if f.created.is_empty() && f.existing.is_empty() => {
+            failed(out, "download.noFile", vec![])
+        }
+        Ok(f) => {
+            if !f.created.is_empty() {
+                let paths: Vec<_> = f.created.iter().map(|p| p.to_string_lossy()).collect();
+                emit(
+                    out,
+                    &Event::Data {
+                        name: "outputs".into(),
+                        data: serde_json::json!({ "paths": paths }),
+                    },
+                )?;
+            }
+            for p in &f.created {
+                emit(
+                    out,
+                    &Event::Info {
+                        key: "download.saved".into(),
+                        args: vec![display_name(&p.to_string_lossy())],
+                    },
+                )?;
+            }
+            for p in &f.existing {
+                emit(
+                    out,
+                    &Event::Warn {
+                        key: "download.alreadyExists".into(),
+                        args: vec![display_name(&p.to_string_lossy())],
+                    },
+                )?;
+            }
+            // A file that was already there counts as done, but it is not reported as new.
+            done(out, Outcome::Succeeded)
+        }
+        Err(download::RunError::Cancelled) => done(out, Outcome::Cancelled),
+        Err(download::RunError::Stalled) => failed(out, "download.stalled", vec![]),
+        Err(download::RunError::Failed { tail, .. }) => failed(out, "download.failed", vec![tail]),
+        Err(download::RunError::Io(_)) => failed(out, "download.cantStart", vec![]),
+    }
+}
+
 fn outcome_of(failures: u32) -> Outcome {
     if failures == 0 {
         Outcome::Succeeded
@@ -615,6 +715,10 @@ fn main() -> io::Result<()> {
             } => (task, paths, jobs, trash_ack),
             Msg::Pipeline { steps, paths } => {
                 run_pipeline(&out, &cancel, &steps, &paths)?;
+                continue;
+            }
+            Msg::Download { url, kind } => {
+                run_download(&out, &cancel, &url, kind)?;
                 continue;
             }
         };

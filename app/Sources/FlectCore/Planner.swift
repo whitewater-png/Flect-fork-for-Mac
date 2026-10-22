@@ -27,6 +27,8 @@ public enum Dialog: Equatable {
     case pdfOrder
     /// A page list for "Extract pages" (`delete: false`) or "Delete pages" (`delete: true`).
     case pdfPages(delete: Bool)
+    /// The address and quality for a web download (opened from File > Download from URL...).
+    case download
     case trim
     case thumbnail
     /// Long-edge limit for "Make safe to share + resize".

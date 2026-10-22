@@ -127,6 +127,7 @@ enum SettingsSchema {
             Field(["Output", "Audio"], "settings.output.audio", "Audio", .folder, ""),
             Field(["Output", "Text"], "settings.output.text", "Text files", .folder, ""),
             Field(["Output", "Pdf"], "settings.output.pdf", "PDF", .folder, ""),
+            Field(["Output", "Download"], "settings.output.download", "Web downloads (empty = Downloads)", .folder, ""),
             Field(["Output", "Ocr"], "settings.output.ocr", "Text recognition (OCR)", .folder, ""),
             Field(["Output", "ArchiveExtract"], "settings.output.archiveExtract", "Extracted archives", .folder, ""),
             Field(["Output", "ArchiveCompress"], "settings.output.archiveCompress", "Compressed folders", .folder, ""),
