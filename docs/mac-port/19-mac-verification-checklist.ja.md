@@ -166,7 +166,7 @@ printf '[InternetShortcut]\n' > Empty.url      # アドレスの無いリンク�
 | D-24 | `Sample.webloc` を Flect のアイコンにドロップ、またはファイル → 開く... | 一覧に「リンク → 動画をダウンロード」が出て、選ぶと D-19 と同じに動く | |
 | D-25 | 設定 → 出力先 → Web ダウンロード を `~/FlectTest/dl` にして D-19 | そこに保存される。空欄に戻すと `~/Downloads` | |
 | D-26 | TextEdit やメモに `http://127.0.0.1:8000/sample.mp4` と書き、その文字を選んで右クリック → **サービス → Flect でダウンロード** | D-19 と同じに保存される。複数の URL を含む文章を選ぶと、全部を順に保存する | |
-| D-27 | URL の入っていない文字を選んで同じサービスを実行 | 「No web address was found in the selected text.」のようなエラー表示。何も保存されない | |
+| D-27 | URL の入っていない文字を選んで同じサービスを実行 | Flect の窓に「Web アドレスが見つかりませんでした。」が出る（D-22 と同じ画面）。何も保存されない。設定がオフ・yt-dlp 未導入のときは、その案内が先に出る | |
 | D-28 | （サービスが出ないとき）システム設定 → キーボード → キーボードショートカット → サービス → テキスト で「Flect でダウンロード」にチェック。出なければ `/System/Library/CoreServices/pbs -update` を実行して、アプリを再起動 | サービスメニューに出る | |
 | D-29 | （任意）遅いサーバーと `Sample.webloc` で実行し、進捗が出たらキャンセル | 数秒で止まる。`pgrep -fl 'yt-dlp\|ffmpeg'` が何も出さない | |
 
@@ -213,6 +213,8 @@ E: E-1 _ E-2 _ E-3 _ E-4 _ E-5 _ E-6 _ E-7 _ E-8 _
 | 「開発元を確認できません」と出て開けない | `xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app`、または右クリック → 開く |
 | 右クリックに `Flect: PDF …` が出ない | クイックアクションを**もう一度インストール**（古い版は 38 個で、PDF の 3 項目が無い）。`killall Finder`。システム設定 → ログイン項目と機能拡張 → Finder で Flect の項目がオンか。`ls ~/Library/Services \| grep -c '^Flect '` が 42 か |
 | ⌘D で何も起きない／別のダイアログが出る | アプリを前面にして、メニューの「ファイル」に「URL からダウンロード...」があるか。無ければ古い版（A-2 で入手し直す） |
+| サービス「Flect でダウンロード」がメニューに出ない／古い版が動く | 同じアプリ ID の古いコピー（`/Applications`、バックアップ、ゴミ箱の中、`dist/`）が LaunchServices に載っていると、サービスの台帳（`pbs`）が古いコピーを選ぶ。古いコピーを別の場所へ移し（削除は不要）、`lsregister -u <古いコピー>` で登録を外してから、アプリを再起動 |
+| `scripts/mac-verify.sh` の B-4 が大量に失敗する（`protocol.badJson`） | `--engine` 無しだと `~/Applications` に入っているエンジンを使う。旧版だとこうなる（コードの不具合ではない）。`scripts/mac-verify.sh --engine core/target/release/flect-engine` のように、確認したい版のエンジンを指定する |
 | 「yt-dlp が見つからない」と言われる | `ls /opt/homebrew/bin/yt-dlp`（Intel Mac は `/usr/local/bin/yt-dlp`）。Flect は**この 2 つのフォルダだけ**を探す（`PATH` は見ない）。`which yt-dlp` が別の場所を指しているなら、`brew install yt-dlp` で入れ直す |
 | ダウンロードが「失敗しました: ERROR: …」 | yt-dlp のメッセージがそのまま出ている。`yt-dlp --version` を報告し、可能ならターミナルで `yt-dlp -- <URL>` を試した結果も添える。古い yt-dlp は `brew upgrade yt-dlp` で直ることが多い |
 | `mac-verify.sh` が `PDF ... could not make` と言う | `cupsfilter` が使えない環境。手持ちの 5 ページ以上の PDF を `~/FlectTest/five-pages.pdf` として置く |

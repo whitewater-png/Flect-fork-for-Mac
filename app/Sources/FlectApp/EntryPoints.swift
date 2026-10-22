@@ -66,11 +66,11 @@ final class ServicesProvider: NSObject {
     }
 
     /// NSMessage `downloadWithFlect`: the selected text holds one or more web addresses.
+    /// A selection without any is handed on as well: `AppModel.startTextDownload` then shows "no web address was found"
+    /// in the window, the same screen as for a link file without one. Setting `error` is not an option, because macOS
+    /// does not show the text of a Service's error, so the user would only see Flect's first screen and no reason.
     @objc func downloadWithFlect(_ pboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString>) {
-        guard let text = pboard.string(forType: .string), !DownloadURL.addresses(inText: text).isEmpty else {
-            error.pointee = "No web address was found in the selected text." as NSString
-            return
-        }
+        let text = pboard.string(forType: .string) ?? ""
         DispatchQueue.main.async { self.textHandler?(text) }
     }
 }
