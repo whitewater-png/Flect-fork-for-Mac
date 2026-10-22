@@ -33,6 +33,7 @@
 - 旧版との挙動差は他に: 動画の `-threads` 段階的縮退は「既定→4→1」に簡略化、プロセス優先度は `nice -n 5`。
 - `pdf.merge` は実機確認の結果、アプリ側（PDFKit）の実装に切り替えた。Rust エンジンの `pdf.merge`（と依存の `lopdf`）は、使われなくなったため削除した。
 - PDF のページ操作（Mac 版で追加。旧 Windows 版にはない）: `pdf.split.each`（1 ページ 1 ファイル。500 ページまで）、`pdf.split.range`（指定ページを抜き出す）、`pdf.rotate.p1/p2/p3`（全ページを右 90° / 180° / 270°）、`pdf.delete`（指定ページを除く）。すべて Swift アプリ（PDFKit）で処理し、**必ず新しいファイルとして書き出す**（元のファイルは変更しない）。ページ指定は `1-3, 5, 8-` の形式（`PageSpec`）で、ダイアログから入力する（Quick Action やコマンド引数では渡せない）。暗号化された PDF は扱わない。Mac 実機での確認が必要（Linux では PDFKit を使えないため、ページ指定の解析だけテストしている）。
+- 右クリックでのダウンロード（Mac 版で追加。旧 Windows 版にはない）: Finder のクイックアクション `link.download`（`.webloc` / `.url` のリンクファイルを選ぶ。複数可）と、サービス「Flect でダウンロード」（選んだ文字の中の Web アドレス。複数可）。どちらも**ダイアログなしの固定設定（最高画質・MP4・「Web ダウンロード」の保存先）**で、権利に関する注意書きは実行画面のログの先頭に出る。ダウンロード本体は `download` の操作（エンジン）で、設定のオン、yt-dlp の導入が必要。`.webloc` は plist の `URL` キー、`.url` は `URL=` の行から読み、http(s) 以外・64 KiB 超・シンボリックリンク・通常ファイル以外は読まない。Mac 実機での確認が必要（macOS のサービスとクイックアクションの表示）。
 - 字幕は ffmpeg の `whisper` フィルタ（whisper.cpp）で生成する。Python 不要。この Mac の `ffmpeg`（Homebrew の `ffmpeg-full` 9.0.2）では `ffmpeg -filters` に `whisper` がある。標準の `ffmpeg` に入っているかは未確認。モデルは `scripts/fetch-whisper-model.sh` で入れる（SHA-256 固定、エンジンは固定ハッシュ以外を使わない）。Linux の CI には whisper 付き ffmpeg がないため、実際の文字起こしは Mac でのみ確認できる。
 - AI 背景除去（rembg）は引き続き未実装（設定が AI モードでも色キーで動く）。
 - `image.chromakey`（背景を削除）は、設定が AI のとき Swift アプリが Vision（`VNGenerateForegroundInstanceMaskRequest`、macOS 14+）で前景を切り出し、`名前_nobg.png` を出力する。AI が失敗した画像は、設定が「AI + 失敗時は色キー」ならエンジンの色キーに切り替わる。「色キーのみ」はエンジンが処理する。Mac でのみ確認できる。

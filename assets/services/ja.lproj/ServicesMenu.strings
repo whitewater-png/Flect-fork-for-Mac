@@ -1,2 +1,3 @@
 /* Services メニューに表示されます。キーは Info.plist (NSServices) の英語タイトルです。 */
 "Process with Flect…" = "Flect で処理…";
+"Download with Flect" = "Flect でダウンロード";

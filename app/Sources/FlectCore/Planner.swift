@@ -7,6 +7,8 @@ public enum NativeTask: Equatable {
     case pdfRender(format: String)   // PNG or JPG
     case pdfText
     case pdfMerge
+    /// The web address inside each selected link file (`.webloc`, `.url`) is downloaded: best-quality MP4.
+    case downloadLinks
     /// One new PDF per page.
     case pdfSplitEach
     /// A new PDF with only the pages named by a `PageSpec` text.
@@ -104,6 +106,7 @@ public enum Planner {
         case "pdf.convert.TXT": return .native(.pdfText)
         case "image.ocr": return .native(.ocr)
         case "pdf.merge": return .dialog(.pdfOrder)
+        case "link.download": return .native(.downloadLinks)
         case "pdf.split.each": return .native(.pdfSplitEach)
         case "pdf.split.range": return .dialog(.pdfPages(delete: false))
         case "pdf.delete": return .dialog(.pdfPages(delete: true))

@@ -10,10 +10,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let services = ServicesProvider()
     /// Items that arrived (Dock drop, Services) before the window and model existed.
     private var pendingURLs: [URL] = []
+    /// Selected text from the "Download with Flect" Service that arrived before the model existed.
+    private var pendingTexts: [String] = []
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // "Process with Flect..." in the Services menu (NSServices in Info.plist).
         services.handler = { [weak self] urls in self?.present(urls: urls) }
+        services.textHandler = { [weak self] text in self?.downloadText(text) }
         NSApp.servicesProvider = services
     }
 
@@ -40,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.onOpen = { [weak self] id in self?.showHistory(focus: id) }
         Notifier.shared.attach()
         if !pendingURLs.isEmpty { let urls = pendingURLs; pendingURLs = []; present(urls: urls) }
+        if !pendingTexts.isEmpty { let texts = pendingTexts; pendingTexts = []; texts.forEach { downloadText($0) } }
     }
 
     /// Files / folders dropped on the Dock icon or on Flect.app, or opened with it from Finder.
@@ -53,6 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         model.offer(urls: urls)
+    }
+
+    /// The Services entry "Download with Flect": best-quality MP4 of the web addresses in the selected text.
+    private func downloadText(_ text: String) {
+        guard let model = model else { pendingTexts.append(text); return }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        model.startTextDownload(text)
     }
 
     @objc func openDocument(_ sender: Any?) {

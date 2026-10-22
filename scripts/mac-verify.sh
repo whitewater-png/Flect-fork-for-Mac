@@ -55,7 +55,7 @@ done
 f="$(tool ffmpeg)"
 [ -n "$f" ] && line "videotoolbox" "$("$f" -hide_banner -hwaccels 2>/dev/null | grep -q videotoolbox && echo yes || echo no)"
 line "Flect app" "$(for a in "$HOME/Applications/Flect-for-Mac.app" /Applications/Flect-for-Mac.app dist/Flect-for-Mac.app; do [ -d "$a" ] && { echo "$a"; break; }; done)"
-line "Quick Actions installed" "$(ls "$HOME/Library/Services" 2>/dev/null | grep -c '^Flect .*\.workflow$')  (the app has 41)"
+line "Quick Actions installed" "$(ls "$HOME/Library/Services" 2>/dev/null | grep -c '^Flect .*\.workflow$')  (the app has 42)"
 
 echo
 echo "== 2. Test files in $TEST_DIR"

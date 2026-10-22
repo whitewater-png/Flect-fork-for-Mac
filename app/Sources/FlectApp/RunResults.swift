@@ -32,6 +32,7 @@ extension AppModel {
         case .pdfRender(let f): return "pdf.convert.\(f)"
         case .pdfText: return "pdf.convert.TXT"
         case .pdfMerge: return "pdf.merge"
+        case .downloadLinks: return "link.download"
         case .pdfSplitEach: return "pdf.split.each"
         case .pdfExtract: return "pdf.split.range"
         case .pdfRotate(let d): return d == 90 ? "pdf.rotate.p1" : d == 180 ? "pdf.rotate.p2" : "pdf.rotate.p3"

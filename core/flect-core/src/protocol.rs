@@ -8,6 +8,8 @@ use crate::{download, pipeline};
 pub const MAX_LINE_BYTES: usize = 1 << 20; // 1 MiB
 pub const MAX_PATHS: usize = 20_000;
 pub const MAX_PATH_BYTES: usize = 4096;
+/// Addresses in one `download` request.
+pub const MAX_DOWNLOAD_URLS: usize = 20;
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
@@ -26,7 +28,11 @@ pub enum Request {
     /// Fetch one web address with the user's own yt-dlp (`kind`: `video` or `audio`; `max_height`
     /// caps a video, see `download::HEIGHTS`). Needs `Download.Enabled` in the settings.
     Download {
-        url: String,
+        /// One address, or `urls` for several (exactly one of the two).
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        urls: Vec<String>,
         kind: String,
         #[serde(default)]
         max_height: Option<u32>,
@@ -179,15 +185,32 @@ pub fn parse_line(line: &[u8]) -> Result<Request, ParseError> {
         }
         Request::Download {
             url,
+            urls,
             kind,
             max_height,
         } => {
-            download::validate_url(url).map_err(|_| ParseError::BadUrl)?;
+            download_list(url.as_deref(), urls)?;
             download::kind_from(kind, *max_height).ok_or(ParseError::BadDownload)?;
         }
         Request::Cancel | Request::ExportMenu | Request::TrashAck => {}
     }
     Ok(request)
+}
+
+/// The addresses of a `download` request, trimmed and checked: exactly one of `url` / `urls`, at most
+/// `MAX_DOWNLOAD_URLS`, each a plain http(s) address.
+pub fn download_list(url: Option<&str>, urls: &[String]) -> Result<Vec<String>, ParseError> {
+    let raw: Vec<&str> = match (url, urls.is_empty()) {
+        (Some(u), true) => vec![u],
+        (None, false) => urls.iter().map(String::as_str).collect(),
+        _ => return Err(ParseError::BadUrl),
+    };
+    if raw.len() > MAX_DOWNLOAD_URLS {
+        return Err(ParseError::BadUrl);
+    }
+    raw.into_iter()
+        .map(|u| download::validate_url(u).map_err(|_| ParseError::BadUrl))
+        .collect()
 }
 
 fn check_paths(paths: &[String]) -> Result<(), ParseError> {
@@ -336,7 +359,6 @@ mod tests {
             assert_eq!(parse_line(line.as_bytes()), Err(expected), "{line}");
         }
         for bad in [
-            r#"{"op":"download","kind":"audio"}"#,
             r#"{"op":"download","url":"https://a.example/","kind":"audio","extra":1}"#,
             r#"{"op":"download","url":"https://a.example/","kind":"audio","options":"--exec x"}"#,
         ] {
@@ -344,6 +366,34 @@ mod tests {
                 matches!(parse_line(bad.as_bytes()), Err(ParseError::Json(_))),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn several_download_addresses_are_checked_one_by_one() {
+        let two = parse_line(
+            br#"{"op":"download","urls":["https://a.example/1"," https://a.example/2 "],"kind":"video"}"#,
+        )
+        .unwrap();
+        let Request::Download { url, urls, .. } = two else {
+            panic!("not a download");
+        };
+        assert_eq!(
+            download_list(url.as_deref(), &urls).unwrap(),
+            ["https://a.example/1", "https://a.example/2"]
+        );
+        let many = vec!["\"https://a.example/x\""; MAX_DOWNLOAD_URLS + 1].join(",");
+        for (line, why) in [
+            (r#"{"op":"download","urls":[],"kind":"video"}"#.to_owned(), "empty list"),
+            (r#"{"op":"download","kind":"video"}"#.to_owned(), "neither"),
+            (
+                r#"{"op":"download","url":"https://a.example/","urls":["https://a.example/"],"kind":"video"}"#.to_owned(),
+                "both",
+            ),
+            (r#"{"op":"download","urls":["https://a.example/","ftp://x"],"kind":"video"}"#.to_owned(), "one bad"),
+            (format!(r#"{{"op":"download","urls":[{many}],"kind":"video"}}"#), "too many"),
+        ] {
+            assert_eq!(parse_line(line.as_bytes()), Err(ParseError::BadUrl), "{why}");
         }
     }
 

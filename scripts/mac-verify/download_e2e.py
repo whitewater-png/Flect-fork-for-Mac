@@ -295,6 +295,17 @@ def main():
             got = height_of(files[0]) if files and os.path.exists(files[0]) else None
             check(f"{label}: the {expected}p version is saved", outcome_of(ev) == "succeeded" and got == expected,
                   f"saved height {got}")
+
+        print("\n9. several addresses in one request (as when several link files are selected); one of them is bad")
+        multi_out = work / "out_multi"
+        write_settings(flect_home, True, multi_out)
+        ev, _ = call(engine, env, {"op": "download", "kind": "video",
+                                   "urls": [f"{base}/a.mp4", f"{base}/missing-file.mp4", f"{base}/b.mp4"]})
+        files = outputs_of(ev)
+        check("the two good addresses are both saved", len(files) == 2 and all(os.path.exists(f) for f in files), files)
+        check("the bad one is reported as an error", "download.failed" in keys_of(ev, "error"), keys_of(ev, "error"))
+        check("the run ends as failed, but only after trying all three", outcome_of(ev) == "failed"
+              and [e["done"] for e in ev if e.get("event") == "step"] == [1, 2, 3])
     except Exception as exc:  # a crash of the check itself is a failure, with its reason
         check("the check itself ran to the end", False, repr(exc))
     finally:

@@ -237,6 +237,12 @@ pub fn catalog() -> Vec<MenuEntry> {
             ],
         ),
         group("jar", "JAR", vec![leaf("jar.decompile", "Decompile")]),
+        // Internet shortcut files (.webloc, .url): the address inside is downloaded by the app (see `download`).
+        group(
+            "link",
+            "Link",
+            vec![leaf("link.download", "Download video")],
+        ),
     ]
 }
 
@@ -263,6 +269,7 @@ pub enum Category {
     Text,
     Jar,
     Archive,
+    Link,
 }
 
 const IMAGE: &[(&str, &str)] = &[
@@ -404,6 +411,8 @@ pub fn classify(path: &Path, is_dir: bool) -> Option<Classification> {
         "7z" => return c(Category::Archive, Some("7Z")),
         "tar" => return c(Category::Archive, Some("TAR")),
         "rar" => return c(Category::Archive, Some("RAR")),
+        "webloc" => return c(Category::Link, Some("WEBLOC")),
+        "url" => return c(Category::Link, Some("URL")),
         _ => {}
     }
     if let Some(f) = lookup(IMAGE, &ext) {
@@ -460,7 +469,7 @@ pub fn export() -> Value {
             "text": table(TEXT_FORMATS),
             "textExtensions": TEXT_EXT,
             "archive": ["zip", "7z", "tar", "tar.gz", "rar"],
-            "other": {"pdf": ["pdf"], "jar": ["jar"]},
+            "other": {"pdf": ["pdf"], "jar": ["jar"], "link": ["webloc", "url"]},
         },
         "rules": {
             "pdf.preview": "single",
@@ -482,9 +491,9 @@ mod tests {
 
     #[test]
     fn catalog_matches_windows_leaf_count() {
-        // legacy/windows/.../MenuCatalog.cs declares 87 leaf ids; the Mac port adds 3 (privacy check, make safe, make safe + resize)
-        // and 6 PDF page tools (split x2, rotate x3, delete).
-        assert_eq!(leaf_ids(&catalog()).len(), 96);
+        // legacy/windows/.../MenuCatalog.cs declares 87 leaf ids; the Mac port adds 3 (privacy check, make safe, make safe + resize),
+        // 6 PDF page tools (split x2, rotate x3, delete) and the download of a link file.
+        assert_eq!(leaf_ids(&catalog()).len(), 97);
     }
 
     #[test]
@@ -507,6 +516,14 @@ mod tests {
         assert_eq!(k("/a/b.tar.gz").unwrap().format, Some("TAR.GZ"));
         assert_eq!(k("/a/b.rs").unwrap().format, Some("TEXT"));
         assert_eq!(k("/a/b.mov").unwrap().category, Category::Video);
+        assert_eq!(
+            k("/a/Video.WEBLOC").unwrap(),
+            Classification {
+                category: Category::Link,
+                format: Some("WEBLOC")
+            }
+        );
+        assert_eq!(k("/a/page.url").unwrap().category, Category::Link);
         assert!(k("/a/noext").is_none());
         assert!(k("/a/b.exe").is_none());
         assert_eq!(
@@ -525,6 +542,6 @@ mod tests {
     fn export_is_serializable() {
         let v = export();
         assert_eq!(v["version"], 1);
-        assert!(v["entries"].as_array().unwrap().len() == 8);
+        assert!(v["entries"].as_array().unwrap().len() == 9);
     }
 }

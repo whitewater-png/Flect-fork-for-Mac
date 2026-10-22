@@ -259,6 +259,7 @@ enum NativeWorker {
 
 extension AppModel {
     func runNative(_ task: NativeTask) {
+        if case .downloadLinks = task { startLinkDownload(files: paths); return }
         if case .pdfPreview = task {
             if let first = paths.first { screen = .pdfPreview(URL(fileURLWithPath: first)) } else { screen = .message(loc.t("app.noTask")) }
             return
@@ -300,7 +301,7 @@ extension AppModel {
                     case .pdfDelete(let spec): return NativeWorker.pdfDelete(url: url, spec: spec, folder: pdfFolder, loc: loc)
                     case .ocr: return NativeWorker.ocr(url: url, languageSetting: ocrLang, loc: loc)
                     case .removeBackground: return NativeWorker.removeBackground(url: url, folder: imageFolder, loc: loc)
-                    case .pdfPreview, .pdfMerge: return NativeReport()
+                    case .pdfPreview, .pdfMerge, .downloadLinks: return NativeReport()
                     }
                 }.value
                 tracker.add(paths: report.outputs)

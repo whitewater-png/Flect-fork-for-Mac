@@ -47,10 +47,10 @@ public final class EngineClient {
         send(request: ["op": "pipeline", "steps": steps, "paths": paths], environment: environment)
     }
 
-    /// Fetch one web address with the user's own yt-dlp (`op: download`). The engine refuses it unless the feature is
+    /// Fetch web addresses (up to `DownloadURL.maxPerRequest`) one after another with the user's own yt-dlp (`op: download`). The engine refuses it unless the feature is
     /// switched on in the settings, and checks the address and the choice again.
-    public func download(url: String, kind: String, maxHeight: Int? = nil, environment: [String: String] = [:]) -> AsyncStream<EngineEvent> {
-        var request: [String: Any] = ["op": "download", "url": url, "kind": kind]
+    public func download(urls: [String], kind: String, maxHeight: Int? = nil, environment: [String: String] = [:]) -> AsyncStream<EngineEvent> {
+        var request: [String: Any] = ["op": "download", "urls": urls, "kind": kind]
         if let h = maxHeight { request["max_height"] = h }
         return send(request: request, environment: environment)
     }

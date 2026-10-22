@@ -18,7 +18,7 @@
 | Swift のコンパイルと全ユニットテスト | GitHub Actions の macOS ジョブ | Actions → CI → 「Swift app (macOS)」 |
 | ページ指定の解析（全角入力を含む） | 同上（`PageSpecTests`） | 同上 |
 | PDF の分割・抜き出し・回転・削除を**実物の PDFKit** で | 同上（`PdfPageToolsTests`。ページごとに大きさを変えた PDF で、どのページが残るか・回転・元の文書が変わらないこと・書き出して読み直せることを検査） | 同上 |
-| Quick Action の生成（41 個）と plist の文法、`.app` の組み立て・署名・起動 | 同上 | 同上 |
+| Quick Action の生成（42 個）と plist の文法、`.app` の組み立て・署名・起動 | 同上 | 同上 |
 | Web ダウンロードの通し確認（作ったエンジン ＋ 実物の yt-dlp / ffmpeg ＋ ローカルサーバー） | 同上の最後のステップ。手元でも `scripts/mac-verify.sh` で同じものが動く | 同上 |
 | Rust のテスト・clippy・依存の監査 | GitHub Actions の ubuntu ジョブ | Actions → CI |
 
@@ -35,7 +35,7 @@
 | A-3 | `.app` を `~/Applications`（または `/Applications`）に置き、検疫属性を外す: `xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app` | エラーが出ない（ad-hoc 署名なので初回は必要。右クリック → 開く でもよい） | |
 | A-4 | `open ~/Applications/Flect-for-Mac.app` | 設定ウィンドウが開く。「開発元を確認できません」が出たら、システム設定 → プライバシーとセキュリティ → 「このまま開く」 | |
 | A-5 | 外部ツールを入れる: `brew install ffmpeg-full sevenzip yt-dlp`（yt-dlp は Web ダウンロードのときだけ必要） | `which ffmpeg ffprobe 7zz yt-dlp` がすべて `/opt/homebrew/bin/...`（Intel Mac は `/usr/local/bin`） | |
-| A-6 | アプリの「はじめに」で **クイックアクションをインストール** → **Finder の設定を開く** → Flect の項目をすべてオン。`killall Finder` | `ls ~/Library/Services \| grep -c '^Flect '` が **41**。**先に新しいアプリへ置き換えてから**インストールし直す（逆の順だと、新しい 3 項目が古いアプリで動かない） | |
+| A-6 | アプリの「はじめに」で **クイックアクションをインストール** → **Finder の設定を開く** → Flect の項目をすべてオン。`killall Finder` | `ls ~/Library/Services \| grep -c '^Flect '` が **42**。**先に新しいアプリへ置き換えてから**インストールし直す（逆の順だと、新しい 3 項目が古いアプリで動かない） | |
 
 ### 入手方法（どちらか一方）
 
@@ -70,7 +70,7 @@ scripts/mac-verify.sh
 
 | # | 確認 | 期待する結果 | 結果 |
 | --- | --- | --- | --- |
-| B-1 | 「1. Environment」の表 | macOS・チップ・各ツールのパスとバージョンが出る（**この表をそのまま F の報告に貼る**）。`Quick Actions installed` が 41 | |
+| B-1 | 「1. Environment」の表 | macOS・チップ・各ツールのパスとバージョンが出る（**この表をそのまま F の報告に貼る**）。`Quick Actions installed` が 42 | |
 | B-2 | 「2. Test files」 | `sample.mp4 photo.png sample.txt sample.json dup empty1 five-pages.pdf two-pages.pdf original-five-pages.pdf` が並ぶ | |
 | B-3 | 同じ章の「PDF check」 | `five-pages.pdf: 5 page(s)` と、各ページの `text:` が `=== PAGE n of 5 ===`。出ない（`could not make the sample PDFs`）ときは、5 ページ以上の PDF を `five-pages.pdf` という名前で `~/FlectTest` に置く | |
 | B-4 | 「3. Web download, end to end」 | 最後に `-> download check: ALL PASSED`（`26 of 26 checks passed` など、全項目が PASS） | |
@@ -138,6 +138,38 @@ B-4 が確認していること: 設定オフで拒否される／`file://` や�
 | D-16 | （任意・実サイト）**自作または CC の動画 1 本**で、最高画質と 480p まで | mp4 で保存される。`ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 ファイル.mp4` が、480p 指定のとき **480 以下**。ただし配信元が各画質の高さを示さない動画では上限が効かず最高画質で保存される（ダイアログに注記あり）。上限そのものは B-4 の自動確認（画質の段がある配信）で確認済み。実サイトでは、各画質の高さを示している動画でだけ効く | |
 | D-17 | （任意）ffmpeg が無い状態 | 「動画と音声の結合に ffmpeg が必要です…」。**ffmpeg を外すのが面倒なら － でよい**（`brew uninstall` は他の機能に影響するので注意） | |
 
+### D′. 右クリックでのダウンロード（設定は固定: 最高画質・MP4・「Web ダウンロード」の保存先。既定は `~/Downloads`）
+
+ダイアログを経由しないので、**権利に関する注意書きは実行画面のログの先頭に出る**。確認は D と同じく、自分の Mac の `127.0.0.1` のサンプル動画で行う（速いサーバーを起動しておく）。
+
+リンクファイルの作り方（ターミナル）:
+```bash
+cd ~/FlectTest
+printf '[InternetShortcut]\nURL=http://127.0.0.1:8000/sample.mp4\n' > Sample.url
+cat > Sample.webloc <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>URL</key><string>http://127.0.0.1:8000/sample.mp4</string></dict></plist>
+EOF
+printf '[InternetShortcut]\n' > Empty.url      # アドレスの無いリンクファイル
+```
+実際のブラウザでは、アドレスバーの URL を Finder やデスクトップへドラッグすると `.webloc` ができる。
+
+| # | 操作 | 期待する結果 | 結果 |
+| --- | --- | --- | --- |
+| D-18 | クイックアクションを入れ直して（A-6）、`Sample.webloc` を右クリック | `Flect: Link Download video` がある（無ければシステム設定 → ログイン項目と機能拡張 → Finder でオン。Finder → サービスにも出る） | |
+| D-19 | それを実行（設定は D-2 でオン・保存済み、yt-dlp 導入済み） | 質問のダイアログは出ず、進捗が動いて完了。`~/Downloads/sample [sample].mp4` ができる。実行画面のログの**先頭に注意書き**が出ている | |
+| D-20 | `Sample.webloc` と `Sample.url` を**両方選んで**実行 | 同じアドレスなので、保存されるのは 1 本。別々のアドレスなら 2 本 | |
+| D-21 | `Sample.url` と `Empty.url` を選んで実行 | `Empty.url` は「…Web アドレスが見つからなかったため、スキップしました」の警告。`Sample.url` の分は保存される | |
+| D-22 | `Empty.url` だけを選んで実行 | 「Web アドレスが見つかりませんでした。」。何も保存されない | |
+| D-23 | 設定のダウンロードをオフにして D-19 | D-1 と同じ「Web ダウンロードはオフです…」の案内（ダウンロードは始まらない） | |
+| D-24 | `Sample.webloc` を Flect のアイコンにドロップ、またはファイル → 開く... | 一覧に「リンク → 動画をダウンロード」が出て、選ぶと D-19 と同じに動く | |
+| D-25 | 設定 → 出力先 → Web ダウンロード を `~/FlectTest/dl` にして D-19 | そこに保存される。空欄に戻すと `~/Downloads` | |
+| D-26 | TextEdit やメモに `http://127.0.0.1:8000/sample.mp4` と書き、その文字を選んで右クリック → **サービス → Flect でダウンロード** | D-19 と同じに保存される。複数の URL を含む文章を選ぶと、全部を順に保存する | |
+| D-27 | URL の入っていない文字を選んで同じサービスを実行 | 「No web address was found in the selected text.」のようなエラー表示。何も保存されない | |
+| D-28 | （サービスが出ないとき）システム設定 → キーボード → キーボードショートカット → サービス → テキスト で「Flect でダウンロード」にチェック。出なければ `/System/Library/CoreServices/pbs -update` を実行して、アプリを再起動 | サービスメニューに出る | |
+| D-29 | （任意）遅いサーバーと `Sample.webloc` で実行し、進捗が出たらキャンセル | 数秒で止まる。`pgrep -fl 'yt-dlp\|ffmpeg'` が何も出さない | |
+
 ---
 
 ## E. 既存機能への影響（抜き取り）
@@ -166,6 +198,7 @@ A: A-1 _ A-2 _ A-3 _ A-4 _ A-5 _ A-6 _
 B: B-1 _ B-2 _ B-3 _ B-4 _        (B-4 が × なら FAIL の行を貼る)
 C: C-1 _ C-2 _ C-3 _ C-4 _ C-5 _ C-6 _ C-7 _ C-8 _ C-9 _ C-10 _ C-11 _ C-12 _ C-13 _ C-14 _ C-15 _ C-16 _ C-17 _ C-18 _
 D: D-1 _ D-2 _ D-3 _ D-4 _ D-5 _ D-6 _ D-7 _ D-8 _ D-9 _ D-10 _ D-11 _ D-12 _ D-13 _ D-14 _ D-15 _ D-16 _ D-17 _
+D′: D-18 _ D-19 _ D-20 _ D-21 _ D-22 _ D-23 _ D-24 _ D-25 _ D-26 _ D-27 _ D-28 _ D-29 _
 E: E-1 _ E-2 _ E-3 _ E-4 _ E-5 _ E-6 _ E-7 _ E-8 _
 気づいたこと:
 - 
@@ -178,7 +211,7 @@ E: E-1 _ E-2 _ E-3 _ E-4 _ E-5 _ E-6 _ E-7 _ E-8 _
 | 症状 | 確認すること |
 | --- | --- |
 | 「開発元を確認できません」と出て開けない | `xattr -dr com.apple.quarantine ~/Applications/Flect-for-Mac.app`、または右クリック → 開く |
-| 右クリックに `Flect: PDF …` が出ない | クイックアクションを**もう一度インストール**（古い版は 38 個で、PDF の 3 項目が無い）。`killall Finder`。システム設定 → ログイン項目と機能拡張 → Finder で Flect の項目がオンか。`ls ~/Library/Services \| grep -c '^Flect '` が 41 か |
+| 右クリックに `Flect: PDF …` が出ない | クイックアクションを**もう一度インストール**（古い版は 38 個で、PDF の 3 項目が無い）。`killall Finder`。システム設定 → ログイン項目と機能拡張 → Finder で Flect の項目がオンか。`ls ~/Library/Services \| grep -c '^Flect '` が 42 か |
 | ⌘D で何も起きない／別のダイアログが出る | アプリを前面にして、メニューの「ファイル」に「URL からダウンロード...」があるか。無ければ古い版（A-2 で入手し直す） |
 | 「yt-dlp が見つからない」と言われる | `ls /opt/homebrew/bin/yt-dlp`（Intel Mac は `/usr/local/bin/yt-dlp`）。Flect は**この 2 つのフォルダだけ**を探す（`PATH` は見ない）。`which yt-dlp` が別の場所を指しているなら、`brew install yt-dlp` で入れ直す |
 | ダウンロードが「失敗しました: ERROR: …」 | yt-dlp のメッセージがそのまま出ている。`yt-dlp --version` を報告し、可能ならターミナルで `yt-dlp -- <URL>` を試した結果も添える。古い yt-dlp は `brew upgrade yt-dlp` で直ることが多い |

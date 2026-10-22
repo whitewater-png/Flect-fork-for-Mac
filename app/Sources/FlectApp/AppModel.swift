@@ -368,15 +368,54 @@ final class AppModel: ObservableObject {
     func offerDownload() {
         cancelAutoClose()
         paths = []
-        guard settings.bool("Download", "Enabled", default: false) else { screen = .message(loc.t("download.off")); return }
-        guard DependencyCheck.find("yt-dlp") != nil else { screen = .message(loc.f("download.installHint", ["brew install yt-dlp"])); return }
+        if let why = downloadBlocker() { screen = .message(why); return }
         screen = .dialog(.download)
+    }
+
+    /// Why a download cannot start now (switched off in the settings, or yt-dlp is not installed), or nil.
+    func downloadBlocker() -> String? {
+        guard settings.bool("Download", "Enabled", default: false) else { return loc.t("download.off") }
+        guard DependencyCheck.find("yt-dlp") != nil else { return loc.f("download.installHint", ["brew install yt-dlp"]) }
+        return nil
     }
 
     func submitDownload(url: String, choice: DownloadChoice) {
         guard let address = DownloadURL.normalized(url) else { screen = .message(loc.t("protocol.badUrl")); return }
         paths = []
-        runEngine("download", paths: [], events: { $0.download(url: address, kind: choice.kind, maxHeight: choice.maxHeight) })
+        runEngine("download", paths: [], events: { $0.download(urls: [address], kind: choice.kind, maxHeight: choice.maxHeight) })
+    }
+
+    /// Downloads from a right-click: link files or selected text. No dialog, so the quality is fixed (best, MP4) and
+    /// the notice goes into the log of the run instead. The folder is the one in the settings (`~/Downloads` unless changed).
+    func startDownloads(urls: [String], notes: [String] = []) {
+        cancelAutoClose()
+        paths = []
+        if let why = downloadBlocker() { screen = .message(why); return }
+        guard !urls.isEmpty else { screen = .message(loc.t("download.noLink")); return }
+        let list = Array(urls.prefix(DownloadURL.maxPerRequest))
+        runEngine("download", paths: [], events: { $0.download(urls: list, kind: "video", maxHeight: nil) })
+        // runEngine has just emptied the log; these lines are what the run starts with.
+        log.append(LogLine(kind: .info, text: loc.t("download.notice")))
+        if urls.count > list.count { log.append(LogLine(kind: .warn, text: loc.f("download.tooMany", [String(list.count)]))) }
+        for note in notes { log.append(LogLine(kind: .warn, text: note)) }
+    }
+
+    /// The task `link.download`: the address inside each selected `.webloc` / `.url` file.
+    func startLinkDownload(files: [String]) {
+        var urls: [String] = [], notes: [String] = []
+        for file in files {
+            if let address = LinkFile.address(atPath: file) {
+                if !urls.contains(address) { urls.append(address) }
+            } else {
+                notes.append(loc.f("download.linkSkipped", [(file as NSString).lastPathComponent]))
+            }
+        }
+        startDownloads(urls: urls, notes: notes)
+    }
+
+    /// The Services entry "Download with Flect": the web addresses in the selected text.
+    func startTextDownload(_ text: String) {
+        startDownloads(urls: DownloadURL.addresses(inText: text))
     }
 
     /// Extract or delete pages: PDFKit work on each selected PDF, written as new files.

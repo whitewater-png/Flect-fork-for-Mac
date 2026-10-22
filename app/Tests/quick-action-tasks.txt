@@ -39,3 +39,4 @@ text.lineEndings
 json.pretty
 json.sort
 jar.decompile
+link.download

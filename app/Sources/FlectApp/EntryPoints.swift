@@ -56,12 +56,22 @@ extension AppModel {
 /// NSServices target: "Process with Flect...".
 final class ServicesProvider: NSObject {
     var handler: (([URL]) -> Void)?
+    var textHandler: ((String) -> Void)?
 
     /// NSMessage `processWithFlect`.
     @objc func processWithFlect(_ pboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString>) {
         let urls = (pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
         guard !urls.isEmpty else { error.pointee = "No files were passed to Flect." as NSString; return }
         DispatchQueue.main.async { self.handler?(urls) }
+    }
+
+    /// NSMessage `downloadWithFlect`: the selected text holds one or more web addresses.
+    @objc func downloadWithFlect(_ pboard: NSPasteboard, userData: String, error: AutoreleasingUnsafeMutablePointer<NSString>) {
+        guard let text = pboard.string(forType: .string), !DownloadURL.addresses(inText: text).isEmpty else {
+            error.pointee = "No web address was found in the selected text." as NSString
+            return
+        }
+        DispatchQueue.main.async { self.textHandler?(text) }
     }
 }
 
