@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import PDFKit
 @testable import FlectCore
 
@@ -103,5 +104,56 @@ final class PdfPageToolsTests: XCTestCase {
         XCTAssertEqual(widths(again), [140, 110, 130])
         XCTAssertEqual(rotations(again), [180, 180, 180])
         XCTAssertFalse(again.isLocked)
+    }
+
+    // MARK: what is actually shown
+
+    /// One page, 100 wide and 200 tall, with a red square in its bottom-left corner (the PDF origin is bottom-left).
+    private func markedPdf() throws -> PDFDocument {
+        let data = NSMutableData()
+        let consumer = try XCTUnwrap(CGDataConsumer(data: data as CFMutableData))
+        var box = CGRect(x: 0, y: 0, width: 100, height: 200)
+        let context = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, nil))
+        context.beginPDFPage(nil)
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 40, height: 40))
+        context.endPDFPage()
+        context.closePDF()
+        return try XCTUnwrap(PDFDocument(data: data as Data))
+    }
+
+    /// Which corners of the page, as it is drawn (rotation applied), are red.
+    private func redCorners(of page: PDFPage) throws -> Set<String> {
+        let image = page.thumbnail(of: CGSize(width: 400, height: 400), for: .mediaBox)
+        let cg = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let w = cg.width, h = cg.height
+        let context = try XCTUnwrap(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                              space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        // row 0 of a bitmap context is the top of the picture
+        func isRed(_ x: Int, _ y: Int) -> Bool {
+            let o = (y * w + x) * 4
+            return pixels[o] > 200 && pixels[o + 1] < 90 && pixels[o + 2] < 90
+        }
+        let inset = 6
+        var found = Set<String>()
+        if isRed(inset, inset) { found.insert("topLeft") }
+        if isRed(w - 1 - inset, inset) { found.insert("topRight") }
+        if isRed(inset, h - 1 - inset) { found.insert("bottomLeft") }
+        if isRed(w - 1 - inset, h - 1 - inset) { found.insert("bottomRight") }
+        return found
+    }
+
+    func testRotationTurnsThePageClockwiseAsItIsShown() throws {
+        let doc = try markedPdf()
+        XCTAssertEqual(try redCorners(of: try XCTUnwrap(doc.page(at: 0))), ["bottomLeft"], "unrotated reference")
+        // turning clockwise moves the bottom-left corner to the top-left, then top-right, then bottom-right
+        let expected: [(degrees: Int, corner: String)] = [(90, "topLeft"), (180, "topRight"), (270, "bottomRight")]
+        for e in expected {
+            let turned = PdfPageTools.subset(of: doc, [0], turn: e.degrees)
+            XCTAssertEqual(try redCorners(of: try XCTUnwrap(turned.page(at: 0))), [e.corner], "\(e.degrees) degrees clockwise")
+        }
     }
 }

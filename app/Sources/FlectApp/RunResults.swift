@@ -86,7 +86,12 @@ extension AppModel {
     func taskLabel(_ task: String) -> String {
         if task.hasPrefix("preset:") { return String(task.dropFirst(7)) } // a preset run is shown by its name
         let base = task.split(separator: "?").first.map(String.init) ?? task
-        return loc.has("menu.\(base)") ? loc.t("menu.\(base)") : base
+        if loc.has("menu.\(base)") { return loc.t("menu.\(base)") }
+        // Native conversions are recorded as `pdf.convert.JPG`: show "PDF: convert to JPG" instead of the id.
+        if let s = TaskLabels.categoryAndFormat(of: base), loc.has("menu.\(s.category)"), loc.has("menu.to") {
+            return loc.t("menu.\(s.category)") + ": " + loc.f("menu.to", [s.format])
+        }
+        return base
     }
 }
 

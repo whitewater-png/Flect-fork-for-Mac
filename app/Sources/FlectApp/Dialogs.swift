@@ -190,6 +190,7 @@ enum SizeParser {
             Picker(model.loc.t("dialog.download.quality"), selection: $choice) {
                 ForEach(DownloadChoice.allCases) { c in Text(model.loc.t(c.labelKey)).tag(c) }
             }
+            Text(model.loc.t("dialog.download.qualityNote")).font(.caption).foregroundStyle(.secondary)
             Text(model.loc.t("download.notice")).font(.caption).foregroundStyle(.secondary)
             Buttons(model: model, actionTitle: model.loc.t("dialog.download.action"), enabled: DownloadURL.isPlausible(url)) {
                 model.submitDownload(url: url, choice: choice)

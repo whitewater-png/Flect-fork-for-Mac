@@ -88,7 +88,7 @@ Flect does not update itself. To learn about new versions:
 - **In the app:** settings → **Getting started** → **4. Updates** → **Check for updates**. It asks GitHub once (see below) and, if there is a newer release, shows a banner and a button that opens the download page. You can also let it check once a day when the settings window opens (off by default).
 - **From GitHub:** on the repository page choose **Watch → Custom → Releases** to get a notification (and an email, if you enabled it) for each new release. Or subscribe to the feed `https://github.com/whitewater-png/Flect-fork-for-Mac/releases.atom` in a feed reader.
 
-Then install the new version the same way as the first (drag the new app onto Applications and replace the old one); your settings are kept. If the **Getting started** tab says the Quick Actions are from an older version, click **Install again** there (needed once when updating from 0.2.0 or earlier: older Quick Actions no longer start Flect with more than one item selected).
+Then install the new version the same way as the first (drag the new app onto Applications and replace the old one); your settings are kept. If the **Getting started** tab says the Quick Actions are from an older version, click **Install again** there (needed once when updating from 0.2.0 or earlier: older Quick Actions no longer start Flect with more than one item selected). When a version adds Quick Actions, replace the app first and install the Quick Actions again afterwards: the new ones do not work with an older app.
 
 ## Reporting problems
 
