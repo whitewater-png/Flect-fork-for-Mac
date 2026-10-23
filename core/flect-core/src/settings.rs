@@ -205,6 +205,10 @@ section!(DecompileSettings {
 section!(CodeSettings {
     decompile: DecompileSettings = DecompileSettings::default()
 });
+// Not in the Windows app. Off until the user turns it on and installs yt-dlp themselves.
+section!(DownloadSettings {
+    enabled: bool = false
+});
 
 // Not in the Windows app: one output folder per feature. Empty = beside the original; a
 // relative path starts from the original's folder; `~` and absolute paths work. Windows
@@ -219,6 +223,8 @@ section!(OutputSettings {
     archive_extract: String = String::new(),
     archive_compress: String = String::new(),
     report: String = String::new(),
+    // Empty = ~/Downloads (there is no source file to put it beside).
+    download: String = String::new(),
 });
 
 impl OutputSettings {
@@ -236,6 +242,7 @@ impl OutputSettings {
                 "audio" => &self.audio,
                 "text" => &self.text,
                 "pdf" => &self.pdf,
+                "download" => &self.download,
                 _ => "",
             },
         }
@@ -253,6 +260,7 @@ section!(Settings {
     text: TextSettings = TextSettings::default(),
     ocr: OcrSettings = OcrSettings::default(),
     code: CodeSettings = CodeSettings::default(),
+    download: DownloadSettings = DownloadSettings::default(),
     output: OutputSettings = OutputSettings::default(),
 });
 
@@ -381,6 +389,15 @@ mod tests {
         assert_eq!(s.video.presets.compress_discord, 20 * MIB);
         assert_eq!(s.ocr.encoding, TextEncodingChoice::Utf8Bom);
         assert!(s.text.json_sort.recursive);
+    }
+
+    #[test]
+    fn download_is_off_by_default_and_old_files_still_load() {
+        assert!(!Settings::default().download.enabled);
+        let s: Settings = serde_json::from_str("{\"General\":{}}").unwrap();
+        assert!(!s.download.enabled);
+        let on: Settings = serde_json::from_str("{\"Download\":{\"Enabled\":true}}").unwrap();
+        assert!(on.download.enabled);
     }
 
     #[test]

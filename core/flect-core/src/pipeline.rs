@@ -429,6 +429,8 @@ fn writing_into(settings: &Settings, dir: &Path) -> io::Result<Settings> {
         archive_extract: text.into(),
         archive_compress: text.into(),
         report: text.into(),
+        // Downloads are never a pipeline step.
+        download: String::new(),
     };
     Ok(s)
 }

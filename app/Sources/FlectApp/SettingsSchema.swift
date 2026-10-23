@@ -118,12 +118,16 @@ enum SettingsSchema {
             Field(["Text", "JsonSort", "SortPrimitiveArrays"], "settings.text.json.arrays", "Sort arrays of plain values", .toggle, false),
             Field(["Text", "JsonSort", "PinnedKeys"], "settings.text.json.pinned", "Pinned keys (comma separated)", .text, ""),
         ]),
+        SettingsSection(id: "download", key: "settings.nav.download", fallback: "Download", fields: [
+            Field(["Download", "Enabled"], "settings.download.enabled", "Enable media download (needs yt-dlp)", .toggle, false),
+        ]),
         SettingsSection(id: "output", key: "settings.nav.output", fallback: "Output", fields: [
             Field(["Output", "Image"], "settings.output.image", "Images", .folder, ""),
             Field(["Output", "Video"], "settings.output.video", "Video", .folder, ""),
             Field(["Output", "Audio"], "settings.output.audio", "Audio", .folder, ""),
             Field(["Output", "Text"], "settings.output.text", "Text files", .folder, ""),
             Field(["Output", "Pdf"], "settings.output.pdf", "PDF", .folder, ""),
+            Field(["Output", "Download"], "settings.output.download", "Web downloads (empty = Downloads)", .folder, ""),
             Field(["Output", "Ocr"], "settings.output.ocr", "Text recognition (OCR)", .folder, ""),
             Field(["Output", "ArchiveExtract"], "settings.output.archiveExtract", "Extracted archives", .folder, ""),
             Field(["Output", "ArchiveCompress"], "settings.output.archiveCompress", "Compressed folders", .folder, ""),

@@ -7,6 +7,16 @@ public enum NativeTask: Equatable {
     case pdfRender(format: String)   // PNG or JPG
     case pdfText
     case pdfMerge
+    /// The web address inside each selected link file (`.webloc`, `.url`) is downloaded: best-quality MP4.
+    case downloadLinks
+    /// One new PDF per page.
+    case pdfSplitEach
+    /// A new PDF with only the pages named by a `PageSpec` text.
+    case pdfExtract(pages: String)
+    /// A new PDF with every page turned clockwise (90, 180 or 270).
+    case pdfRotate(degrees: Int)
+    /// A new PDF without the pages named by a `PageSpec` text.
+    case pdfDelete(pages: String)
     case ocr
     /// Vision foreground mask; `fallback` = use the engine's colour key when it fails.
     case removeBackground(fallback: Bool)
@@ -17,6 +27,10 @@ public enum Dialog: Equatable {
     case targetBytes(base: String)   // "image.compress" / "video.compress"
     case rename
     case pdfOrder
+    /// A page list for "Extract pages" (`delete: false`) or "Delete pages" (`delete: true`).
+    case pdfPages(delete: Bool)
+    /// The address and quality for a web download (opened from File > Download from URL...).
+    case download
     case trim
     case thumbnail
     /// Long-edge limit for "Make safe to share + resize".
@@ -61,7 +75,7 @@ public enum Planner {
         switch base {
         case "image.resize", "video.resize", "image.compress", "video.compress", "image.rotate", "video.rotate",
              "image.convert", "video.convert", "video.extractAudio", "audio.convert", "text.convert", "text.encode",
-             "text.lineEndings", "pdf.convert":
+             "text.lineEndings", "pdf.convert", "pdf.split", "pdf.rotate":
             return .choose(group: base)
         case "image.resize.custom": return .dialog(.pixels(base: "image.resize"))
         case "video.resize.custom": return .dialog(.pixels(base: "video.resize"))
@@ -92,6 +106,13 @@ public enum Planner {
         case "pdf.convert.TXT": return .native(.pdfText)
         case "image.ocr": return .native(.ocr)
         case "pdf.merge": return .dialog(.pdfOrder)
+        case "link.download": return .native(.downloadLinks)
+        case "pdf.split.each": return .native(.pdfSplitEach)
+        case "pdf.split.range": return .dialog(.pdfPages(delete: false))
+        case "pdf.delete": return .dialog(.pdfPages(delete: true))
+        case "pdf.rotate.p1": return .native(.pdfRotate(degrees: 90))
+        case "pdf.rotate.p2": return .native(.pdfRotate(degrees: 180))
+        case "pdf.rotate.p3": return .native(.pdfRotate(degrees: 270))
         case "folder.rename": return .dialog(.rename)
         case "video.trim": return .dialog(.trim)
         case "video.thumbnail": return .dialog(.thumbnail)

@@ -459,3 +459,50 @@ fn trash_requests_wait_for_the_apps_answer_when_asked() {
     e.send(r#"{"op":"export-menu"}"#);
     assert_eq!(e.next()["event"], "menu");
 }
+
+#[test]
+fn download_is_refused_until_the_user_turns_it_on() {
+    let d = tempfile::tempdir().unwrap();
+    let mut e = Engine::start(&d.path().join("home"));
+    e.send(r#"{"op":"download","url":"https://example.com/v","kind":"audio"}"#);
+    let ev = e.until_done();
+    assert!(
+        ev.iter()
+            .any(|x| x["event"] == "error" && x["key"] == "download.disabled"),
+        "{ev:?}"
+    );
+    assert_eq!(ev.last().unwrap()["outcome"], "failed");
+    assert!(
+        !ev.iter().any(|x| x["event"] == "data"),
+        "nothing may be reported as created"
+    );
+}
+
+#[test]
+fn bad_download_requests_are_refused_and_the_engine_keeps_serving() {
+    let d = tempfile::tempdir().unwrap();
+    let mut e = Engine::start(&d.path().join("home"));
+    for (line, key) in [
+        (
+            r#"{"op":"download","url":"--exec=x","kind":"audio"}"#,
+            "protocol.badUrl",
+        ),
+        (
+            r#"{"op":"download","url":"https://a.example/","kind":"playlist"}"#,
+            "protocol.badDownload",
+        ),
+        (
+            r#"{"op":"download","url":"https://a.example/","kind":"audio","extra":1}"#,
+            "protocol.badJson",
+        ),
+    ] {
+        e.send(line);
+        let ev = e.until_done();
+        assert!(
+            ev.iter().any(|x| x["event"] == "error" && x["key"] == key),
+            "{line}: {ev:?}"
+        );
+    }
+    e.send(r#"{"op":"export-menu"}"#);
+    assert_eq!(e.next()["event"], "menu");
+}

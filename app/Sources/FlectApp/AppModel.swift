@@ -178,7 +178,9 @@ final class AppModel: ObservableObject {
 
     /// `steps`: run them as one pipeline instead of `task`. `label`: what the run history shows (a preset's name).
     /// `remembering`: what "Run again" should repeat, when it is not `task` itself (a preset).
-    func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil, remembering: PickerRef? = nil) {
+    /// `events`: start the run some other way than `op: run` / `op: pipeline` (the web download).
+    func runEngine(_ task: String, paths runPaths: [String], steps: [String]? = nil, label: String? = nil, remembering: PickerRef? = nil,
+                   events start: ((EngineClient) -> AsyncStream<EngineEvent>)? = nil) {
         guard let engine = engine else { tracker.carryOver = false; screen = .message(loc.t("app.engineMissing")); return }
         resetProgress()
         screen = .running
@@ -187,7 +189,7 @@ final class AppModel: ObservableObject {
         let scope = TrashGuard.Scope(inputs: runPaths, kind: TrashGuard.kind(task: task, steps: steps))
         currentRun = scope.run
         remember(task: task, as: remembering)
-        let events = steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
+        let events = start?(engine) ?? steps.map { engine.pipeline(steps: $0, paths: runPaths) } ?? engine.run(task: task, paths: runPaths)
         Task {
             var outcome = Outcome.failed
             var summary: String?
@@ -360,6 +362,65 @@ final class AppModel: ObservableObject {
     func submitMerge(ordered: [String]) {
         paths = ordered
         runNative(.pdfMerge)
+    }
+
+    /// File > Download from URL...: explains what is missing instead of opening a dialog that cannot work.
+    func offerDownload() {
+        cancelAutoClose()
+        paths = []
+        if let why = downloadBlocker() { screen = .message(why); return }
+        screen = .dialog(.download)
+    }
+
+    /// Why a download cannot start now (switched off in the settings, or yt-dlp is not installed), or nil.
+    func downloadBlocker() -> String? {
+        guard settings.bool("Download", "Enabled", default: false) else { return loc.t("download.off") }
+        guard DependencyCheck.find("yt-dlp") != nil else { return loc.f("download.installHint", ["brew install yt-dlp"]) }
+        return nil
+    }
+
+    func submitDownload(url: String, choice: DownloadChoice) {
+        guard let address = DownloadURL.normalized(url) else { screen = .message(loc.t("protocol.badUrl")); return }
+        paths = []
+        runEngine("download", paths: [], events: { $0.download(urls: [address], kind: choice.kind, maxHeight: choice.maxHeight) })
+    }
+
+    /// Downloads from a right-click: link files or selected text. No dialog, so the quality is fixed (best, MP4) and
+    /// the notice goes into the log of the run instead. The folder is the one in the settings (`~/Downloads` unless changed).
+    func startDownloads(urls: [String], notes: [String] = []) {
+        cancelAutoClose()
+        paths = []
+        if let why = downloadBlocker() { screen = .message(why); return }
+        guard !urls.isEmpty else { screen = .message(loc.t("download.noLink")); return }
+        let list = Array(urls.prefix(DownloadURL.maxPerRequest))
+        runEngine("download", paths: [], events: { $0.download(urls: list, kind: "video", maxHeight: nil) })
+        // runEngine has just emptied the log; these lines are what the run starts with.
+        log.append(LogLine(kind: .info, text: loc.t("download.notice")))
+        if urls.count > list.count { log.append(LogLine(kind: .warn, text: loc.f("download.tooMany", [String(list.count)]))) }
+        for note in notes { log.append(LogLine(kind: .warn, text: note)) }
+    }
+
+    /// The task `link.download`: the address inside each selected `.webloc` / `.url` file.
+    func startLinkDownload(files: [String]) {
+        var urls: [String] = [], notes: [String] = []
+        for file in files {
+            if let address = LinkFile.address(atPath: file) {
+                if !urls.contains(address) { urls.append(address) }
+            } else {
+                notes.append(loc.f("download.linkSkipped", [(file as NSString).lastPathComponent]))
+            }
+        }
+        startDownloads(urls: urls, notes: notes)
+    }
+
+    /// The Services entry "Download with Flect": the web addresses in the selected text.
+    func startTextDownload(_ text: String) {
+        startDownloads(urls: DownloadURL.addresses(inText: text))
+    }
+
+    /// Extract or delete pages: PDFKit work on each selected PDF, written as new files.
+    func submitPdfPages(delete: Bool, spec: String) {
+        runNative(delete ? .pdfDelete(pages: spec) : .pdfExtract(pages: spec))
     }
 
     func close() {

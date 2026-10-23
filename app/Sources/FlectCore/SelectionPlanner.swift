@@ -5,6 +5,8 @@ import Foundation
 /// Dock drop, the Open panel or Services, where there is no Quick Action to pick the task.
 public enum SelectionCategory: String, CaseIterable {
     case folder, archive, pdf, image, video, audio, text, jar
+    /// Internet shortcut files (`.webloc`, `.url`): the address inside is downloaded.
+    case link
 }
 
 public struct SelectionItem: Equatable {
@@ -61,6 +63,8 @@ public enum SelectionClassifier {
         case "7z": return c(.archive, "7Z")
         case "tar": return c(.archive, "TAR")
         case "rar": return c(.archive, "RAR")
+        case "webloc": return c(.link, "WEBLOC")
+        case "url": return c(.link, "URL")
         default: break
         }
         if let f = image[ext] { return c(.image, f) }

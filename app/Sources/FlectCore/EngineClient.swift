@@ -47,6 +47,14 @@ public final class EngineClient {
         send(request: ["op": "pipeline", "steps": steps, "paths": paths], environment: environment)
     }
 
+    /// Fetch web addresses (up to `DownloadURL.maxPerRequest`) one after another with the user's own yt-dlp (`op: download`). The engine refuses it unless the feature is
+    /// switched on in the settings, and checks the address and the choice again.
+    public func download(urls: [String], kind: String, maxHeight: Int? = nil, environment: [String: String] = [:]) -> AsyncStream<EngineEvent> {
+        var request: [String: Any] = ["op": "download", "urls": urls, "kind": kind]
+        if let h = maxHeight { request["max_height"] = h }
+        return send(request: request, environment: environment)
+    }
+
     public func fetchMenu() async -> JSONValue? {
         for await event in send(request: ["op": "export-menu"], environment: [:], finishOn: { if case .menu = $0 { return true }; return false }) {
             if case .menu(let m) = event { return m }

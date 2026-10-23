@@ -286,7 +286,7 @@ final class LaunchSecurityTests: XCTestCase {
 
     func testEveryQuickActionTaskIsAdmittedAndResolves() throws {
         let ids = try quickActionTasks()
-        XCTAssertEqual(ids.count, 38)
+        XCTAssertEqual(ids.count, 42)
         let c = try catalog(ids)
         let s = SettingsStore(directory: scratch())
         for id in ids {

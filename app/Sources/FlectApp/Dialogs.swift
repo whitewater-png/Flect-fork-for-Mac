@@ -18,6 +18,8 @@ struct PlayerView: NSViewRepresentable {
         case .targetBytes(let base): TargetDialog(base: base, model: model)
         case .rename: RenameDialog(model: model)
         case .pdfOrder: PdfOrderDialog(model: model)
+        case .pdfPages(let delete): PdfPagesDialog(model: model, delete: delete)
+        case .download: DownloadDialog(model: model)
         case .trim: TrimDialog(model: model, thumbnail: false)
         case .thumbnail: TrimDialog(model: model, thumbnail: true)
         case .maxEdge: MaxEdgeDialog(model: model)
@@ -154,6 +156,46 @@ enum SizeParser {
     private func move(_ d: Int) {
         guard let s = selection, let i = items.firstIndex(of: s), items.indices.contains(i + d) else { return }
         items.swapAt(i, i + d)
+    }
+}
+
+/// Page list for "Extract pages" and "Delete pages". The result is always a new file; the original is not changed.
+@MainActor struct PdfPagesDialog: View {
+    let model: AppModel
+    let delete: Bool
+    @State private var text = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(model.loc.t(delete ? "dialog.pdfPages.body.delete" : "dialog.pdfPages.body.extract"))
+            TextField("1-3, 5, 8-", text: $text)
+            Text(model.loc.t(text.isEmpty || PageSpec.isValidSyntax(text) ? "dialog.pdfPages.hint" : "dialog.pdfPages.syntax"))
+                .font(.caption).foregroundStyle(.secondary)
+            Buttons(model: model, actionTitle: model.loc.t(delete ? "dialog.pdfPages.action.delete" : "dialog.pdfPages.action.extract"),
+                    enabled: PageSpec.isValidSyntax(text)) {
+                model.submitPdfPages(delete: delete, spec: text)
+            }
+        }.padding(20)
+    }
+}
+
+/// Web address and quality for a download with the user's own yt-dlp. The notice stays visible.
+@MainActor struct DownloadDialog: View {
+    let model: AppModel
+    @State private var url = ""
+    @State private var choice = DownloadChoice.best
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(model.loc.t("dialog.download.body"))
+            TextField("https://", text: $url)
+            Picker(model.loc.t("dialog.download.quality"), selection: $choice) {
+                ForEach(DownloadChoice.allCases) { c in Text(model.loc.t(c.labelKey)).tag(c) }
+            }
+            Text(model.loc.t("dialog.download.qualityNote")).font(.caption).foregroundStyle(.secondary)
+            Text(model.loc.t("download.notice")).font(.caption).foregroundStyle(.secondary)
+            Buttons(model: model, actionTitle: model.loc.t("dialog.download.action"), enabled: DownloadURL.isPlausible(url)) {
+                model.submitDownload(url: url, choice: choice)
+            }
+        }.padding(20)
     }
 }
 

@@ -32,6 +32,11 @@ extension AppModel {
         case .pdfRender(let f): return "pdf.convert.\(f)"
         case .pdfText: return "pdf.convert.TXT"
         case .pdfMerge: return "pdf.merge"
+        case .downloadLinks: return "link.download"
+        case .pdfSplitEach: return "pdf.split.each"
+        case .pdfExtract: return "pdf.split.range"
+        case .pdfRotate(let d): return d == 90 ? "pdf.rotate.p1" : d == 180 ? "pdf.rotate.p2" : "pdf.rotate.p3"
+        case .pdfDelete: return "pdf.delete"
         case .ocr: return "image.ocr"
         case .removeBackground: return "image.chromakey"
         }
@@ -82,7 +87,12 @@ extension AppModel {
     func taskLabel(_ task: String) -> String {
         if task.hasPrefix("preset:") { return String(task.dropFirst(7)) } // a preset run is shown by its name
         let base = task.split(separator: "?").first.map(String.init) ?? task
-        return loc.has("menu.\(base)") ? loc.t("menu.\(base)") : base
+        if loc.has("menu.\(base)") { return loc.t("menu.\(base)") }
+        // Native conversions are recorded as `pdf.convert.JPG`: show "PDF: convert to JPG" instead of the id.
+        if let s = TaskLabels.categoryAndFormat(of: base), loc.has("menu.\(s.category)"), loc.has("menu.to") {
+            return loc.t("menu.\(s.category)") + ": " + loc.f("menu.to", [s.format])
+        }
+        return base
     }
 }
 

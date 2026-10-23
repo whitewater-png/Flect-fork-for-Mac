@@ -87,12 +87,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSHandlerRank</key><string>None</string>
     <key>LSItemContentTypes</key><array><string>public.item</string><string>public.folder</string></array>
   </dict></array>
-  <!-- Services menu entry "Process with Flect…" (title localized by */ServicesMenu.strings, handler: ServicesProvider.processWithFlect) -->
+  <!-- Services menu entries "Process with Flect…" (files) and "Download with Flect" (selected text); titles localized by */ServicesMenu.strings, handlers: ServicesProvider.processWithFlect / downloadWithFlect -->
   <key>NSServices</key><array><dict>
     <key>NSMenuItem</key><dict><key>default</key><string>Process with Flect…</string></dict>
     <key>NSMessage</key><string>processWithFlect</string>
     <key>NSPortName</key><string>Flect-for-Mac</string>
     <key>NSSendFileTypes</key><array><string>public.item</string></array>
+  </dict><dict>
+    <key>NSMenuItem</key><dict><key>default</key><string>Download with Flect</string></dict>
+    <key>NSMessage</key><string>downloadWithFlect</string>
+    <key>NSPortName</key><string>Flect-for-Mac</string>
+    <key>NSSendTypes</key><array><string>NSStringPboardType</string></array>
   </dict></array>
 </dict></plist>
 PLIST

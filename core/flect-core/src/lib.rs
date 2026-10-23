@@ -4,6 +4,7 @@
 pub mod archive;
 pub mod batch;
 pub mod convert;
+pub mod download;
 pub mod folder;
 pub mod foldertasks;
 pub mod fsat;

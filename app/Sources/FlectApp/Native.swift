@@ -23,6 +23,8 @@ enum NativeLimits {
     static let maxInputBytes: Int64 = 1 << 30
     static let maxPixels = 200_000_000
     static let maxPdfPages = 2000
+    /// "One file per page" refuses a longer document rather than writing hundreds of files.
+    static let maxSplitFiles = 500
     static let maxRenderPixels = 100_000_000
 }
 
@@ -169,6 +171,63 @@ enum NativeWorker {
         return r
     }
 
+    // MARK: PDF split / rotate / delete pages
+    // Each of these writes new files next to the original (or in the PDF output folder); the original is never changed.
+
+    private static func writePdf(_ doc: PDFDocument, source: URL, suffix: String, folder: String, loc: Loc, report r: inout NativeReport) {
+        guard let data = doc.dataRepresentation() else { r.add(.error, loc.t("msg.ioError")); return }
+        do { let o = try OutputPath.writeNew(data, source: source, suffix: suffix, ext: "pdf", folder: folder); r.outputs.append(o.path); r.add(.info, o.lastPathComponent) }
+        catch { r.add(.error, loc.t(OutputPath.errorKey(error))) }
+    }
+
+    static func pdfSplitEach(url: URL, folder: String = "", loc: Loc) -> NativeReport {
+        var r = NativeReport()
+        guard let doc = openPdf(url, loc: loc, report: &r) else { return r }
+        guard doc.pageCount <= NativeLimits.maxSplitFiles else {
+            r.add(.error, loc.f("msg.pdfTooManyFiles", [url.lastPathComponent, String(NativeLimits.maxSplitFiles)])); return r
+        }
+        let width = String(doc.pageCount).count
+        for (i, part) in PdfPageTools.eachPage(of: doc).enumerated() {
+            let number = String(i + 1)
+            let padded = String(repeating: "0", count: max(0, width - number.count)) + number
+            writePdf(part, source: url, suffix: "_p" + padded, folder: folder, loc: loc, report: &r)
+        }
+        return r
+    }
+
+    static func pdfRotate(url: URL, degrees: Int, folder: String = "", loc: Loc) -> NativeReport {
+        var r = NativeReport()
+        guard [90, 180, 270].contains(degrees), let doc = openPdf(url, loc: loc, report: &r) else { return r }
+        writePdf(PdfPageTools.subset(of: doc, Array(0..<doc.pageCount), turn: degrees), source: url, suffix: "_rot\(degrees)", folder: folder, loc: loc, report: &r)
+        return r
+    }
+
+    static func pdfExtract(url: URL, spec: String, folder: String = "", loc: Loc) -> NativeReport {
+        var r = NativeReport()
+        guard let doc = openPdf(url, loc: loc, report: &r) else { return r }
+        switch PageSpec.pages(spec, pageCount: doc.pageCount) {
+        case .failure:
+            r.add(.error, loc.f("msg.pdfBadPages", [url.lastPathComponent, String(doc.pageCount)]))
+        case .success(let indexes):
+            writePdf(PdfPageTools.subset(of: doc, indexes), source: url, suffix: "_pages", folder: folder, loc: loc, report: &r)
+        }
+        return r
+    }
+
+    static func pdfDelete(url: URL, spec: String, folder: String = "", loc: Loc) -> NativeReport {
+        var r = NativeReport()
+        guard let doc = openPdf(url, loc: loc, report: &r) else { return r }
+        switch PageSpec.pages(spec, pageCount: doc.pageCount) {
+        case .failure:
+            r.add(.error, loc.f("msg.pdfBadPages", [url.lastPathComponent, String(doc.pageCount)]))
+        case .success(let removed):
+            let keep = PdfPageTools.indexes(keepingAllExcept: removed, pageCount: doc.pageCount)
+            if keep.isEmpty { r.add(.error, loc.f("msg.pdfNoPagesLeft", [url.lastPathComponent])); return r }
+            writePdf(PdfPageTools.subset(of: doc, keep), source: url, suffix: "_removed", folder: folder, loc: loc, report: &r)
+        }
+        return r
+    }
+
     // MARK: OCR
 
     static func languages(setting: String) -> [String] {
@@ -200,6 +259,7 @@ enum NativeWorker {
 
 extension AppModel {
     func runNative(_ task: NativeTask) {
+        if case .downloadLinks = task { startLinkDownload(files: paths); return }
         if case .pdfPreview = task {
             if let first = paths.first { screen = .pdfPreview(URL(fileURLWithPath: first)) } else { screen = .message(loc.t("app.noTask")) }
             return
@@ -235,9 +295,13 @@ extension AppModel {
                     case .heicConvert: return NativeWorker.heic(url: url, folder: imageFolder, loc: loc)
                     case .pdfRender(let f): return NativeWorker.pdfRender(url: url, jpg: f == "JPG", folder: pdfFolder, loc: loc)
                     case .pdfText: return NativeWorker.pdfText(url: url, folder: pdfFolder, loc: loc)
+                    case .pdfSplitEach: return NativeWorker.pdfSplitEach(url: url, folder: pdfFolder, loc: loc)
+                    case .pdfExtract(let spec): return NativeWorker.pdfExtract(url: url, spec: spec, folder: pdfFolder, loc: loc)
+                    case .pdfRotate(let degrees): return NativeWorker.pdfRotate(url: url, degrees: degrees, folder: pdfFolder, loc: loc)
+                    case .pdfDelete(let spec): return NativeWorker.pdfDelete(url: url, spec: spec, folder: pdfFolder, loc: loc)
                     case .ocr: return NativeWorker.ocr(url: url, languageSetting: ocrLang, loc: loc)
                     case .removeBackground: return NativeWorker.removeBackground(url: url, folder: imageFolder, loc: loc)
-                    case .pdfPreview, .pdfMerge: return NativeReport()
+                    case .pdfPreview, .pdfMerge, .downloadLinks: return NativeReport()
                     }
                 }.value
                 tracker.add(paths: report.outputs)

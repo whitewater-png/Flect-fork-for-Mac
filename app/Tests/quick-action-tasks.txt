@@ -10,6 +10,9 @@ pdf.merge
 pdf.convert.PNG
 pdf.convert.JPG
 pdf.convert.TXT
+pdf.split
+pdf.rotate
+pdf.delete
 image.resize
 image.compress
 image.rotate
@@ -36,3 +39,4 @@ text.lineEndings
 json.pretty
 json.sort
 jar.decompile
+link.download

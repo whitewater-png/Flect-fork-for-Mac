@@ -19,6 +19,8 @@ Your originals are never touched: every task writes a new file next to the sourc
 | Folders | find duplicates (byte-verified), remove empty folders, tree, analyze, bulk rename, compress |
 | Archives / code | safe extraction (ZIP, 7z, tar...), JAR decompile (CFR) |
 
+Web download (off by default): **File > Download from URL...** saves a video (best quality or capped at 1080p/720p/480p) or its audio as MP3 into your Downloads folder (change it under Settings > Output), using a `yt-dlp` you install yourself (`brew install yt-dlp`, plus ffmpeg). Turn it on under Settings > Download. Right-click versions, with fixed settings (best quality, MP4, the same folder): select a link file (`.webloc` or `.url`, made by dragging a URL out of the browser) in Finder and run **Flect: Link Download video**, or select a web address as text in any app and choose **Services → Download with Flect**. Flect does not bundle or fetch yt-dlp and has no login, cookie or DRM handling. Download only what you have the right to save and follow each site's terms; you are responsible for how you use it.
+
 Subtitles (speech to SRT/VTT/TXT) use the `whisper` filter of a whisper-enabled ffmpeg (e.g. Homebrew `ffmpeg-full`) plus a model installed with `scripts/fetch-whisper-model.sh`. Not implemented yet: AI background removal.
 
 ## Requirements
@@ -64,7 +66,7 @@ killall Finder
 macOS leaves new Quick Actions **off**, so they do not show up until you turn them on:
 
 1. Click **Open the Finder settings** on the app's **Getting started** tab, or open **System Settings → General → Login Items & Extensions** yourself, scroll to **Extensions**, and click the (i) button next to **Finder**.
-2. Switch on every **Flect: …** item (38 of them). You can leave the others as they are.
+2. Switch on every **Flect: …** item (42 of them). You can leave the others as they are.
 3. If a Flect item is still missing, run `killall Finder`.
 
 Then right-click a file in Finder → **Quick Actions** → Flect. Open the app itself to change settings.
@@ -86,7 +88,7 @@ Flect does not update itself. To learn about new versions:
 - **In the app:** settings → **Getting started** → **4. Updates** → **Check for updates**. It asks GitHub once (see below) and, if there is a newer release, shows a banner and a button that opens the download page. You can also let it check once a day when the settings window opens (off by default).
 - **From GitHub:** on the repository page choose **Watch → Custom → Releases** to get a notification (and an email, if you enabled it) for each new release. Or subscribe to the feed `https://github.com/whitewater-png/Flect-fork-for-Mac/releases.atom` in a feed reader.
 
-Then install the new version the same way as the first (drag the new app onto Applications and replace the old one); your settings are kept. If the **Getting started** tab says the Quick Actions are from an older version, click **Install again** there (needed once when updating from 0.2.0 or earlier: older Quick Actions no longer start Flect with more than one item selected).
+Then install the new version the same way as the first (drag the new app onto Applications and replace the old one); your settings are kept. If the **Getting started** tab says the Quick Actions are from an older version, click **Install again** there (needed once when updating from 0.2.0 or earlier: older Quick Actions no longer start Flect with more than one item selected). When a version adds Quick Actions, replace the app first and install the Quick Actions again afterwards: the new ones do not work with an older app.
 
 ## Reporting problems
 
