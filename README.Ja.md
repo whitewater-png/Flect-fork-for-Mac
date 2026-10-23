@@ -2,7 +2,7 @@
 
 **Finder で右クリックして、変換・圧縮・リサイズなどができます。** [Flect](https://github.com/Konayukiw/Flect)（Windows 版）を、Rust の処理コアと Swift の画面で macOS 向けに作り直したものです。
 
-> **状況: 0.2.0。** MacBook（macOS 26・Apple Silicon）で実機確認を行いました（[`docs/mac-port/`](docs/mac-port/)）。ビルドは ad-hoc 署名で、**公証していません**。既知の制限は [`CHANGELOG.md`](CHANGELOG.md) とリリースノートを参照してください。
+> **状況: 0.3.0。** MacBook（macOS 26・Apple Silicon）で実機確認を行いました（[`docs/mac-port/`](docs/mac-port/)）。ビルドは ad-hoc 署名で、**公証していません**。既知の制限は [`CHANGELOG.md`](CHANGELOG.md) とリリースノートを参照してください。
 
 English: [README.md](README.md)
 
@@ -14,7 +14,7 @@ English: [README.md](README.md)
 | --- | --- |
 | 画像 | リサイズ（％・ピクセル）、目標サイズへ圧縮、回転、形式変換（PNG/JPG/WEBP/HEIC/ICO/GIF/SVG）、文字認識（OCR）、メタデータ削除、背景色の透過 |
 | 動画・音声 | リサイズ、トリミング、サムネイル、圧縮（Discord 向け含む）、回転、変換、音声の取り出し（VideoToolbox 利用可） |
-| PDF | プレビュー、結合、PNG/JPG/テキストへ変換 |
+| PDF | プレビュー、結合、分割、回転、ページ削除、PNG/JPG/テキストへ変換 |
 | テキスト・JSON | 形式変換、文字コード・改行の変換、整形、キーの並べ替え |
 | フォルダ | 重複ファイル検出（バイト比較で確認）、空フォルダ削除、ツリー、分析、一括リネーム、圧縮 |
 | アーカイブ・コード | 安全な展開（ZIP/7z/tar など）、JAR のデコンパイル（CFR） |
