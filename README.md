@@ -2,7 +2,7 @@
 
 **Right-click files in Finder to convert, compress, resize and more.** A macOS port of [Flect](https://github.com/Konayukiw/Flect) (Windows), rebuilt with a Rust processing core and a Swift front end.
 
-> **Status: 0.2.0.** Verified on a MacBook (macOS 26, Apple Silicon), see [`docs/mac-port/`](docs/mac-port/). Builds are ad-hoc signed, **not notarized**. See [`CHANGELOG.md`](CHANGELOG.md) and the release notes for known limitations.
+> **Status: 0.3.0.** Verified on a MacBook (macOS 26, Apple Silicon), see [`docs/mac-port/`](docs/mac-port/). Builds are ad-hoc signed, **not notarized**. See [`CHANGELOG.md`](CHANGELOG.md) and the release notes for known limitations.
 
 [日本語](README.Ja.md) / English
 
@@ -14,7 +14,7 @@ Your originals are never touched: every task writes a new file next to the sourc
 | --- | --- |
 | Images | resize (%, pixels), compress to a target size, rotate, convert (PNG, JPG, WEBP, HEIC, ICO, GIF, SVG), OCR, strip metadata, color-key background |
 | Video / audio | resize, trim, thumbnail, compress (incl. Discord size), rotate, convert, extract audio (VideoToolbox optional) |
-| PDF | preview, merge, to PNG / JPG / text |
+| PDF | preview, merge, split, rotate, delete pages, to PNG / JPG / text |
 | Text / JSON | convert formats, change encoding or line endings, pretty-print, sort keys |
 | Folders | find duplicates (byte-verified), remove empty folders, tree, analyze, bulk rename, compress |
 | Archives / code | safe extraction (ZIP, 7z, tar...), JAR decompile (CFR) |
