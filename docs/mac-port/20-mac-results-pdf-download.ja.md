@@ -210,7 +210,7 @@ CI:   全ジョブ成功（https://github.com/whitewater-png/Flect-fork-for-Mac/
 
 ### 後始末（この検証で Mac に残っているもの）
 
-- `~/Applications/Flect-for-Mac.app` は `5069726` のビルド（クイックアクション 42 個）。旧版の `/Applications` のアプリは、`~/Documents/Flect-旧版バックアップ-20261021/20261022-Applications/` へ移動してある（削除なし）。
+- `~/Applications/Flect-for-Mac.app` は、D-27 の修正を入れた `b06b8ee` のビルド（クイックアクション 42 個。最初の検証は `5069726` のビルドで行い、その後入れ替えた）。旧版の `/Applications` のアプリは、`~/Documents/Flect-旧版バックアップ-20261021/20261022-Applications/` へ移動してある（削除なし）。
 - `~/FlectTest`（テスト用ファイル）は残してある。`scripts/mac-verify.sh --clean` は実行していない（実行すると前回の検証ファイルごと消える）。
 - `~/Downloads/sample [sample].mp4`（D-26 の検証でできたもの）。不要なら手でゴミ箱へ。
 - 設定ファイルは、D-26 のために `Download` を `Enabled: true` にしてある。
