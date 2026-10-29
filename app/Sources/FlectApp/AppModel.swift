@@ -94,6 +94,8 @@ final class AppModel: ObservableObject {
     let presetStore = PresetStore()
     let pickerStore = PickerMemoryStore()
     @Published var presets: [Preset] = []
+    /// URL typed into the download dialog from an entry point (a `flect://` link, the clipboard). Cleared on submit.
+    @Published var downloadSeed: String?
     @Published var memory = PickerMemory()
 
     // MARK: start
@@ -365,24 +367,44 @@ final class AppModel: ObservableObject {
     }
 
     /// File > Download from URL...: explains what is missing instead of opening a dialog that cannot work.
-    func offerDownload() {
+    /// `seed` arrives pre-typed (a `flect://` link, the clipboard); the user still confirms everything.
+    func offerDownload(seed: String? = nil) {
         cancelAutoClose()
         paths = []
-        if let why = downloadBlocker() { screen = .message(why); return }
+        guard settings.bool("Download", "Enabled", default: false) else { screen = .message(loc.t("download.off")); return }
+        downloadSeed = seed
         screen = .dialog(.download)
     }
 
-    /// Why a download cannot start now (switched off in the settings, or yt-dlp is not installed), or nil.
-    func downloadBlocker() -> String? {
+    /// Why a download of this kind cannot start now (switched off in the settings, or the tool is
+    /// missing), or nil. Images only need the system curl; video and audio need yt-dlp.
+    func downloadBlocker(kind: DownloadKind = .video) -> String? {
         guard settings.bool("Download", "Enabled", default: false) else { return loc.t("download.off") }
+        if kind == .image {
+            guard FileManager.default.isExecutableFile(atPath: "/usr/bin/curl") else { return loc.t("download.noCurl") }
+            return nil
+        }
         guard DependencyCheck.find("yt-dlp") != nil else { return loc.f("download.installHint", ["brew install yt-dlp"]) }
         return nil
     }
 
-    func submitDownload(url: String, choice: DownloadChoice) {
+    func submitDownload(url: String, kind: DownloadKind, choice: DownloadChoice, steps: [String]) {
         guard let address = DownloadURL.normalized(url) else { screen = .message(loc.t("protocol.badUrl")); return }
+        if let why = downloadBlocker(kind: kind) { screen = .message(why); return }
+        downloadSeed = nil
         paths = []
-        runEngine("download", paths: [], events: { $0.download(urls: [address], kind: choice.kind, maxHeight: choice.maxHeight) })
+        let maxHeight = kind == .video ? choice.maxHeight : nil
+        let fetchSteps = kind == .image ? steps : []
+        runEngine("download", paths: [], events: { $0.download(urls: [address], kind: kind.rawValue, maxHeight: maxHeight, steps: fetchSteps) })
+    }
+
+    /// File > Download from Clipboard: opens the dialog with the first address on the clipboard typed in,
+    /// so the user sees what will be fetched before anything starts.
+    func downloadFromClipboard() {
+        let text = NSPasteboard.general.string(forType: .string) ?? ""
+        let found = DownloadURL.addresses(inText: text, limit: 1)
+        if found.isEmpty { screen = .message(loc.t("download.noLink")); return }
+        offerDownload(seed: found[0])
     }
 
     /// Downloads from a right-click: link files or selected text. No dialog, so the quality is fixed (best, MP4) and
@@ -393,7 +415,9 @@ final class AppModel: ObservableObject {
         if let why = downloadBlocker() { screen = .message(why); return }
         guard !urls.isEmpty else { screen = .message(loc.t("download.noLink")); return }
         let list = Array(urls.prefix(DownloadURL.maxPerRequest))
-        runEngine("download", paths: [], events: { $0.download(urls: list, kind: "video", maxHeight: nil) })
+        // Addresses ending in an image extension go through the curl path; anything else keeps yt-dlp.
+        let allImages = !list.isEmpty && list.allSatisfy(DownloadURL.looksLikeImage)
+        runEngine("download", paths: [], events: { $0.download(urls: list, kind: allImages ? "image" : "video", maxHeight: nil) })
         // runEngine has just emptied the log; these lines are what the run starts with.
         log.append(LogLine(kind: .info, text: loc.t("download.notice")))
         if urls.count > list.count { log.append(LogLine(kind: .warn, text: loc.f("download.tooMany", [String(list.count)]))) }

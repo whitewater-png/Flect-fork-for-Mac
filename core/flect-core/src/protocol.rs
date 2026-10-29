@@ -27,6 +27,9 @@ pub enum Request {
     },
     /// Fetch one web address with the user's own yt-dlp (`kind`: `video` or `audio`; `max_height`
     /// caps a video, see `download::HEIGHTS`). Needs `Download.Enabled` in the settings.
+    /// `kind` may also be `image`: then the file is fetched with the system curl (no yt-dlp), and
+    /// `steps` — pipeline steps like `image.resize?scale=50` — may be applied to each fetched
+    /// image in the same run. Steps are refused for video and audio.
     Download {
         /// One address, or `urls` for several (exactly one of the two).
         #[serde(default)]
@@ -36,6 +39,8 @@ pub enum Request {
         kind: String,
         #[serde(default)]
         max_height: Option<u32>,
+        #[serde(default)]
+        steps: Vec<String>,
     },
     Cancel,
     ExportMenu,
@@ -188,9 +193,25 @@ pub fn parse_line(line: &[u8]) -> Result<Request, ParseError> {
             urls,
             kind,
             max_height,
+            steps,
         } => {
             download_list(url.as_deref(), urls)?;
             download::kind_from(kind, *max_height).ok_or(ParseError::BadDownload)?;
+            // Steps ride along only for image downloads (a fetched video or audio file has no
+            // pipeline task that accepts it yet).
+            if !steps.is_empty() {
+                if kind != "image" {
+                    return Err(ParseError::BadDownload);
+                }
+                if steps.len() > pipeline::MAX_STEPS
+                    || steps
+                        .iter()
+                        .any(|s| s.is_empty() || s.contains('\0') || s.len() > pipeline::MAX_STEP_BYTES)
+                {
+                    return Err(ParseError::BadPipeline);
+                }
+                pipeline::plan(steps).map_err(|_| ParseError::BadPipeline)?;
+            }
         }
         Request::Cancel | Request::ExportMenu | Request::TrashAck => {}
     }
@@ -329,6 +350,29 @@ mod tests {
         assert!(
             parse_line(br#"{"op":"download","url":"https://example.com/v","kind":"audio"}"#)
                 .is_ok()
+        );
+        // Images may carry pipeline steps; video and audio may not.
+        assert!(parse_line(
+            br##"{"op":"download","url":"https://example.com/i.png","kind":"image","steps":["image.strip","image.resize?scale=50"]}"##
+        )
+        .is_ok());
+        assert_eq!(
+            parse_line(
+                br#"{"op":"download","url":"https://example.com/v","kind":"video","steps":["image.strip"]}"#
+            ),
+            Err(ParseError::BadDownload)
+        );
+        assert_eq!(
+            parse_line(
+                br#"{"op":"download","url":"https://example.com/i.png","kind":"image","steps":["nope.step"]}"#
+            ),
+            Err(ParseError::BadPipeline)
+        );
+        assert_eq!(
+            parse_line(
+                br#"{"op":"download","url":"https://example.com/i.png","kind":"image","steps":["image.resize?scale=0"]}"#
+            ),
+            Err(ParseError::BadPipeline)
         );
         for (line, expected) in [
             (

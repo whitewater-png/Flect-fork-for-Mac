@@ -178,24 +178,51 @@ enum SizeParser {
     }
 }
 
-/// Web address and quality for a download with the user's own yt-dlp. The notice stays visible.
+/// Address and kind for a download: video and audio with the user's own yt-dlp, images with the
+/// system curl (optionally through a preset). The notice stays visible.
 @MainActor struct DownloadDialog: View {
     let model: AppModel
     @State private var url = ""
+    @State private var kind = DownloadKind.video
     @State private var choice = DownloadChoice.best
+    @State private var presetID: UUID?
+
+    /// Presets whose first step accepts an image — the only ones that make sense after an image fetch.
+    private var imagePresets: [Preset] {
+        model.presets.filter { p in
+            if case .success(let plan) = Pipeline.plan(p.steps) { return plan.first?.accepts.contains(.image) ?? false }
+            return false
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(model.loc.t("dialog.download.body"))
             TextField("https://", text: $url)
-            Picker(model.loc.t("dialog.download.quality"), selection: $choice) {
-                ForEach(DownloadChoice.allCases) { c in Text(model.loc.t(c.labelKey)).tag(c) }
+            Picker(model.loc.t("dialog.download.kind"), selection: $kind) {
+                ForEach(DownloadKind.allCases) { k in Text(model.loc.t(k.labelKey)).tag(k) }
             }
-            Text(model.loc.t("dialog.download.qualityNote")).font(.caption).foregroundStyle(.secondary)
+            if kind == .video {
+                Picker(model.loc.t("dialog.download.quality"), selection: $choice) {
+                    ForEach(DownloadChoice.allCases.filter { $0 != .audio }) { c in Text(model.loc.t(c.labelKey)).tag(c) }
+                }
+                Text(model.loc.t("dialog.download.qualityNote")).font(.caption).foregroundStyle(.secondary)
+            } else if kind == .image {
+                Picker(model.loc.t("dialog.download.preset"), selection: $presetID) {
+                    Text(model.loc.t("dialog.download.preset.none")).tag(nil as UUID?)
+                    ForEach(imagePresets) { p in Text(p.name).tag(p.id as UUID?) }
+                }
+            }
             Text(model.loc.t("download.notice")).font(.caption).foregroundStyle(.secondary)
             Buttons(model: model, actionTitle: model.loc.t("dialog.download.action"), enabled: DownloadURL.isPlausible(url)) {
-                model.submitDownload(url: url, choice: choice)
+                let steps = presetID.flatMap { id in imagePresets.first { $0.id == id }?.steps } ?? []
+                model.submitDownload(url: url, kind: kind, choice: choice, steps: steps)
             }
         }.padding(20)
+        .onAppear {
+            if url.isEmpty, let seed = model.downloadSeed { url = seed }
+            if DownloadURL.looksLikeImage(url) { kind = .image }
+        }
     }
 }
 

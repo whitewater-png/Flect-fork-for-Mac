@@ -107,6 +107,8 @@ enum Msg {
     Download {
         urls: Vec<String>,
         kind: download::Kind,
+        /// Pipeline steps to apply to each fetched image (empty for video and audio).
+        steps: Vec<String>,
     },
 }
 
@@ -175,6 +177,7 @@ fn reader(
                 urls,
                 kind,
                 max_height,
+                steps,
             }) => {
                 // `parse_line` has already checked all of it; this only turns it into the typed form.
                 let (Ok(urls), Some(kind)) = (
@@ -184,7 +187,7 @@ fn reader(
                     failed(&out, "protocol.badDownload", vec![])?;
                     continue;
                 };
-                if tx.send(Msg::Download { urls, kind }).is_err() {
+                if tx.send(Msg::Download { urls, kind, steps }).is_err() {
                     break;
                 }
             }
@@ -450,7 +453,11 @@ fn run_download(
     cancel: &AtomicBool,
     urls: &[String],
     kind: download::Kind,
+    steps: &[String],
 ) -> io::Result<()> {
+    if kind == download::Kind::Image {
+        return run_image_download(out, cancel, urls, steps);
+    }
     let settings: Settings = locations::data_dir()
         .map(|d| Store::new(d).load())
         .unwrap_or_default();
@@ -551,6 +558,169 @@ fn run_download(
                 total,
             },
         )?;
+    }
+    done(out, outcome_of(failures))
+}
+
+/// Image downloads (`kind: image`): each address is fetched with the system curl (no yt-dlp —
+/// a direct image needs none of yt-dlp's site machinery), then optional pipeline steps run on
+/// the fetched file in the same pass. The fetched original is kept; step results go next to it
+/// (or wherever the output settings say).
+fn run_image_download(
+    out: &Out,
+    cancel: &AtomicBool,
+    urls: &[String],
+    steps: &[String],
+) -> io::Result<()> {
+    let settings: Settings = locations::data_dir()
+        .map(|d| Store::new(d).load())
+        .unwrap_or_default();
+    let tool = match download::preflight_image(&settings, download::find_curl()) {
+        Ok(t) => t,
+        Err(key) => return failed(out, key, vec![]),
+    };
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|h| h.is_absolute());
+    let Some(home) = home else {
+        return failed(out, "msg.ioError", vec![]);
+    };
+    let dest = match download::destination(&settings, &home) {
+        Ok(d) => d,
+        Err(e) => return failed(out, paths::io_error_key(&e), vec![]),
+    };
+    let progress = EngineProgress { out, cancel };
+    let tmp = std::env::temp_dir();
+    let total = urls.len() as u64;
+
+    // One plan for the whole batch; the work folder exists only when there are steps.
+    let plan = if steps.is_empty() {
+        None
+    } else {
+        match pipeline::plan(steps) {
+            Ok(p) => Some(p),
+            Err(e) => return failed(out, e.key(), e.args()),
+        }
+    };
+    let work = match plan.as_ref().map(|_| pipeline::WorkDir::create(&tmp)).transpose() {
+        Ok(w) => w,
+        Err(_) => return failed(out, "msg.ioError", vec![tmp.display().to_string()]),
+    };
+    let names: Vec<&str> = plan
+        .as_ref()
+        .map(|p| p.iter().map(|s| s.name).collect())
+        .unwrap_or_default();
+
+    let mut failures = 0u32;
+    let mut cancelled = false;
+    with_ctx(out, cancel, &names, |ctx| -> io::Result<()> {
+        for (i, raw) in urls.iter().enumerate() {
+            if cancel.load(Ordering::SeqCst) {
+                cancelled = true;
+                return Ok(());
+            }
+            let Ok(url) = download::validate_url(raw) else {
+                emit(out, &error("protocol.badUrl", vec![]))?;
+                failures += 1;
+                continue;
+            };
+            progress.status("download.starting", &[download::host_of(&url)]);
+            let job = download::ImageJob {
+                tool: &tool,
+                url: &url,
+                out_dir: &dest,
+                env: download::Env {
+                    path: download::PATH_ENV,
+                    home: Some(&home),
+                },
+                work_parent: &tmp,
+            };
+            match download::fetch_image(&job, &progress) {
+                Err(download::ImageError::Cancelled) => {
+                    cancelled = true;
+                    return Ok(());
+                }
+                Err(download::ImageError::Io(_)) => {
+                    emit(out, &error("download.imageCantStart", vec![]))?;
+                    failures += 1;
+                }
+                Err(download::ImageError::Failed(tail)) => {
+                    emit(out, &error("download.failed", vec![tail]))?;
+                    failures += 1;
+                }
+                Err(download::ImageError::TooLarge) => {
+                    emit(out, &error("download.tooLarge", vec![]))?;
+                    failures += 1;
+                }
+                Err(download::ImageError::NotImage) => {
+                    emit(out, &error("download.notImage", vec![]))?;
+                    failures += 1;
+                }
+                Ok(path) => {
+                    // Reported right away, so what is already saved can be undone even if a later one fails.
+                    emit(
+                        out,
+                        &Event::Data {
+                            name: "outputs".into(),
+                            data: serde_json::json!({ "paths": [path.to_string_lossy()] }),
+                        },
+                    )?;
+                    emit(
+                        out,
+                        &Event::Info {
+                            key: "download.saved".into(),
+                            args: vec![display_name(&path.to_string_lossy())],
+                        },
+                    )?;
+                    if let (Some(plan), Some(work)) = (&plan, &work) {
+                        match pipeline::run_file(plan, &path, ctx, work, i) {
+                            Ok(done) => {
+                                if done.output != path {
+                                    emit(
+                                        out,
+                                        &Event::Data {
+                                            name: "outputs".into(),
+                                            data: serde_json::json!({
+                                                "paths": [done.output.to_string_lossy()]
+                                            }),
+                                        },
+                                    )?;
+                                }
+                                for (key, args) in done.infos {
+                                    emit(out, &Event::Info { key: key.into(), args })?;
+                                }
+                                for (key, args) in done.warnings {
+                                    emit(out, &Event::Warn { key: key.into(), args })?;
+                                }
+                            }
+                            Err(e) => {
+                                emit(
+                                    out,
+                                    &error(
+                                        e.key(),
+                                        e.args(display_name(&path.to_string_lossy())),
+                                    ),
+                                )?;
+                                failures += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            emit(
+                out,
+                &Event::Step {
+                    done: i as u64 + 1,
+                    total,
+                },
+            )?;
+        }
+        Ok(())
+    })?;
+    // Removed before `done`: the app may stop the engine as soon as it has read it.
+    drop(work);
+    if cancelled {
+        return done(out, Outcome::Cancelled);
     }
     done(out, outcome_of(failures))
 }
@@ -753,8 +923,8 @@ fn main() -> io::Result<()> {
                 run_pipeline(&out, &cancel, &steps, &paths)?;
                 continue;
             }
-            Msg::Download { urls, kind } => {
-                run_download(&out, &cancel, &urls, kind)?;
+            Msg::Download { urls, kind, steps } => {
+                run_download(&out, &cancel, &urls, kind, &steps)?;
                 continue;
             }
         };

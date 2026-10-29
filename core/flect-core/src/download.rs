@@ -54,6 +54,9 @@ pub enum Kind {
     Video { max_height: Option<u32> },
     /// MP3 audio only.
     Audio,
+    /// An image fetched with the system `curl` (no yt-dlp, no ffmpeg). Optional pipeline steps
+    /// (`image.resize?scale=50`, ...) can be applied to the fetched file in the same run.
+    Image,
 }
 
 /// The request's `kind` / `max_height` as a `Kind`; anything outside the offered choices is refused.
@@ -64,6 +67,7 @@ pub fn kind_from(kind: &str, max_height: Option<u32>) -> Option<Kind> {
         ("video", Some(h)) if HEIGHTS.contains(&h) => Some(Kind::Video {
             max_height: Some(h),
         }),
+        ("image", None) => Some(Kind::Image),
         _ => None,
     }
 }
@@ -133,6 +137,8 @@ pub fn build_args(url: &str, kind: Kind, out_dir: &Path, temp_dir: &Path) -> Vec
         match kind {
             Kind::Audio => "%(title).100B [%(id)s] (audio).%(ext)s",
             Kind::Video { .. } => "%(title).100B [%(id)s].%(ext)s",
+            // Images are fetched with the system curl (`fetch_image`), never through yt-dlp.
+            Kind::Image => unreachable!("build_args runs only for video and audio"),
         }
         .into(),
     );
@@ -153,6 +159,7 @@ pub fn build_args(url: &str, kind: Kind, out_dir: &Path, temp_dir: &Path) -> Vec
                 "mp4".into(),
             ]);
         }
+        Kind::Image => unreachable!("build_args runs only for video and audio"),
     }
     args.push("--".into());
     args.push(url.to_string());
@@ -398,11 +405,363 @@ pub fn download(job: &Job<'_>, progress: &dyn Progress) -> Result<Fetched, RunEr
     Ok(fetched)
 }
 
+/// The largest image a download may save.
+pub const IMAGE_MAX_BYTES: u64 = 50 * 1024 * 1024;
+const IMAGE_MAX_TIME: &str = "120";
+const IMAGE_HEAD_MAX_TIME: &str = "30";
+/// The system curl. Images are fetched with it (no yt-dlp): fixed arguments only, the address
+/// comes after `--`, so nothing from the request can become a curl option.
+pub const CURL: &str = "/usr/bin/curl";
+
+/// The system curl, when it is there (it is on every macOS).
+pub fn find_curl() -> Option<PathBuf> {
+    Path::new(CURL).exists().then(|| PathBuf::from(CURL))
+}
+
+/// Checks done before an image download. yt-dlp and ffmpeg are not needed for these.
+pub fn preflight_image(settings: &Settings, curl: Option<PathBuf>) -> Result<PathBuf, &'static str> {
+    if !settings.download.enabled {
+        return Err("download.disabled");
+    }
+    curl.ok_or("download.toolMissing")
+}
+
+pub struct ImageJob<'a> {
+    pub tool: &'a Path,
+    pub url: &'a str,
+    pub out_dir: &'a Path,
+    pub env: Env<'a>,
+    /// Where the private work folder for the unfinished download is made (removed afterwards).
+    pub work_parent: &'a Path,
+}
+
+#[derive(Debug)]
+pub enum ImageError {
+    Cancelled,
+    Io(io::Error),
+    /// curl failed or timed out. The tail of its stderr.
+    Failed(String),
+    /// The reply says more than `IMAGE_MAX_BYTES`, or the file on disk is bigger than it.
+    TooLarge,
+    /// Not an image: a non-200 reply, a non-image content type, or bytes that are not a known
+    /// image header (the content type alone is never trusted).
+    NotImage,
+}
+
+impl From<io::Error> for ImageError {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+/// The extension a content type maps to, when it is one of the accepted image types.
+fn image_extension(ctype_base: &str) -> Option<&'static str> {
+    Some(match ctype_base {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "image/heif" => "heif",
+        "image/avif" => "avif",
+        "image/bmp" | "image/x-ms-bmp" => "bmp",
+        "image/tiff" => "tif",
+        "image/svg+xml" => "svg",
+        _ => return None,
+    })
+}
+
+/// Whether the first bytes really are this image type. The content type only picks the extension;
+/// this decides. (An `image/png` that is actually a script is refused here.)
+fn image_header_matches(head: &[u8], ext: &str) -> bool {
+    let starts = |sig: &[u8]| head.starts_with(sig);
+    match ext {
+        "png" => starts(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "jpg" => starts(&[0xff, 0xd8, 0xff]),
+        "gif" => starts(b"GIF8"),
+        "webp" => starts(b"RIFF") && head.get(8..12) == Some(b"WEBP"),
+        "bmp" => starts(b"BM"),
+        "tif" => starts(b"II*\0") || starts(b"MM\0*"),
+        "svg" => starts(b"<"),
+        "heic" | "heif" | "avif" => {
+            head.get(4..8) == Some(b"ftyp")
+                && matches!(
+                    head.get(8..12),
+                    Some(b"heic") | Some(b"heix") | Some(b"mif1") | Some(b"heim")
+                        | Some(b"heis") | Some(b"avif") | Some(b"avis")
+                )
+        }
+        _ => false,
+    }
+}
+
+/// A file name for the fetched image: the last path segment of the address, sanitized
+/// (ASCII letters, digits, `.`, `-`, `_`; no leading dot; at most 60 characters), or the host
+/// when the path gives nothing usable. The extension comes from the content type.
+fn image_stem(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let last = path.rsplit('/').next().unwrap_or("");
+    let cleaned: String = last
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect();
+    let limited: String = cleaned.chars().take(60).collect();
+    // Drop a trailing extension (the reply's own extension is added later, so `photo.png`
+    // becomes `photo.png` once, not `photo.png.png`). A dotfile like `.hidden` keeps its name;
+    // a lone extension such as `.png` is not a name, and the host is used instead.
+    let stem = match limited.rfind('.') {
+        Some(i) if limited.len() - i <= 6 && limited[i + 1..].chars().all(|c| c.is_ascii_alphanumeric()) => {
+            limited[..i].trim_matches('.').to_string()
+        }
+        _ => limited.trim_start_matches('.').trim_matches('.').to_string(),
+    };
+    if stem.is_empty() {
+        host_of(url)
+    } else {
+        stem
+    }
+}
+
+/// A name in `dir` that does not exist yet: `stem.ext`, then `stem (2).ext`, `stem (3).ext`, ...
+/// (the same never-overwrite rule as every other Flect output).
+pub fn free_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let name = |n: u32| {
+        if ext.is_empty() {
+            if n == 1 { stem.to_string() } else { format!("{stem} ({n})") }
+        } else if n == 1 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem} ({n}).{ext}")
+        }
+    };
+    let mut n = 1u32;
+    loop {
+        let candidate = dir.join(name(n));
+        if fs::symlink_metadata(&candidate).is_err() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// curl's reply line (`%{http_code} %{content_type} %{size_download}`) split.
+fn parse_curl_report(report: &str) -> Option<(String, String, u64)> {
+    let mut parts = report.split(' ');
+    let code = parts.next()?.to_string();
+    let ctype = parts.next().unwrap_or("").to_string();
+    let size = parts.next()?.parse::<u64>().ok()?;
+    Some((code, ctype, size))
+}
+
+/// Runs curl with nothing inherited. `url` must already have passed `validate_url`.
+fn run_curl(tool: &Path, env: &Env<'_>, args: &[&str]) -> Result<std::process::Output, ImageError> {
+    let mut command = Command::new(tool);
+    command
+        .args(args)
+        .env_clear()
+        .env("PATH", env.path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(home) = env.home {
+        command.env("HOME", home);
+    }
+    Ok(command.output()?)
+}
+
+/// One image download. The address is checked again by the caller (`validate_url`).
+///
+/// The size is asked about first (a HEAD with a short timeout) so an oversized reply is refused
+/// before it is downloaded; a reply without `Content-Length` is still capped by `--max-filesize`
+/// and checked on disk before anything is published.
+pub fn fetch_image(job: &ImageJob<'_>, progress: &dyn Progress) -> Result<PathBuf, ImageError> {
+    if progress.cancelled() {
+        return Err(ImageError::Cancelled);
+    }
+    // Ask first: a server that says the file is huge never gets a GET from us. A HEAD that fails
+    // or says nothing usable is not fatal — the GET below carries its own limits.
+    let head = run_curl(
+        job.tool,
+        &job.env,
+        &[
+            "--proto", "=https", "--proto-redir", "=https",
+            "--head", "--silent", "--location", "--max-redirs", "5",
+            "--max-time", IMAGE_HEAD_MAX_TIME, "--write-out", "%{http_code}", "--", job.url,
+        ],
+    )?;
+    if head.status.success() {
+        let text = String::from_utf8_lossy(&head.stdout).to_ascii_lowercase();
+        let last_len = text
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("content-length:"))
+            .last()
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        if let Some(len) = last_len {
+            if len > IMAGE_MAX_BYTES {
+                return Err(ImageError::TooLarge);
+            }
+        }
+    }
+    if progress.cancelled() {
+        return Err(ImageError::Cancelled);
+    }
+    let work = WorkDir::create(job.work_parent)?;
+    let part = work.root().join("part");
+    let max_bytes = IMAGE_MAX_BYTES.to_string();
+    let out = run_curl(
+        job.tool,
+        &job.env,
+        &[
+            "--proto", "=https", "--proto-redir", "=https", "--silent", "--show-error",
+            "--location", "--max-redirs", "5", "--max-time", IMAGE_MAX_TIME,
+            "--max-filesize", &max_bytes, "--output", &part.to_string_lossy(),
+            "--write-out", "%{http_code} %{content_type} %{size_download}", "--", job.url,
+        ],
+    )?;
+    if !out.status.success() {
+        let tail = String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        // curl 22 is the `--max-filesize` refusal (the server announced the size in the reply).
+        if out.status.code() == Some(22) {
+            return Err(ImageError::TooLarge);
+        }
+        return Err(ImageError::Failed(tail.chars().take(300).collect()));
+    }
+    let Some((code, ctype, size)) = parse_curl_report(&String::from_utf8_lossy(&out.stdout)) else {
+        return Err(ImageError::NotImage);
+    };
+    if code != "200" {
+        return Err(ImageError::NotImage);
+    }
+    let base = ctype.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let Some(ext) = image_extension(&base) else {
+        return Err(ImageError::NotImage);
+    };
+    if size > IMAGE_MAX_BYTES {
+        return Err(ImageError::TooLarge);
+    }
+    let meta = fs::symlink_metadata(&part)?;
+    if !meta.file_type().is_file() || meta.len() > IMAGE_MAX_BYTES {
+        return Err(ImageError::TooLarge);
+    }
+    let mut head_bytes = vec![0u8; 12];
+    let read = {
+        use std::io::Read as _;
+        let mut f = fs::File::open(&part)?;
+        f.read(&mut head_bytes)?
+    };
+    if !image_header_matches(&head_bytes[..read], ext) {
+        return Err(ImageError::NotImage);
+    }
+    let final_path = free_path(job.out_dir, &image_stem(job.url), ext);
+    match fs::rename(&part, &final_path) {
+        Ok(()) => {}
+        // Across volumes rename fails; copy instead (the work folder is removed with the drop).
+        Err(_) => {
+            fs::copy(&part, &final_path)?;
+            fs::remove_file(&part)?;
+        }
+    }
+    Ok(final_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn image_is_an_offered_kind_only_without_a_height() {
+        assert_eq!(kind_from("image", None), Some(Kind::Image));
+        assert_eq!(kind_from("image", Some(720)), None);
+        assert_eq!(kind_from("images", None), None);
+    }
+
+    #[test]
+    fn image_names_never_replace_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!("flect-img-names-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        assert_eq!(free_path(&dir, "a", "png"), dir.join("a.png"));
+        fs::write(dir.join("a.png"), b"x").unwrap();
+        assert_eq!(free_path(&dir, "a", "png"), dir.join("a (2).png"));
+        fs::write(dir.join("a (2).png"), b"x").unwrap();
+        assert_eq!(free_path(&dir, "a", "png"), dir.join("a (3).png"));
+        assert_eq!(free_path(&dir, "b", ""), dir.join("b"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn image_stems_are_sanitized() {
+        assert_eq!(image_stem("https://x.com/a/b/photo-1.png?size=large"), "photo-1");
+        assert_eq!(image_stem("https://x.com/../etcpasswd"), "etcpasswd");
+        assert_eq!(image_stem("https://x.com/.hidden"), "hidden");
+        // Non-ASCII is dropped; a lone extension is not a name, so the host is used instead.
+        assert_eq!(image_stem("https://x.com/日本語.png"), "x.com");
+        assert_eq!(image_stem("https://x.com/日本語"), "x.com");
+    }
+
+    #[test]
+    fn image_stem_falls_back_to_the_host() {
+        assert_eq!(image_stem("https://example.com/日本語"), "example.com");
+        assert_eq!(image_stem("https://example.com/"), "example.com");
+    }
+
+    #[test]
+    fn image_headers_are_checked_by_bytes_not_by_the_content_type() {
+        assert!(image_header_matches(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a], "png"));
+        assert!(image_header_matches(b"\xff\xd8\xffabc", "jpg"));
+        assert!(image_header_matches(b"GIF89a", "gif"));
+        assert!(image_header_matches(b"RIFF\x04\x00\x00\x00WEBP", "webp"));
+        assert!(image_header_matches(b"BM\x00\x00", "bmp"));
+        assert!(image_header_matches(b"II*\0\0", "tif"));
+        assert!(image_header_matches(b"<svg", "svg"));
+        assert!(image_header_matches(b"\x00\x00\x00\x18ftypheic", "heic"));
+        assert!(image_header_matches(b"\x00\x00\x00\x18ftypavif", "avif"));
+        // A script answering "image/png" is refused.
+        assert!(!image_header_matches(b"#!/bin/sh\n", "png"));
+        assert!(!image_header_matches(b"RIFF\x04\x00\x00\x00AVI ", "webp"));
+        assert!(!image_header_matches(b"\x00\x00\x00\x18ftypmsiv", "heic"));
+        assert!(!image_header_matches(b"x", "jpg"));
+    }
+
+    #[test]
+    fn image_stem_keeps_only_safe_ascii() {
+        assert_eq!(image_stem("https://x.com/p/a;b`c|d.png"), "abcd");
+    }
+
+    #[test]
+    fn curl_reports_are_parsed() {
+        assert_eq!(
+            parse_curl_report("200 image/png 1234"),
+            Some(("200".into(), "image/png".into(), 1234))
+        );
+        assert_eq!(
+            parse_curl_report("200 image/jpeg;charset=utf-8 99"),
+            Some(("200".into(), "image/jpeg;charset=utf-8".into(), 99))
+        );
+        assert_eq!(parse_curl_report("200 image/png"), None);
+        assert_eq!(parse_curl_report("200 image/png big"), None);
+        assert_eq!(parse_curl_report(""), None);
+    }
+
+    #[test]
+    fn image_preflight_needs_only_the_switch_and_curl() {
+        let mut s = Settings::default();
+        assert_eq!(preflight_image(&s, Some(PathBuf::from(CURL))), Err("download.disabled"));
+        s.download.enabled = true;
+        assert_eq!(preflight_image(&s, None), Err("download.toolMissing"));
+        assert_eq!(
+            preflight_image(&s, Some(PathBuf::from(CURL))),
+            Ok(PathBuf::from(CURL))
+        );
+    }
 
     #[test]
     fn accepts_plain_web_addresses() {

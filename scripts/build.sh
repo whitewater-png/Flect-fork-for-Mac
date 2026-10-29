@@ -87,6 +87,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSHandlerRank</key><string>None</string>
     <key>LSItemContentTypes</key><array><string>public.item</string><string>public.folder</string></array>
   </dict></array>
+  <!-- flect://download?url=... links (a bookmarklet or an HTML page): opens the download dialog with the address typed in. -->
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>${BUNDLE_ID}.download</string>
+    <key>CFBundleURLSchemes</key><array><string>flect</string></array>
+  </dict></array>
   <!-- Services menu entries "Process with Flect…" (files) and "Download with Flect" (selected text); titles localized by */ServicesMenu.strings, handlers: ServicesProvider.processWithFlect / downloadWithFlect -->
   <key>NSServices</key><array><dict>
     <key>NSMenuItem</key><dict><key>default</key><string>Process with Flect…</string></dict>

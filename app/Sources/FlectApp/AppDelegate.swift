@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingURLs: [URL] = []
     /// Selected text from the "Download with Flect" Service that arrived before the model existed.
     private var pendingTexts: [String] = []
+    /// `flect://download?url=...` addresses that arrived before the model existed.
+    private var pendingSeeds: [String] = []
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // "Process with Flect..." in the Services menu (NSServices in Info.plist).
@@ -44,11 +46,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.attach()
         if !pendingURLs.isEmpty { let urls = pendingURLs; pendingURLs = []; present(urls: urls) }
         if !pendingTexts.isEmpty { let texts = pendingTexts; pendingTexts = []; texts.forEach { downloadText($0) } }
+        if !pendingSeeds.isEmpty { let seeds = pendingSeeds; pendingSeeds = []; model.offerDownload(seed: seeds.first) }
     }
 
-    /// Files / folders dropped on the Dock icon or on Flect.app, or opened with it from Finder.
+    /// Files / folders dropped on the Dock icon or on Flect.app, opened with it from Finder,
+    /// and `flect://download?url=...` links (a bookmarklet, an HTML page).
     func application(_ application: NSApplication, open urls: [URL]) {
-        present(urls: urls)
+        var files: [URL] = []
+        for url in urls {
+            guard url.scheme?.lowercased() == "flect" else { files.append(url); continue }
+            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            guard let address = query.first(where: { $0.name == "url" })?.value else { continue }
+            if let model = model {
+                NSApp.activate(ignoringOtherApps: true)
+                window?.makeKeyAndOrderFront(nil)
+                model.offerDownload(seed: address)
+            } else {
+                pendingSeeds.append(address)
+            }
+        }
+        if !files.isEmpty { present(urls: files) }
     }
 
     /// The one funnel for the new entry points: show the action picker (validation happens in `AppModel.offer`).
@@ -84,6 +101,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         model.offerDownload()
+    }
+
+    /// File > Download from Clipboard...: the dialog opens with the first address on the clipboard typed in.
+    @objc func downloadFromClipboard(_ sender: Any?) {
+        guard let model = model else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        model.downloadFromClipboard()
     }
 
     @objc func showRecentRuns(_ sender: Any?) { showHistory(focus: nil) }
@@ -130,6 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let download = NSMenuItem(title: loc.t("ux.menu.download"), action: #selector(downloadFromURL(_:)), keyEquivalent: "d")
         download.target = self
         file.addItem(download)
+        let clipboard = NSMenuItem(title: loc.t("ux.menu.clipboard"), action: #selector(downloadFromClipboard(_:)), keyEquivalent: "D")
+        clipboard.target = self
+        file.addItem(clipboard)
         let recent = NSMenuItem(title: loc.t("ux.menu.history"), action: #selector(showRecentRuns(_:)), keyEquivalent: "y")
         recent.target = self
         file.addItem(recent)

@@ -18,6 +18,14 @@ public enum DownloadChoice: String, CaseIterable, Identifiable {
     public var labelKey: String { "dialog.download.q.\(rawValue)" }
 }
 
+/// What to fetch (`kind` in the `download` request). Images go through the system curl, not yt-dlp.
+public enum DownloadKind: String, CaseIterable, Identifiable {
+    case video, audio, image
+
+    public var id: String { rawValue }
+    public var labelKey: String { "dialog.download.kind.\(rawValue)" }
+}
+
 /// The same rules as the engine's `download::validate_url`, so the dialog can tell early. The engine
 /// checks again and is the one that decides.
 public enum DownloadURL {
@@ -41,6 +49,22 @@ public enum DownloadURL {
     }
 
     public static func isPlausible(_ text: String) -> Bool { normalized(text) != nil }
+
+    /// The extensions the engine's image fetcher accepts (its content-type map). An address ending
+    /// in one of these is fetched as an image even from the entry points without a dialog.
+    public static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "svg",
+    ]
+
+    /// Whether the path of the address ends in an image extension (query and fragment ignored).
+    /// A guess only: the engine checks the reply itself and can still refuse it.
+    public static func looksLikeImage(_ url: String) -> Bool {
+        guard let address = normalized(url) else { return false }
+        let path = address.prefix { $0 != "?" && $0 != "#" }
+        guard let last = path.split(separator: "/").last else { return false }
+        guard let ext = last.split(separator: ".").last else { return false }
+        return imageExtensions.contains(ext.lowercased())
+    }
 }
 
 extension DownloadURL {

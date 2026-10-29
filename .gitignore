@@ -21,3 +21,4 @@ AGENTS.md
 # Python bytecode from the helper scripts
 __pycache__/
 *.pyc
+.DS_Store

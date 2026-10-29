@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Image download: the **URL からダウンロード…** dialog now offers **Image** as a kind and fetches a picture (PNG, JPG, GIF, WebP, HEIC, AVIF, BMP, TIFF) with the system `curl` — no yt-dlp. HTTPS only, redirects followed up to 5, at most 50 MB, and the reply must really be that image (content type and magic bytes are checked before anything is written). A preset (Resize, Crop, Strip metadata…) can run on the saved file. A file name taken from the URL is cleaned (`..`, hidden names and non-ASCII are dropped; the host is used when nothing is left). Login-required pages (X/Twitter and the like) are refused with a clear message, because Flect keeps having no cookie or login handling.
+- `flect://` URL scheme: `flect://download?url=<address>` opens the download dialog with the address filled in, nothing downloaded. Quick Actions, a bookmarklet or a web page can hand Flect an address this way.
+- Clipboard download: **File → Download from Clipboard** (⌘⇧D) reads web addresses from the clipboard (up to 20) and opens the dialog; an image-looking address switches the kind to Image.
+
 ## 0.3.0 - PDF page tools, web download, safer deleting
 
 - PDF page tools: **Split** (one file per page, or extract the pages you list), **Rotate** (90, 180, 270 degrees) and **Delete pages**. They use PDFKit, write new files only and never change the original. The page list (`1-3, 5, 8-`; full-width digits accepted) comes from a dialog, so a Quick Action or launch argument cannot carry it. Encrypted PDFs are refused with a clear message.
