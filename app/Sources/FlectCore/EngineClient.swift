@@ -50,10 +50,11 @@ public final class EngineClient {
     /// Fetch web addresses (up to `DownloadURL.maxPerRequest`) one after another: video and audio with the user's own
     /// yt-dlp, images with the system curl (`op: download`). The engine refuses it unless the feature is
     /// switched on in the settings, and checks the address, the choice and the steps again.
-    public func download(urls: [String], kind: String, maxHeight: Int? = nil, steps: [String] = [], environment: [String: String] = [:]) -> AsyncStream<EngineEvent> {
+    public func download(urls: [String], kind: String, maxHeight: Int? = nil, steps: [String] = [], playlistItems: Int? = nil, environment: [String: String] = [:]) -> AsyncStream<EngineEvent> {
         var request: [String: Any] = ["op": "download", "urls": urls, "kind": kind]
         if let h = maxHeight { request["max_height"] = h }
         if !steps.isEmpty { request["steps"] = steps }
+        if let n = playlistItems, n > 1 { request["playlist_items"] = n }
         return send(request: request, environment: environment)
     }
 

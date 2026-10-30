@@ -41,6 +41,10 @@ pub enum Request {
         max_height: Option<u32>,
         #[serde(default)]
         steps: Vec<String>,
+        /// At most this many items are saved when the address is a playlist itself (`video` /
+        /// `audio` only; `None` means one). Capped at `download::MAX_PLAYLIST_ITEMS`.
+        #[serde(default)]
+        playlist_items: Option<u32>,
     },
     Cancel,
     ExportMenu,
@@ -194,9 +198,16 @@ pub fn parse_line(line: &[u8]) -> Result<Request, ParseError> {
             kind,
             max_height,
             steps,
+            playlist_items,
         } => {
             download_list(url.as_deref(), urls)?;
             download::kind_from(kind, *max_height).ok_or(ParseError::BadDownload)?;
+            // A playlist count only means something for yt-dlp kinds, and only inside the cap.
+            if let Some(n) = playlist_items {
+                if kind == "image" || *n == 0 || *n > download::MAX_PLAYLIST_ITEMS {
+                    return Err(ParseError::BadDownload);
+                }
+            }
             // Steps ride along only for image downloads (a fetched video or audio file has no
             // pipeline task that accepts it yet).
             if !steps.is_empty() {
@@ -409,6 +420,24 @@ mod tests {
             assert!(
                 matches!(parse_line(bad.as_bytes()), Err(ParseError::Json(_))),
                 "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn playlist_items_are_a_yt_dlp_option_inside_the_cap() {
+        assert!(parse_line(
+            br#"{"op":"download","url":"https://example.com/list","kind":"video","playlist_items":5}"#
+        )
+        .is_ok());
+        for json in [
+            br#"{"op":"download","url":"https://example.com/list","kind":"video","playlist_items":0}"#.as_slice(),
+            br#"{"op":"download","url":"https://example.com/list","kind":"video","playlist_items":21}"#.as_slice(),
+            br#"{"op":"download","url":"https://example.com/i.png","kind":"image","playlist_items":5}"#.as_slice(),
+        ] {
+            assert!(
+                matches!(parse_line(json), Err(ParseError::BadDownload)),
+                "{json:?}"
             );
         }
     }

@@ -120,6 +120,8 @@ enum SettingsSchema {
         ]),
         SettingsSection(id: "download", key: "settings.nav.download", fallback: "Download", fields: [
             Field(["Download", "Enabled"], "settings.download.enabled", "Enable media download (needs yt-dlp)", .toggle, false),
+            Field(["Download", "AllowLocal"], "settings.download.allowLocal", "Allow downloads from local / private addresses", .toggle, false),
+            Field(["Download", "WatchClipboard"], "settings.download.watch", "Watch the clipboard for web addresses", .toggle, false),
         ]),
         SettingsSection(id: "output", key: "settings.nav.output", fallback: "Output", fields: [
             Field(["Output", "Image"], "settings.output.image", "Images", .folder, ""),

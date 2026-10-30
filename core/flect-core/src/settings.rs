@@ -207,7 +207,10 @@ section!(CodeSettings {
 });
 // Not in the Windows app. Off until the user turns it on and installs yt-dlp themselves.
 section!(DownloadSettings {
-    enabled: bool = false
+    enabled: bool = false,
+    // Downloads normally refuse addresses pointing at this machine or a private network
+    // (loopback, RFC 1918, link-local, CGNAT). On lets the user fetch their own LAN files.
+    allow_local: bool = false,
 });
 
 // Not in the Windows app: one output folder per feature. Empty = beside the original; a
@@ -394,10 +397,14 @@ mod tests {
     #[test]
     fn download_is_off_by_default_and_old_files_still_load() {
         assert!(!Settings::default().download.enabled);
+        assert!(!Settings::default().download.allow_local);
         let s: Settings = serde_json::from_str("{\"General\":{}}").unwrap();
         assert!(!s.download.enabled);
+        assert!(!s.download.allow_local);
         let on: Settings = serde_json::from_str("{\"Download\":{\"Enabled\":true}}").unwrap();
         assert!(on.download.enabled);
+        let local: Settings = serde_json::from_str("{\"Download\":{\"AllowLocal\":true}}").unwrap();
+        assert!(local.download.allow_local);
     }
 
     #[test]

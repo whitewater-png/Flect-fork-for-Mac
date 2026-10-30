@@ -109,6 +109,8 @@ enum Msg {
         kind: download::Kind,
         /// Pipeline steps to apply to each fetched image (empty for video and audio).
         steps: Vec<String>,
+        /// At most this many items of an address that is a playlist itself (already capped).
+        playlist_items: u32,
     },
 }
 
@@ -178,6 +180,7 @@ fn reader(
                 kind,
                 max_height,
                 steps,
+                playlist_items,
             }) => {
                 // `parse_line` has already checked all of it; this only turns it into the typed form.
                 let (Ok(urls), Some(kind)) = (
@@ -187,7 +190,15 @@ fn reader(
                     failed(&out, "protocol.badDownload", vec![])?;
                     continue;
                 };
-                if tx.send(Msg::Download { urls, kind, steps }).is_err() {
+                if tx
+                    .send(Msg::Download {
+                        urls,
+                        kind,
+                        steps,
+                        playlist_items: playlist_items.unwrap_or(1),
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -454,6 +465,7 @@ fn run_download(
     urls: &[String],
     kind: download::Kind,
     steps: &[String],
+    playlist_items: u32,
 ) -> io::Result<()> {
     if kind == download::Kind::Image {
         return run_image_download(out, cancel, urls, steps);
@@ -483,16 +495,25 @@ fn run_download(
         if cancel.load(Ordering::SeqCst) {
             return done(out, Outcome::Cancelled);
         }
-        let Ok(url) = download::validate_url(raw) else {
-            emit(out, &error("protocol.badUrl", vec![]))?;
+        let url = match download::validate_url(raw) {
+            Ok(u) => u,
+            Err(_) => {
+                emit(out, &error("protocol.badUrl", vec![]))?;
+                failures += 1;
+                continue;
+            }
+        };
+        if !settings.download.allow_local && download::is_local_address(&url) {
+            emit(out, &error("download.localHost", vec![]))?;
             failures += 1;
             continue;
-        };
+        }
         progress.status("download.starting", &[download::host_of(&url)]);
         let job = download::Job {
             tool: &tool,
             url: &url,
             kind,
+            playlist_items,
             out_dir: &dest,
             env: download::Env {
                 path: download::PATH_ENV,
@@ -619,11 +640,19 @@ fn run_image_download(
                 cancelled = true;
                 return Ok(());
             }
-            let Ok(url) = download::validate_url(raw) else {
-                emit(out, &error("protocol.badUrl", vec![]))?;
+            let url = match download::validate_url(raw) {
+                Ok(u) => u,
+                Err(_) => {
+                    emit(out, &error("protocol.badUrl", vec![]))?;
+                    failures += 1;
+                    continue;
+                }
+            };
+            if !settings.download.allow_local && download::is_local_address(&url) {
+                emit(out, &error("download.localHost", vec![]))?;
                 failures += 1;
                 continue;
-            };
+            }
             progress.status("download.starting", &[download::host_of(&url)]);
             let job = download::ImageJob {
                 tool: &tool,
@@ -672,10 +701,47 @@ fn run_image_download(
                             args: vec![display_name(&path.to_string_lossy())],
                         },
                     )?;
+                    // HEIC / HEIF / AVIF reach the pipeline through the system sips: the fetched
+                    // original stays, the converted PNG is what the steps run on.
+                    let mut target = path.clone();
+                    if plan.is_some() {
+                        let ext = path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_ascii_lowercase())
+                            .unwrap_or_default();
+                        if matches!(ext.as_str(), "heic" | "heif" | "avif") {
+                            let stem = path
+                                .file_stem()
+                                .map_or_else(|| "image".to_string(), |s| s.to_string_lossy().into_owned());
+                            let png = download::free_path(
+                                path.parent().unwrap_or(&dest),
+                                &stem,
+                                "png",
+                            );
+                            if download::convert_to_png(&path, &png).is_ok() {
+                                emit(
+                                    out,
+                                    &Event::Data {
+                                        name: "outputs".into(),
+                                        data: serde_json::json!({ "paths": [png.to_string_lossy()] }),
+                                    },
+                                )?;
+                                emit(
+                                    out,
+                                    &Event::Info {
+                                        key: "download.converted".into(),
+                                        args: vec![display_name(&png.to_string_lossy())],
+                                    },
+                                )?;
+                                target = png;
+                            }
+                        }
+                    }
                     if let (Some(plan), Some(work)) = (&plan, &work) {
-                        match pipeline::run_file(plan, &path, ctx, work, i) {
+                        match pipeline::run_file(plan, &target, ctx, work, i) {
                             Ok(done) => {
-                                if done.output != path {
+                                if done.output != target {
                                     emit(
                                         out,
                                         &Event::Data {
@@ -698,7 +764,7 @@ fn run_image_download(
                                     out,
                                     &error(
                                         e.key(),
-                                        e.args(display_name(&path.to_string_lossy())),
+                                        e.args(display_name(&target.to_string_lossy())),
                                     ),
                                 )?;
                                 failures += 1;
@@ -923,8 +989,13 @@ fn main() -> io::Result<()> {
                 run_pipeline(&out, &cancel, &steps, &paths)?;
                 continue;
             }
-            Msg::Download { urls, kind, steps } => {
-                run_download(&out, &cancel, &urls, kind, &steps)?;
+            Msg::Download {
+                urls,
+                kind,
+                steps,
+                playlist_items,
+            } => {
+                run_download(&out, &cancel, &urls, kind, &steps, playlist_items)?;
                 continue;
             }
         };

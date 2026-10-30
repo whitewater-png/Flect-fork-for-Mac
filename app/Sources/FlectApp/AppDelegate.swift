@@ -12,8 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingURLs: [URL] = []
     /// Selected text from the "Download with Flect" Service that arrived before the model existed.
     private var pendingTexts: [String] = []
-    /// `flect://download?url=...` addresses that arrived before the model existed.
-    private var pendingSeeds: [String] = []
+    /// `flect://download?url=...` addresses that arrived before the model existed (with the link's kind / preset).
+    private var pendingSeeds: [(String, DownloadKind?, String?)] = []
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // "Process with Flect..." in the Services menu (NSServices in Info.plist).
@@ -43,26 +43,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.start(arguments: Array(CommandLine.arguments.dropFirst()))
         installMenu() // after start(): the menu titles follow the language setting
         Notifier.shared.onOpen = { [weak self] id in self?.showHistory(focus: id) }
+        Notifier.shared.onOpenDownload = { [weak self] url in
+            guard let model = self?.model else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self?.window?.makeKeyAndOrderFront(nil)
+            model.offerDownload(seed: url)
+        }
         Notifier.shared.attach()
         if !pendingURLs.isEmpty { let urls = pendingURLs; pendingURLs = []; present(urls: urls) }
         if !pendingTexts.isEmpty { let texts = pendingTexts; pendingTexts = []; texts.forEach { downloadText($0) } }
-        if !pendingSeeds.isEmpty { let seeds = pendingSeeds; pendingSeeds = []; model.offerDownload(seed: seeds.first) }
+        if !pendingSeeds.isEmpty {
+            let seeds = pendingSeeds; pendingSeeds = []
+            let seed = seeds.first
+            model.offerDownload(seed: seed?.0, kind: seed?.1, preset: seed?.2)
+        }
     }
 
     /// Files / folders dropped on the Dock icon or on Flect.app, opened with it from Finder,
-    /// and `flect://download?url=...` links (a bookmarklet, an HTML page).
+    /// and `flect://download?url=...&kind=image&preset=Resize` links (a bookmarklet, an HTML page).
+    /// `kind` / `preset` only pre-fill the dialog — the user still confirms everything.
     func application(_ application: NSApplication, open urls: [URL]) {
         var files: [URL] = []
         for url in urls {
             guard url.scheme?.lowercased() == "flect" else { files.append(url); continue }
             let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             guard let address = query.first(where: { $0.name == "url" })?.value else { continue }
+            let kind = query.first(where: { $0.name == "kind" })?.value.flatMap { DownloadKind(rawValue: $0) }
+            let preset = query.first(where: { $0.name == "preset" })?.value
             if let model = model {
                 NSApp.activate(ignoringOtherApps: true)
                 window?.makeKeyAndOrderFront(nil)
-                model.offerDownload(seed: address)
+                model.offerDownload(seed: address, kind: kind, preset: preset)
             } else {
-                pendingSeeds.append(address)
+                pendingSeeds.append((address, kind, preset))
             }
         }
         if !files.isEmpty { present(urls: files) }

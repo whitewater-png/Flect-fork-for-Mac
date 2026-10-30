@@ -9,6 +9,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate, @unchecked Sen
 
     /// Called on the main thread when the user clicks a notification (the run's id, if it created files).
     var onOpen: ((UUID?) -> Void)?
+    /// Called on the main thread when the user clicks a clipboard-watch notification (the address found).
+    var onOpenDownload: ((String) -> Void)?
 
     /// Only a real, bundled app has a notification center.
     static var isAvailable: Bool {
@@ -22,16 +24,27 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate, @unchecked Sen
     }
 
     func post(title: String, body: String, recordID: UUID?) {
+        var info: [String: Any] = [:]
+        if let id = recordID { info["record"] = id.uuidString }
+        post(title: title, body: body, userInfo: info)
+    }
+
+    /// "A web address is on the clipboard" — clicking opens the download dialog with it typed in.
+    func postDownload(url: String, title: String, body: String) {
+        post(title: title, body: body, userInfo: ["download": url])
+    }
+
+    private func post(title: String, body: String, userInfo: [String: Any]) {
         guard Notifier.isAvailable else { return }
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
             case .authorized, .provisional:
-                Notifier.add(center, title: title, body: body, recordID: recordID)
+                Notifier.add(center, title: title, body: body, userInfo: userInfo)
             case .notDetermined:
                 center.requestAuthorization(options: [.alert]) { granted, _ in
-                    if granted { Notifier.add(center, title: title, body: body, recordID: recordID) }
+                    if granted { Notifier.add(center, title: title, body: body, userInfo: userInfo) }
                 }
             default:
                 break // denied: stay quiet
@@ -39,11 +52,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate, @unchecked Sen
         }
     }
 
-    private static func add(_ center: UNUserNotificationCenter, title: String, body: String, recordID: UUID?) {
+    private static func add(_ center: UNUserNotificationCenter, title: String, body: String, userInfo: [String: Any]) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        if let id = recordID { content.userInfo = ["record": id.uuidString] }
+        if !userInfo.isEmpty { content.userInfo = userInfo }
         center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { _ in }
     }
 
@@ -55,8 +68,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate, @unchecked Sen
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        let id = (response.notification.request.content.userInfo["record"] as? String).flatMap(UUID.init)
-        DispatchQueue.main.async { self.onOpen?(id) }
+        let info = response.notification.request.content.userInfo
+        if let url = info["download"] as? String {
+            DispatchQueue.main.async { self.onOpenDownload?(url) }
+        } else {
+            let id = (info["record"] as? String).flatMap(UUID.init)
+            DispatchQueue.main.async { self.onOpen?(id) }
+        }
         completionHandler()
     }
 }

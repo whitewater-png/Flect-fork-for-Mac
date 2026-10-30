@@ -30,6 +30,10 @@ const MAX_HEIGHT: u32 = 4320;
 pub const HEIGHTS: [u32; 5] = [480, 720, 1080, 1440, 2160];
 /// A single download larger than this is refused by yt-dlp.
 const MAX_FILE_SIZE: &str = "8G";
+/// The largest playlist a single download may expand to (`--playlist-items 1..N`).
+pub const MAX_PLAYLIST_ITEMS: u32 = 20;
+/// The system sips: it decodes HEIC / HEIF / AVIF, which the pipeline's own decoders do not.
+pub const SIPS: &str = "/usr/bin/sips";
 const PROGRESS_PREFIX: &str = "flect-progress ";
 const FILE_PREFIX: &str = "flect-file ";
 /// No output at all for this long means the transfer is stuck.
@@ -102,17 +106,68 @@ pub fn host_of(url: &str) -> String {
     rest.split(['/', '?', '#']).next().unwrap_or("").to_string()
 }
 
+/// Whether the address points at this machine or a private network: loopback, RFC 1918,
+/// link-local (which includes the cloud metadata address), CGNAT, IPv6 loopback / unique-local /
+/// link-local, and `.localhost` / `.local` names. DNS names are deliberately not resolved —
+/// the check is on what the user typed, which catches the accidental and metadata cases without
+/// putting a lookup in front of every download.
+pub fn is_local_address(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h).to_ascii_lowercase();
+    if let Some(rest) = host.strip_prefix('[') {
+        let inner = rest.split(']').next().unwrap_or("");
+        return inner.parse::<std::net::Ipv6Addr>().is_ok_and(|v6| is_local_v6(&v6));
+    }
+    // Names and IPv4 literals both lose a `:port` before the checks.
+    let name = host.split(':').next().unwrap_or("");
+    if name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") {
+        return true;
+    }
+    match name.parse::<std::net::Ipv4Addr>() {
+        Ok(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || (o[0] == 100 && (64..=127).contains(&o[1])) // CGNAT (100.64.0.0/10)
+        }
+        Err(_) => false,
+    }
+}
+
+fn is_local_v6(v6: &std::net::Ipv6Addr) -> bool {
+    let head = v6.segments()[0];
+    v6.is_loopback()
+        || *v6 == std::net::Ipv6Addr::UNSPECIFIED
+        || (head & 0xfe00) == 0xfc00 // fc00::/7 unique-local
+        || (head & 0xffc0) == 0xfe80 // fe80::/10 link-local
+}
+
 /// Arguments for one download into `out_dir`; unfinished parts stay in `temp_dir`. `url` must
 /// already have passed `validate_url`. The address comes after `--`, so it is never read as an option.
-pub fn build_args(url: &str, kind: Kind, out_dir: &Path, temp_dir: &Path) -> Vec<String> {
+pub fn build_args(
+    url: &str,
+    kind: Kind,
+    out_dir: &Path,
+    temp_dir: &Path,
+    playlist_items: u32,
+) -> Vec<String> {
+    // `--no-playlist` only helps for an address of one video inside a list. An address that is a
+    // list itself would otherwise be saved item by item, hundreds of files for a big one — so the
+    // caller says how many items of a list are wanted (`1..N`, capped by MAX_PLAYLIST_ITEMS).
+    let items = if playlist_items <= 1 {
+        "1".to_string()
+    } else {
+        format!("1..{playlist_items}")
+    };
     let mut args: Vec<String> = [
         // Ignore the user's own yt-dlp config files so results do not depend on them.
         "--ignore-config",
         "--no-playlist",
-        // `--no-playlist` only helps for an address of one video inside a list. An address that is a list
-        // itself would otherwise be saved item by item, hundreds of files for a big one.
         "--playlist-items",
-        "1",
+        items.as_str(),
         "--newline",
         "--progress",
         "--max-filesize",
@@ -359,6 +414,9 @@ pub struct Job<'a> {
     pub tool: &'a Path,
     pub url: &'a str,
     pub kind: Kind,
+    /// How many items of an address that is a playlist itself are saved (`--playlist-items 1..N`).
+    /// 1 keeps the one-file behaviour; ignored for images (they never go through yt-dlp).
+    pub playlist_items: u32,
     pub out_dir: &'a Path,
     pub env: Env<'a>,
     /// Where the private work folder for unfinished parts is made (removed afterwards).
@@ -384,7 +442,7 @@ fn names_in(dir: &Path) -> HashSet<OsString> {
 pub fn download(job: &Job<'_>, progress: &dyn Progress) -> Result<Fetched, RunError> {
     let before = names_in(job.out_dir);
     let work = WorkDir::create(job.work_parent)?;
-    let args = build_args(job.url, job.kind, job.out_dir, work.root());
+    let args = build_args(job.url, job.kind, job.out_dir, work.root(), job.playlist_items);
     let reported = run(job.tool, &args, job.env, progress)?;
     let mut fetched = Fetched::default();
     for path in reported {
@@ -544,6 +602,27 @@ pub fn free_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     }
 }
 
+/// Convert an image the pipeline cannot decode (HEIC / HEIF / AVIF) to PNG with the system sips,
+/// so pipeline steps can run on the result. sips ships with macOS; a failure is the caller's to
+/// report — the original file stays untouched.
+pub fn convert_to_png(src: &Path, dst: &Path) -> Result<(), ImageError> {
+    let out = Command::new(SIPS)
+        .args(["-s", "format", "png", &src.to_string_lossy(), "--out", &dst.to_string_lossy()])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()?;
+    if out.status.success() && fs::symlink_metadata(dst).is_ok_and(|m| m.file_type().is_file()) {
+        Ok(())
+    } else {
+        Err(ImageError::Failed(
+            String::from_utf8_lossy(&out.stderr).chars().take(200).collect(),
+        ))
+    }
+}
+
 /// curl's reply line (`%{http_code} %{content_type} %{size_download}`) split.
 fn parse_curl_report(report: &str) -> Option<(String, String, u64)> {
     let mut parts = report.split(' ');
@@ -569,6 +648,59 @@ fn run_curl(tool: &Path, env: &Env<'_>, args: &[&str]) -> Result<std::process::O
     Ok(command.output()?)
 }
 
+/// curl for the GET, watched while it runs: the part file's growth is reported as file progress
+/// (when the HEAD said a length) and cancelling kills curl mid-transfer instead of only after.
+fn run_curl_progress(
+    tool: &Path,
+    env: &Env<'_>,
+    args: &[&str],
+    part: &Path,
+    expected: Option<u64>,
+    progress: &dyn Progress,
+) -> Result<std::process::Output, ImageError> {
+    let mut command = Command::new(tool);
+    command
+        .args(args)
+        .env_clear()
+        .env("PATH", env.path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(home) = env.home {
+        command.env("HOME", home);
+    }
+    let mut child = command.spawn()?;
+    let stdout = child.stdout.take().expect("piped");
+    let stderr = child.stderr.take().expect("piped");
+    let out_thread = std::thread::spawn(move || read_capped(stdout, 4 * 1024));
+    let err_thread = std::thread::spawn(move || read_capped(stderr, 64 * 1024));
+    loop {
+        if progress.cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ImageError::Cancelled);
+        }
+        if let Some(len) = expected {
+            if len > 0 {
+                if let Ok(m) = fs::symlink_metadata(part) {
+                    progress.file_step(((m.len().saturating_mul(1000) / len).min(1000)) as u32);
+                }
+            }
+        }
+        match child.try_wait()? {
+            Some(status) => {
+                // The child is gone; the pipes close on their own.
+                return Ok(std::process::Output {
+                    status,
+                    stdout: out_thread.join().unwrap_or_default().into_bytes(),
+                    stderr: err_thread.join().unwrap_or_default().into_bytes(),
+                });
+            }
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    }
+}
+
 /// One image download. The address is checked again by the caller (`validate_url`).
 ///
 /// The size is asked about first (a HEAD with a short timeout) so an oversized reply is refused
@@ -579,7 +711,9 @@ pub fn fetch_image(job: &ImageJob<'_>, progress: &dyn Progress) -> Result<PathBu
         return Err(ImageError::Cancelled);
     }
     // Ask first: a server that says the file is huge never gets a GET from us. A HEAD that fails
-    // or says nothing usable is not fatal — the GET below carries its own limits.
+    // or says nothing usable is not fatal — the GET below carries its own limits. The announced
+    // length also drives the progress bar (a reply without one still downloads, just ungraded).
+    let mut expected: Option<u64> = None;
     let head = run_curl(
         job.tool,
         &job.env,
@@ -600,6 +734,7 @@ pub fn fetch_image(job: &ImageJob<'_>, progress: &dyn Progress) -> Result<PathBu
             if len > IMAGE_MAX_BYTES {
                 return Err(ImageError::TooLarge);
             }
+            expected = Some(len);
         }
     }
     if progress.cancelled() {
@@ -608,7 +743,7 @@ pub fn fetch_image(job: &ImageJob<'_>, progress: &dyn Progress) -> Result<PathBu
     let work = WorkDir::create(job.work_parent)?;
     let part = work.root().join("part");
     let max_bytes = IMAGE_MAX_BYTES.to_string();
-    let out = run_curl(
+    let out = run_curl_progress(
         job.tool,
         &job.env,
         &[
@@ -617,6 +752,9 @@ pub fn fetch_image(job: &ImageJob<'_>, progress: &dyn Progress) -> Result<PathBu
             "--max-filesize", &max_bytes, "--output", &part.to_string_lossy(),
             "--write-out", "%{http_code} %{content_type} %{size_download}", "--", job.url,
         ],
+        &part,
+        expected,
+        progress,
     )?;
     if !out.status.success() {
         let tail = String::from_utf8_lossy(&out.stderr)
@@ -839,6 +977,7 @@ mod tests {
             },
             Path::new("/tmp/out"),
             Path::new("/tmp/work"),
+            1,
         );
         assert_eq!(
             a,
@@ -879,9 +1018,95 @@ mod tests {
                 Kind::Video { max_height: h },
                 Path::new("/o"),
                 Path::new("/w"),
+                1,
             );
             assert!(a.contains(&"bv*+ba/b".to_string()), "{h:?}");
         }
+    }
+
+    #[test]
+    fn playlist_items_stay_single_unless_asked() {
+        let one = build_args(
+            "https://example.com/v",
+            Kind::Video { max_height: None },
+            Path::new("/o"),
+            Path::new("/w"),
+            1,
+        );
+        assert!(one.windows(2).any(|w| w == ["--playlist-items", "1"]));
+        let ten = build_args(
+            "https://example.com/v",
+            Kind::Video { max_height: None },
+            Path::new("/o"),
+            Path::new("/w"),
+            10,
+        );
+        assert!(ten.windows(2).any(|w| w == ["--playlist-items", "1..10"]));
+    }
+
+    #[test]
+    fn local_addresses_are_recognised_without_dns() {
+        for u in [
+            "http://127.0.0.1/x.png",
+            "https://localhost:8080/x",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://10.0.0.5/x",
+            "https://172.16.0.1/x",
+            "https://192.168.1.1/x",
+            "https://100.126.0.1/x", // CGNAT
+            "https://[::1]/x",
+            "https://[::1]:8080/x",
+            "https://[fe80::1]/x",
+            "https://printer.local/x",
+        ] {
+            assert!(is_local_address(u), "{u}");
+        }
+        for u in ["https://example.com/x", "https://100.128.0.1/x", "https://8.8.8.8/x"] {
+            assert!(!is_local_address(u), "{u}");
+        }
+    }
+
+    #[test]
+    fn heic_converts_to_png_when_sips_is_present() {
+        // sips ships with macOS; elsewhere (or on a macOS that cannot encode HEIC) the test skips.
+        if !Path::new(SIPS).exists() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("flect-sips-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("seed.png");
+        fs::write(
+            &png,
+            [
+                137u8, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0,
+                0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 218, 99,
+                252, 207, 192, 80, 15, 0, 4, 133, 1, 128, 132, 169, 140, 33, 0, 0, 0, 0, 73, 69,
+                78, 68, 174, 66, 96, 130,
+            ],
+        )
+        .unwrap();
+        let heic = dir.join("seed.heic");
+        let encoded = Command::new(SIPS)
+            .args([
+                "-s", "format", "heic", &png.to_string_lossy(), "--out", &heic.to_string_lossy(),
+            ])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        if !encoded.status.success() {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let back = dir.join("back.png");
+        convert_to_png(&heic, &back).expect("sips should convert HEIC to PNG");
+        let bytes = fs::read(&back).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -891,6 +1116,7 @@ mod tests {
             Kind::Audio,
             Path::new("/o"),
             Path::new("/w"),
+            1,
         );
         assert!(a.windows(3).any(|w| w == ["-x", "--audio-format", "mp3"]));
         assert!(!a.iter().any(|s| s == "-f"));
@@ -907,6 +1133,7 @@ mod tests {
                 kind,
                 Path::new("/o"),
                 Path::new("/w"),
+                1,
             );
             assert_eq!(tail(&a, 2), ["--", "https://example.com/v"]);
         }
@@ -1036,6 +1263,7 @@ echo "flect-file $out/missing.mp4"
         );
         let tool = fake_tool(tools.path(), &body);
         let job = Job {
+                playlist_items: 1,
             tool: &tool,
             url: "https://example.com/v",
             kind: Kind::Audio,
@@ -1070,6 +1298,7 @@ echo "flect-file $out/env.txt"
         );
         let tool = fake_tool(tools.path(), &body);
         let job = Job {
+                playlist_items: 1,
             tool: &tool,
             url: "https://example.com/v",
             kind: Kind::Audio,
@@ -1092,6 +1321,7 @@ echo "flect-file $out/env.txt"
             "echo 'WARNING: first' >&2\necho 'ERROR: Unsupported URL' >&2\nexit 1",
         );
         let job = Job {
+                playlist_items: 1,
             tool: &tool,
             url: "https://example.com/v",
             kind: Kind::Audio,
@@ -1132,6 +1362,7 @@ echo "flect-file $out/env.txt"
         ] {
             let seen = Seen(Default::default());
             let job = Job {
+                    playlist_items: 1,
                 tool: &tool,
                 url: &url,
                 kind,
@@ -1186,6 +1417,7 @@ echo "flect-file $out/env.txt"
                 flag.0.store(true, Ordering::SeqCst);
             });
             let job = Job {
+                    playlist_items: 1,
                 tool: &tool,
                 url: "https://example.com/v",
                 kind: Kind::Audio,

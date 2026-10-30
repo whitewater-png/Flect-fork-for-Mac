@@ -186,6 +186,9 @@ enum SizeParser {
     @State private var kind = DownloadKind.video
     @State private var choice = DownloadChoice.best
     @State private var presetID: UUID?
+    /// How many items of an address that is a playlist itself (1 = only the first, as before).
+    @State private var playlistCount = 1
+    private let playlistOptions = [1, 5, 10, 20]
 
     /// Presets whose first step accepts an image — the only ones that make sense after an image fetch.
     private var imagePresets: [Preset] {
@@ -207,6 +210,12 @@ enum SizeParser {
                     ForEach(DownloadChoice.allCases.filter { $0 != .audio }) { c in Text(model.loc.t(c.labelKey)).tag(c) }
                 }
                 Text(model.loc.t("dialog.download.qualityNote")).font(.caption).foregroundStyle(.secondary)
+                Picker(model.loc.t("dialog.download.playlist"), selection: $playlistCount) {
+                    ForEach(playlistOptions, id: \.self) { n in
+                        Text(n == 1 ? model.loc.t("dialog.download.playlist.one") : model.loc.f("dialog.download.playlist.count", [String(n)]))
+                    }
+                }
+                Text(model.loc.t("dialog.download.playlistNote")).font(.caption).foregroundStyle(.secondary)
             } else if kind == .image {
                 Picker(model.loc.t("dialog.download.preset"), selection: $presetID) {
                     Text(model.loc.t("dialog.download.preset.none")).tag(nil as UUID?)
@@ -216,12 +225,15 @@ enum SizeParser {
             Text(model.loc.t("download.notice")).font(.caption).foregroundStyle(.secondary)
             Buttons(model: model, actionTitle: model.loc.t("dialog.download.action"), enabled: DownloadURL.isPlausible(url)) {
                 let steps = presetID.flatMap { id in imagePresets.first { $0.id == id }?.steps } ?? []
-                model.submitDownload(url: url, kind: kind, choice: choice, steps: steps)
+                model.submitDownload(url: url, kind: kind, choice: choice, steps: steps, playlistItems: playlistCount)
             }
         }.padding(20)
         .onAppear {
             if url.isEmpty, let seed = model.downloadSeed { url = seed }
-            if DownloadURL.looksLikeImage(url) { kind = .image }
+            kind = model.downloadSeedKind ?? (DownloadURL.looksLikeImage(url) ? .image : .video)
+            if let name = model.downloadSeedPreset, let match = imagePresets.first(where: { $0.name == name }) {
+                presetID = match.id
+            }
         }
     }
 }

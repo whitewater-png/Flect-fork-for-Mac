@@ -96,6 +96,9 @@ final class AppModel: ObservableObject {
     @Published var presets: [Preset] = []
     /// URL typed into the download dialog from an entry point (a `flect://` link, the clipboard). Cleared on submit.
     @Published var downloadSeed: String?
+    /// Kind / preset suggested by the entry point alongside the seed URL (`flect://?kind=image&preset=...`).
+    @Published var downloadSeedKind: DownloadKind?
+    @Published var downloadSeedPreset: String?
     @Published var memory = PickerMemory()
 
     // MARK: start
@@ -106,6 +109,7 @@ final class AppModel: ObservableObject {
         engine = EngineClient.locate().map { EngineClient(executable: $0) }
         history = historyStore.load()
         reloadPresets()
+        startClipboardWatch() // off unless Download.WatchClipboard is on (checked on every tick)
         startedInSettings = !arguments.contains("--task")
         guard arguments.contains("--task") else { screen = .settings; return }
         switch LaunchRequest.parse(arguments: arguments) {
@@ -368,11 +372,14 @@ final class AppModel: ObservableObject {
 
     /// File > Download from URL...: explains what is missing instead of opening a dialog that cannot work.
     /// `seed` arrives pre-typed (a `flect://` link, the clipboard); the user still confirms everything.
-    func offerDownload(seed: String? = nil) {
+    /// `kind` / `preset` are suggestions from the link (`flect://download?url=...&kind=image&preset=Resize`).
+    func offerDownload(seed: String? = nil, kind: DownloadKind? = nil, preset: String? = nil) {
         cancelAutoClose()
         paths = []
         guard settings.bool("Download", "Enabled", default: false) else { screen = .message(loc.t("download.off")); return }
         downloadSeed = seed
+        downloadSeedKind = kind
+        downloadSeedPreset = preset
         screen = .dialog(.download)
     }
 
@@ -388,14 +395,17 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    func submitDownload(url: String, kind: DownloadKind, choice: DownloadChoice, steps: [String]) {
+    func submitDownload(url: String, kind: DownloadKind, choice: DownloadChoice, steps: [String], playlistItems: Int? = nil) {
         guard let address = DownloadURL.normalized(url) else { screen = .message(loc.t("protocol.badUrl")); return }
         if let why = downloadBlocker(kind: kind) { screen = .message(why); return }
         downloadSeed = nil
+        downloadSeedKind = nil
+        downloadSeedPreset = nil
         paths = []
         let maxHeight = kind == .video ? choice.maxHeight : nil
         let fetchSteps = kind == .image ? steps : []
-        runEngine("download", paths: [], events: { $0.download(urls: [address], kind: kind.rawValue, maxHeight: maxHeight, steps: fetchSteps) })
+        let playlist = kind == .video ? playlistItems : nil
+        runEngine("download", paths: [], events: { $0.download(urls: [address], kind: kind.rawValue, maxHeight: maxHeight, steps: fetchSteps, playlistItems: playlist) })
     }
 
     /// File > Download from Clipboard: opens the dialog with the first address on the clipboard typed in,
@@ -440,6 +450,37 @@ final class AppModel: ObservableObject {
     /// The Services entry "Download with Flect": the web addresses in the selected text.
     func startTextDownload(_ text: String) {
         startDownloads(urls: DownloadURL.addresses(inText: text))
+    }
+
+    // MARK: clipboard watcher (opt-in; notifies only — a click opens the confirm dialog, nothing downloads by itself)
+
+    private var watchTimer: Timer?
+    private var watchChangeCount = NSPasteboard.general.changeCount
+    private var watchNotifiedURL: String?
+
+    /// Starts polling the clipboard; each tick re-reads the setting, so toggling it in Settings takes effect
+    /// without restarting the app. Off by default: nothing is read until the user switches it on.
+    func startClipboardWatch() {
+        watchTimer?.invalidate()
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.clipboardWatchTick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchTimer = timer
+    }
+
+    private func clipboardWatchTick() {
+        guard settings.bool("Download", "WatchClipboard", default: false) else { return }
+        let board = NSPasteboard.general
+        guard board.changeCount != watchChangeCount else { return }
+        watchChangeCount = board.changeCount
+        guard let text = board.string(forType: .string),
+              let address = DownloadURL.addresses(inText: text, limit: 1).first,
+              address != watchNotifiedURL else { return }
+        watchNotifiedURL = address
+        let host = URLComponents(string: address)?.host ?? address
+        Notifier.shared.postDownload(url: address, title: loc.t("download.watch.title"),
+                                     body: loc.f("download.watch.body", [host]))
     }
 
     /// Extract or delete pages: PDFKit work on each selected PDF, written as new files.
